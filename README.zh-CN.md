@@ -11,7 +11,9 @@ Codex Switch 是一个轻量桌面工具，面向需要在本机切换多个 Cod
 - 本地管理多个 Codex 订阅账号。
 - 读取当前 `~/.codex/auth.json` 并保存为账号。
 - 通过 OAuth 或 `refresh_token` 导入账号。
+- 通过包含 `refresh_token` 的 JSON 文件导入/导出账号数据。
 - 在订阅账号和 API 模式之间切换。
+- 显示套餐、账号状态、quota window，并支持刷新单个或全部账号。
 - 保存 OpenAI-compatible API 的 Base URL 和 API Key。
 - 自动规范化常见 Base URL 输入，例如 `gpt-pool.com`、`https://gpt-pool.com`、`https://gpt-pool.com/v1`。
 - 可选开启订阅/API 会话同步。
@@ -23,11 +25,11 @@ Codex Switch 是一个轻量桌面工具，面向需要在本机切换多个 Cod
 
 从 [GitHub Releases](https://github.com/wen495033653/codex-switch/releases) 下载对应平台安装包。
 
-推荐下载：
+推荐下载类型：
 
-- Windows：`Codex.Switch_<version>_x64-setup.exe`
-- macOS Apple Silicon：`Codex.Switch_<version>_aarch64.dmg`
-- macOS Intel：`Codex.Switch_<version>_x64.dmg`
+- Windows：x64 NSIS setup `.exe`
+- macOS Apple Silicon：`aarch64` `.dmg`
+- macOS Intel：`x64` `.dmg`
 
 普通用户不需要手动下载 `.sig` 文件。`.sig` 给应用内 updater 校验安装包使用。
 
@@ -43,7 +45,7 @@ Codex Switch 会写入 Codex 本身使用的本地文件：
 账号数据和应用设置保存在本地应用数据目录：
 
 - Windows：`%APPDATA%/codex-switch/`
-- macOS：Tauri 解析出的应用数据目录
+- macOS：`~/Library/Application Support/codex-switch/`
 
 不要把应用数据目录或 `~/.codex` 下的敏感文件提交到公开仓库。
 
@@ -55,6 +57,8 @@ Codex Switch 会写入 Codex 本身使用的本地文件：
 4. Codex Switch 会把该账号写入本机 Codex auth 文件。
 
 如果 Codex 或支持的 IDE 窗口已经打开，Codex Switch 可以在切换时提示是否重启。
+
+账号也可以导出和导入为 JSON。导出的文件包含 `refresh_token`，请按 credential 处理。
 
 ## API 模式
 
@@ -85,6 +89,13 @@ Codex Switch 不会修改系统代理。它会在启动 Codex 进程时注入这
 - `WSS_PROXY`
 
 如果已经配置 API Base URL，Codex Switch 也可以向启动的 Codex 进程传递 `OPENAI_BASE_URL`。
+
+## 限制
+
+- Codex Switch 依赖 Codex 当前使用的本地文件格式和 OAuth 行为。
+- API 模式要求 OpenAI-compatible endpoint，但具体兼容性仍取决于 provider。
+- 代理功能只作用于被 Codex Switch 启动的进程，不会让其他应用自动使用同一代理。
+- 更新检查使用 `src-tauri/tauri.conf.json` 中配置的 GitHub Releases endpoint。
 
 ## 开发
 
@@ -137,6 +148,8 @@ npm run dist
 ```
 
 构建产物位于 `src-tauri/target/release/bundle/`。
+
+完整本地验证清单见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 脚本
 

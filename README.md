@@ -11,7 +11,9 @@ Codex Switch is a lightweight desktop tool for people who use Codex with more th
 - Manage multiple Codex subscription accounts locally.
 - Capture the current `~/.codex/auth.json` account into Codex Switch.
 - Import accounts with OAuth or a `refresh_token`.
+- Import/export account data through `refresh_token` JSON files.
 - Switch between saved subscription accounts and API mode.
+- Display plan, account status, quota windows, and refresh one or all accounts.
 - Configure an OpenAI-compatible API Base URL and API Key.
 - Normalize common API Base URL inputs such as `gpt-pool.com`, `https://gpt-pool.com`, and `https://gpt-pool.com/v1`.
 - Optionally keep subscription/API Codex session lists in sync.
@@ -23,11 +25,11 @@ Codex Switch is a lightweight desktop tool for people who use Codex with more th
 
 Download the latest installer from [GitHub Releases](https://github.com/wen495033653/codex-switch/releases).
 
-Recommended assets:
+Recommended asset types:
 
-- Windows: `Codex.Switch_<version>_x64-setup.exe`
-- macOS Apple Silicon: `Codex.Switch_<version>_aarch64.dmg`
-- macOS Intel: `Codex.Switch_<version>_x64.dmg`
+- Windows: x64 NSIS setup `.exe`
+- macOS Apple Silicon: `aarch64` `.dmg`
+- macOS Intel: `x64` `.dmg`
 
 Users do not need to download `.sig` files manually. They are used by the updater to verify release assets.
 
@@ -43,7 +45,7 @@ Codex Switch writes to the same local Codex files that Codex already uses:
 Account data and app settings are stored locally in the app data directory:
 
 - Windows: `%APPDATA%/codex-switch/`
-- macOS: the app data directory resolved by Tauri
+- macOS: `~/Library/Application Support/codex-switch/`
 
 Do not commit your app data directory or `~/.codex` files to a public repository.
 
@@ -55,6 +57,8 @@ Do not commit your app data directory or `~/.codex` files to a public repository
 4. Codex Switch writes that account into the local Codex auth file.
 
 If Codex or supported IDE windows are already open, Codex Switch can prompt before restarting them.
+
+Accounts can also be exported and imported as JSON. Exported files contain `refresh_token` values, so treat them like credentials.
 
 ## API Mode
 
@@ -85,6 +89,13 @@ Codex Switch does not change the system proxy. It launches Codex with proxy-rela
 - `WSS_PROXY`
 
 If an API Base URL is configured, Codex Switch can also pass `OPENAI_BASE_URL` to the launched Codex process.
+
+## Limits
+
+- Codex Switch depends on the local Codex file formats and OAuth behavior that Codex currently uses.
+- API mode requires an OpenAI-compatible endpoint, but provider compatibility still depends on the provider.
+- The proxy feature is process-level only; it does not make unrelated apps use the same proxy.
+- Update checks use the GitHub Releases endpoint configured in `src-tauri/tauri.conf.json`.
 
 ## Development
 
@@ -137,6 +148,8 @@ npm run dist
 ```
 
 Build output is written under `src-tauri/target/release/bundle/`.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full local validation checklist.
 
 ## Scripts
 
