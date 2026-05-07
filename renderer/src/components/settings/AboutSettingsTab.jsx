@@ -1,9 +1,24 @@
+import { useState } from 'react';
+
+const SUPPORT_QR_CODES = [
+    {
+        label: '支付宝',
+        src: `${import.meta.env.BASE_URL}assets/support/alipay-qr.png`
+    },
+    {
+        label: '微信支付',
+        src: `${import.meta.env.BASE_URL}assets/support/wechat-qr.png`
+    }
+];
+
 export default function AboutSettingsTab({
     appVersion,
     checkingUpdate,
     handleCheckUpdate,
     openRepository
 }) {
+    const [supportVisible, setSupportVisible] = useState(false);
+
     return (
         <section className="settings-section">
             <div className="settings-about-card-grid">
@@ -27,7 +42,7 @@ export default function AboutSettingsTab({
                     <span className="settings-about-card-title">查看代码 <span aria-hidden="true">↗</span></span>
                 </button>
 
-                <div className="settings-about-card">
+                <button type="button" className="settings-about-card" onClick={() => setSupportVisible(true)}>
                     <span className="settings-about-card-icon support" aria-hidden="true">
                         <svg viewBox="0 0 24 24" role="img">
                             <path d="M12 21.35 10.55 20.03C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.08A6.01 6.01 0 0 1 16.5 3C19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35Z" />
@@ -35,7 +50,7 @@ export default function AboutSettingsTab({
                     </span>
                     <span className="settings-about-card-kicker">赞助支持</span>
                     <span className="settings-about-card-title">支持作者</span>
-                </div>
+                </button>
             </div>
 
             <div className="settings-about-list">
@@ -53,6 +68,43 @@ export default function AboutSettingsTab({
                     </span>
                 </div>
             </div>
+
+            {supportVisible && (
+                <SupportDialog onClose={() => setSupportVisible(false)} />
+            )}
         </section>
+    );
+}
+
+function SupportDialog({ onClose }) {
+    return (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+            <div className="modal-content support-dialog" role="dialog" aria-modal="true" aria-labelledby="support-dialog-title">
+                <div className="support-dialog-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" role="img">
+                        <path d="M4 4.5h11.5v7.25A5.75 5.75 0 0 1 9.75 17.5h-.5A5.75 5.75 0 0 1 3.5 11.75V5A.5.5 0 0 1 4 4.5Zm13 2h1.25a2.75 2.75 0 0 1 0 5.5H17V6.5Zm0 2V10h1.25a.75.75 0 0 0 0-1.5H17ZM6.5 2.5a.75.75 0 0 1 1.5 0v.75a.75.75 0 0 1-1.5 0V2.5Zm4 0a.75.75 0 0 1 1.5 0v.75a.75.75 0 0 1-1.5 0V2.5ZM5 20a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z" />
+                    </svg>
+                </div>
+                <h3 className="support-dialog-title" id="support-dialog-title">赞助支持</h3>
+                <p className="support-dialog-desc">
+                    如果您觉得本工具对您有帮助，欢迎扫码请作者喝杯咖啡！您的支持是我持续维护项目的最大动力。
+                </p>
+
+                <div className="support-qr-grid">
+                    {SUPPORT_QR_CODES.map(item => (
+                        <div className="support-qr-card" key={item.label}>
+                            <div className="support-qr-frame">
+                                <img src={item.src} alt={`${item.label}收款二维码`} decoding="async" />
+                            </div>
+                            <strong>{item.label}</strong>
+                        </div>
+                    ))}
+                </div>
+
+                <button type="button" className="btn btn-secondary support-dialog-close" onClick={onClose}>
+                    关闭
+                </button>
+            </div>
+        </div>
     );
 }

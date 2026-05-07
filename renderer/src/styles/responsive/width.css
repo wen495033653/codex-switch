@@ -210,6 +210,19 @@
     grid-template-columns: 1fr;
   }
 
+  .support-dialog {
+    width: calc(100vw - 32px);
+    padding: 20px;
+  }
+
+  .support-qr-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .support-qr-frame {
+    max-width: 240px;
+  }
+
   .settings-path-card {
     align-items: stretch;
     flex-direction: column;
