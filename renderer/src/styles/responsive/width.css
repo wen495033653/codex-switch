@@ -1,0 +1,253 @@
+@media (max-width: 1024px) {
+  .navbar {
+    gap: 12px;
+  }
+
+  .current-mode-pill {
+    max-width: 260px;
+  }
+
+  .brand {
+    font-size: 18px;
+  }
+
+  .brand-mark {
+    width: 48px;
+    height: 48px;
+    flex-basis: 48px;
+  }
+
+  .nav-item {
+    padding: 6px 14px;
+  }
+
+  .toolbar {
+    align-items: center;
+  }
+
+  .search-wrapper {
+    width: auto;
+    max-width: 220px;
+    flex: 0 1 220px;
+    min-width: 120px;
+  }
+
+  .action-bar {
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+
+  .account-grid {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+
+  .api-console-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .navbar {
+    padding: 10px 18px 0 18px;
+    gap: 10px;
+  }
+
+  .current-mode-detail {
+    display: none;
+  }
+
+  .brand {
+    font-size: 17px;
+    letter-spacing: 0;
+  }
+
+  .brand-mark {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+
+  .nav-tabs {
+    padding: 3px;
+  }
+
+  .nav-item {
+    min-width: 64px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .toolbar {
+    gap: 12px;
+  }
+
+  .account-toolbar {
+    gap: 12px;
+  }
+
+  .account-toolbar-row {
+    gap: 12px;
+  }
+
+  .search-wrapper {
+    max-width: 200px;
+    min-width: 110px;
+  }
+
+  .action-bar {
+    gap: 8px;
+  }
+
+  .action-bar .btn {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .action-bar .btn-icon-only {
+    padding: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .navbar {
+    gap: 8px;
+  }
+
+  .current-mode-pill {
+    max-width: 150px;
+    padding: 0 10px;
+  }
+
+  .brand {
+    font-size: 16px;
+  }
+
+  .brand-mark {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+
+  .nav-item {
+    min-width: 58px;
+    padding: 5px 9px;
+    font-size: 11px;
+  }
+
+  .top-nav-item {
+    min-width: 58px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  .api-mode-page {
+    padding: 0 16px 0;
+  }
+
+  .api-config-stack {
+    align-items: stretch;
+  }
+
+  .api-config-cluster {
+    gap: 10px;
+    transform: none;
+  }
+
+  .api-page-actions {
+    justify-content: stretch;
+  }
+
+  .api-session-sync-control {
+    flex: 1 1 100%;
+  }
+
+  .api-page-actions .btn,
+  .api-session-sync-toggle {
+    flex: 1 1 140px;
+  }
+
+  .api-mode-field {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 16px;
+  }
+
+  .api-promo-banner {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .api-mode-current {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 720px) {
+  .main-content {
+    padding: 18px 16px;
+  }
+
+  .navbar {
+    padding: 12px 16px 0 16px;
+  }
+
+  .action-bar {
+    justify-content: flex-end;
+  }
+
+  .settings-page-head,
+  .settings-page-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-tabs {
+    width: 100%;
+  }
+
+  .settings-about-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-path-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-path-card .btn {
+    width: 100%;
+  }
+
+  .settings-proxy-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-proxy-launch {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .settings-proxy-launch .btn {
+    flex: 1 1 0;
+  }
+
+  .account-toolbar-row {
+    flex-wrap: wrap;
+  }
+
+  .account-filter-tabs {
+    flex: 1 1 100%;
+  }
+
+  .account-toolbar .search-wrapper {
+    flex: 1 1 220px;
+    max-width: none;
+  }
+
+  .account-card-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

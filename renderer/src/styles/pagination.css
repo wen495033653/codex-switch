@@ -1,0 +1,64 @@
+.panel-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 63px;
+  padding: 16px 32px;
+  border-top: 1px solid #343434;
+  background: #222222;
+  font-size: 13px;
+  color: #a8a8a8;
+}
+
+.empty-state {
+  padding: 40px;
+  text-align: center;
+  color: #52525b;
+}
+
+.empty-state-card {
+  grid-column: 1 / -1;
+  min-height: var(--account-card-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background: var(--bg-subtle);
+}
+
+.pagination {
+  display: flex;
+  gap: 6px;
+}
+
+.page-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #8f8f8f;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: #2a2a2a;
+  border-color: #343434;
+  color: #f3f3f3;
+}
+
+.page-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}

@@ -1,0 +1,11 @@
+.list-panel {
+  display: flex;
+  flex-direction: column;
+  background: #1f1f1f;
+  border: 1px solid var(--border-app);
+  border-radius: 18px;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  box-shadow: none;
+}

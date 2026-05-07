@@ -1,0 +1,36 @@
+[package]
+name = "codex-switch"
+version = "5.0.0-rc.1"
+description = "Desktop tool for managing and switching Codex accounts."
+authors = ["Codex Switch contributors"]
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
+codegen-units = 1
+panic = "abort"
+
+[dependencies]
+arboard = "3"
+base64 = "0.22"
+open = "5"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "charset", "http2", "json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = ["protocol-asset", "image-png", "tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+time = { version = "0.3", features = ["formatting"] }
+url = "2"

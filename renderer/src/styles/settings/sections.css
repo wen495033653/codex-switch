@@ -1,0 +1,26 @@
+.settings-modal {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-section-head {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-section-title {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-section-desc {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}

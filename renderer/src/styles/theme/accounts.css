@@ -1,0 +1,82 @@
+html[data-theme="light"] .current-badge,
+html[data-theme="light"] .page-btn.active {
+  color: #ffffff;
+  background: var(--accent);
+}
+
+html[data-theme="light"] .quota-track,
+html[data-theme="light"] .quota-item-card .quota-track {
+  background: #dfe7f1;
+}
+
+html[data-theme="light"] .quota-header,
+html[data-theme="light"] .quota-item-card .quota-header {
+  color: #475569;
+}
+
+html[data-theme="light"] .quota-item-card .quota-header > span:first-child {
+  color: #64748b;
+}
+
+html[data-theme="light"] .panel-footer {
+  background: rgba(241, 245, 249, 0.92);
+  border-top-color: var(--border-app);
+  color: #64748b;
+}
+
+html[data-theme="light"] .page-btn {
+  color: #64748b;
+  border-color: rgba(203, 213, 225, 0.75);
+}
+
+html[data-theme="light"] .page-btn:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: rgba(37, 99, 235, 0.24);
+  color: #1d4ed8;
+}
+
+html[data-theme="light"] .page-btn:disabled {
+  opacity: 1;
+  color: #94a3b8;
+  background: rgba(241, 245, 249, 0.72);
+  border-color: rgba(203, 213, 225, 0.55);
+}
+
+html[data-theme="light"] .modal-overlay {
+  background: rgba(15, 23, 42, 0.28);
+}
+
+html[data-theme="light"] .plan-free {
+  background: #e2e8f0;
+  color: #64748b;
+  border-color: #cbd5e1;
+}
+
+html[data-theme="light"] .plan-plus {
+  background: #fff7ed;
+  color: #ea580c;
+  border-color: #fed7aa;
+}
+
+html[data-theme="light"] .plan-team {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+
+html[data-theme="light"] .plan-pro,
+html[data-theme="light"] .plan-api {
+  background: #eef2ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+
+html[data-theme="light"] .current-badge {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+html[data-theme="light"] .quota-reset-inline,
+html[data-theme="light"] .quota-reset-card {
+  color: #64748b;
+}

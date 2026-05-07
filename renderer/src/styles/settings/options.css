@@ -1,0 +1,87 @@
+.settings-option-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-option-list-inline {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-option {
+  width: 100%;
+  padding: 14px 15px;
+  border-radius: 12px;
+  border: 1px solid var(--border-app);
+  background: var(--bg-subtle);
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 12px;
+  align-items: start;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.settings-option:hover {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-option.active {
+  border-color: rgba(51, 156, 255, 0.35);
+  background: rgba(51, 156, 255, 0.08);
+  box-shadow: none;
+}
+
+.settings-option-radio {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.settings-option-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: transparent;
+  transition: all 0.2s ease;
+}
+
+.settings-option.active .settings-option-radio {
+  border-color: rgba(51, 156, 255, 0.6);
+  box-shadow: none;
+}
+
+.settings-option.active .settings-option-dot {
+  background: var(--accent);
+}
+
+.settings-option-text {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-option-title {
+  color: #f4f4f5;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-option-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .settings-option-list-inline {
+    grid-template-columns: 1fr;
+  }
+}

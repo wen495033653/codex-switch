@@ -1,0 +1,457 @@
+import { useEffect, useState } from 'react';
+import { AppDialogs, AppMainView, AppNavbar } from './components';
+import {
+  DEFAULT_CODEX_STATE,
+  DEFAULT_SETTINGS,
+  GPT_POOL_URL,
+  normalizeBackgroundRefreshInterval,
+  OAUTH_TIMEOUT_HINT
+} from './utils/appState';
+import {
+  useAddAccountFlow,
+  useAccountOperations,
+  useAccountPagination,
+  useAppBootstrap,
+  useApiModeDraft,
+  useCurrentModeSummary,
+  useIdeReopen,
+  useModeSwitching,
+  useRefreshAllFlow,
+  useRefreshTokenModal,
+  useSettingsActions,
+  useToast,
+  useUpdateFlow
+} from './hooks';
+
+export default function App() {
+  const [store, setStore] = useState({ accounts: [], active_id: '' });
+  const [codexState, setCodexState] = useState(DEFAULT_CODEX_STATE);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState(DEFAULT_SETTINGS);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('ALL');
+  const [viewMode, setViewMode] = useState('accounts');
+  const [settingsTab, setSettingsTab] = useState('general');
+  const [appVersion, setAppVersion] = useState('');
+  const [dataDir, setDataDir] = useState('');
+  const [savingCodexSessionSync, setSavingCodexSessionSync] = useState(false);
+
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const { message, toast, toastError } = useToast();
+  const {
+    closeRefreshAllModal,
+    handleRefreshAll,
+    openRefreshAllModal,
+    refreshAllStarting,
+    refreshAllStatus,
+    refreshModal,
+    setRefreshAllStatus
+  } = useRefreshAllFlow({
+    toast,
+    toastError
+  });
+
+  const requireStore = (res) => {
+    if (res && res.ok !== true) {
+      throw new Error(res.message || '请求失败');
+    }
+    if (res && res.codex_state) {
+      setCodexState(res.codex_state);
+    }
+    return res.store;
+  };
+
+  const applySettings = (res) => {
+    if (!res || res.ok !== true) {
+      throw new Error((res && res.message) || '设置加载失败');
+    }
+
+    const rawSettings = res.settings && typeof res.settings === 'object'
+      ? res.settings
+      : {};
+    const nextSettings = {
+      ...DEFAULT_SETTINGS,
+      ...rawSettings,
+      api_mode: {
+        ...DEFAULT_SETTINGS.api_mode,
+        ...((rawSettings.api_mode && typeof rawSettings.api_mode === 'object') ? rawSettings.api_mode : {})
+      }
+    };
+    setSettings(nextSettings);
+    setSettingsDraft(nextSettings);
+    setApiDraft(nextSettings.api_mode || DEFAULT_SETTINGS.api_mode);
+    setSettingsLoaded(true);
+    return nextSettings;
+  };
+
+  const handleRes = (res) => {
+    const nextStore = requireStore(res);
+    if (res && res.message) toast(res.message);
+    setStore(nextStore);
+    return res;
+  };
+
+  const {
+    apiDraft,
+    clearApiAutoSaveTimer,
+    setApiDraft,
+    updateApiPageDraft
+  } = useApiModeDraft({
+    applySettings,
+    settings,
+    toastError,
+    viewMode
+  });
+
+  const {
+    accountGridRef,
+    counts,
+    currentItems,
+    page,
+    pageSize,
+    setPage,
+    startIdx,
+    total,
+    totalPages
+  } = useAccountPagination({
+    accounts: store.accounts,
+    activeId: store.active_id,
+    filter,
+    search
+  });
+
+  const {
+    apiConfigComplete,
+    apiModeActive,
+    currentAccountId,
+    currentModeDetail,
+    currentModeLabel,
+    maskAccountName,
+    subscriptionModeActive
+  } = useCurrentModeSummary({
+    apiDraft,
+    codexState,
+    settings,
+    store
+  });
+
+  const {
+    applyUpdateStatus,
+    cancelUpdateModal,
+    checkingUpdate,
+    confirmUpdateAction,
+    handleCheckUpdate,
+    updateModal
+  } = useUpdateFlow({
+    settings,
+    settingsLoaded,
+    toast,
+    toastError
+  });
+
+  const {
+    cancelIdeReopen,
+    confirmIdeReopen,
+    ideReopenModal,
+    ideSummaryText,
+    showIdeReopen
+  } = useIdeReopen({
+    handleRes,
+    requireStore,
+    setStore,
+    toast,
+    toastError
+  });
+
+  const {
+    handleSwitchAccount,
+    savingApiMode,
+    switching,
+    switchToApiModeFromPage
+  } = useModeSwitching({
+    apiDraft,
+    applySettings,
+    clearApiAutoSaveTimer,
+    handleRes,
+    showIdeReopen,
+    toastError
+  });
+
+  const {
+    closeRefreshTokenModal,
+    copyRefreshToken,
+    handleRefreshAccountToken,
+    openRefreshTokenModal,
+    refreshTokenAccountName,
+    refreshTokenModal
+  } = useRefreshTokenModal({
+    maskAccountName,
+    requireStore,
+    setStore,
+    toast,
+    toastError
+  });
+
+  const {
+    closeDeleteAccountModal,
+    confirmDeleteAccount,
+    deleteAccountDisplayName,
+    deleteAccountModal,
+    exportAccountsToBackup,
+    handleRefreshAccount,
+    openDeleteAccountModal,
+    refreshingAccountId
+  } = useAccountOperations({
+    handleRes,
+    maskAccountName,
+    setStore,
+    toast,
+    toastError
+  });
+
+  const {
+    addModal,
+    applyOauthUpdate,
+    cancelOauth,
+    captureCurrentAccount,
+    closeAddModal,
+    copyOauthUrl,
+    importAccountsFromBackup,
+    importByRefreshToken,
+    oauth,
+    openAddModal,
+    refreshTokenInput,
+    refreshTokenLoading,
+    setRefreshTokenInput,
+    setShowRefreshTokenPanel,
+    showRefreshTokenPanel,
+    startOauth
+  } = useAddAccountFlow({
+    handleRes,
+    toast,
+    toastError
+  });
+
+  const {
+    cancelCodexProxyDesktopShortcut,
+    codexShortcutConfirm,
+    confirmCodexProxyDesktopShortcut,
+    createCodexProxyDesktopShortcut,
+    creatingCodexProxyDesktopShortcut,
+    launchCodexWithProxy,
+    launchingCodexWithProxy,
+    openCodexConfigToml,
+    openDataDir,
+    openRepository,
+    openSettingsPage,
+    savingProxySettings,
+    updateCodexProxySettings,
+    updateSettingsDraftAndSave
+  } = useSettingsActions({
+    applySettings,
+    settings,
+    settingsDraft,
+    setSettingsDraft,
+    setSettingsTab,
+    setViewMode,
+    toast,
+    toastError
+  });
+
+  useAppBootstrap({
+    applyOauthUpdate,
+    applySettings,
+    applyUpdateStatus,
+    requireStore,
+    setAppVersion,
+    setCodexState,
+    setDataDir,
+    setRefreshAllStatus,
+    setStore,
+    toastError
+  });
+
+  useEffect(() => {
+    const nextTheme = (viewMode === 'settings' ? settingsDraft.ui_theme : settings.ui_theme) || DEFAULT_SETTINGS.ui_theme;
+    document.documentElement.dataset.theme = nextTheme;
+  }, [settings.ui_theme, settingsDraft.ui_theme, viewMode]);
+
+  const openGptPoolLanding = async () => {
+    try {
+      await window.api.openExternalUrl(GPT_POOL_URL);
+    } catch (err) {
+      toastError(err, '打开 gpt-pool.com 失败');
+    }
+  };
+
+  const updateCodexSessionSyncEnabled = async (enabled) => {
+    if (savingCodexSessionSync) return;
+    setSavingCodexSessionSync(true);
+    const patch = { codex_session_sync_enabled: enabled };
+    setSettingsDraft(prev => ({ ...prev, ...patch }));
+    try {
+      const res = await window.api.updateSettings(patch);
+      applySettings(res);
+    } catch (err) {
+      setSettingsDraft(settings);
+      toastError(err, '会话同步设置保存失败', 7000);
+      setSavingCodexSessionSync(false);
+      return;
+    }
+
+    if (enabled) {
+      try {
+        const res = await window.api.syncCodexSessions();
+        if (res && res.ok !== true) {
+          throw new Error(res.message || '订阅/API 会话同步失败');
+        }
+      } catch (err) {
+        toastError(err, '会话同步已开启，但当前同步失败', 7000);
+      }
+    }
+
+    setSavingCodexSessionSync(false);
+  };
+
+  const codexSessionSyncEnabled = settings.codex_session_sync_enabled !== false;
+
+  return (
+    <div className="app">
+      <AppNavbar
+        apiModeActive={apiModeActive}
+        currentModeDetail={currentModeDetail}
+        currentModeLabel={currentModeLabel}
+        onAccountsClick={() => setViewMode('accounts')}
+        onApiClick={() => setViewMode('api')}
+        onSettingsClick={openSettingsPage}
+        subscriptionModeActive={subscriptionModeActive}
+        viewMode={viewMode}
+      />
+
+      <div className="main-content">
+        <AppMainView
+          viewMode={viewMode}
+          settingsPageProps={{
+            settingsTab,
+            setSettingsTab,
+            settingsDraft,
+            setSettingsDraft,
+            dataDir,
+            appVersion,
+            checkingUpdate,
+            createCodexProxyDesktopShortcut,
+            creatingCodexProxyDesktopShortcut,
+            launchingCodexWithProxy,
+            savingProxySettings,
+            launchCodexWithProxy,
+            updateSettingsDraftAndSave,
+            normalizeBackgroundRefreshInterval,
+            openDataDir,
+            updateCodexProxySettings,
+            openRepository,
+            handleCheckUpdate
+          }}
+          apiModePageProps={{
+            apiConfigComplete,
+            apiDraft,
+            codexSessionSyncEnabled,
+            apiModeActive,
+            onOpenCodexConfigToml: openCodexConfigToml,
+            onOpenGptPool: openGptPoolLanding,
+            onToggleCodexSessionSync: updateCodexSessionSyncEnabled,
+            onSwitchToApiMode: switchToApiModeFromPage,
+            onUpdateApiDraft: updateApiPageDraft,
+            savingApiMode,
+            savingCodexSessionSync,
+            switching
+          }}
+          accountsPageProps={{
+            accountGridRef,
+            apiModeActive,
+            counts,
+            currentAccountId,
+            currentItems,
+            filter,
+            maskAccountName,
+            onAddAccount: openAddModal,
+            onDeleteAccount: openDeleteAccountModal,
+            onExportAccounts: exportAccountsToBackup,
+            onFilterChange: setFilter,
+            onPageChange: setPage,
+            onRefreshAccount: handleRefreshAccount,
+            onRefreshAllClick: openRefreshAllModal,
+            onSearchChange: setSearch,
+            onSwitchAccount: handleSwitchAccount,
+            onViewRefreshToken: openRefreshTokenModal,
+            page,
+            pageSize,
+            refreshAllStatus,
+            refreshingAccountId,
+            search,
+            startIdx,
+            switching,
+            total,
+            totalPages
+          }}
+        />
+
+        <AppDialogs
+          message={message}
+          codexShortcut={{
+            modal: codexShortcutConfirm,
+            isLoading: creatingCodexProxyDesktopShortcut,
+            onCancel: cancelCodexProxyDesktopShortcut,
+            onConfirm: confirmCodexProxyDesktopShortcut
+          }}
+          addAccount={{
+            visible: addModal,
+            oauth,
+            oauthTimeoutHint: OAUTH_TIMEOUT_HINT,
+            refreshTokenInput,
+            refreshTokenLoading,
+            showRefreshTokenPanel,
+            onCancelOauth: () => cancelOauth(),
+            onCaptureCurrent: captureCurrentAccount,
+            onClose: closeAddModal,
+            onCopyOauthUrl: copyOauthUrl,
+            onImportAccountsFromBackup: importAccountsFromBackup,
+            onImportByRefreshToken: importByRefreshToken,
+            onRefreshTokenInputChange: setRefreshTokenInput,
+            onStartOauth: startOauth,
+            onToggleRefreshTokenPanel: () => setShowRefreshTokenPanel(v => !v)
+          }}
+          refreshToken={{
+            accountName: refreshTokenAccountName,
+            modal: refreshTokenModal,
+            onClose: closeRefreshTokenModal,
+            onCopy: copyRefreshToken,
+            onRefresh: handleRefreshAccountToken
+          }}
+          deleteAccount={{
+            displayName: deleteAccountDisplayName,
+            modal: deleteAccountModal,
+            onCancel: closeDeleteAccountModal,
+            onConfirm: confirmDeleteAccount
+          }}
+          refreshAll={{
+            visible: refreshModal,
+            isLoading: refreshAllStarting,
+            onCancel: closeRefreshAllModal,
+            onConfirm: handleRefreshAll
+          }}
+          ideReopen={{
+            modal: ideReopenModal,
+            summaryText: ideSummaryText,
+            onCancel: cancelIdeReopen,
+            onConfirm: confirmIdeReopen
+          }}
+          update={{
+            modal: updateModal,
+            onCancel: cancelUpdateModal,
+            onConfirm: confirmUpdateAction
+          }}
+        />
+      </div>
+    </div>
+  );
+}

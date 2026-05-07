@@ -1,0 +1,48 @@
+html[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(37, 99, 235, 0.08), transparent 28%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2f7 46%, #e8eef6 100%);
+  color: var(--text-primary);
+}
+
+html[data-theme="light"] .app {
+  background: transparent;
+}
+
+html[data-theme="light"] .navbar {
+  background: rgba(248, 250, 252, 0.88);
+  border-bottom-color: var(--border-app);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="light"] .brand,
+html[data-theme="light"] .account-card-name,
+html[data-theme="light"] .settings-page-title,
+html[data-theme="light"] .settings-section-title,
+html[data-theme="light"] .connect-block-title,
+html[data-theme="light"] .token-modal-name,
+html[data-theme="light"] .modal-content h3,
+html[data-theme="light"] .update-dialog-headline strong,
+html[data-theme="light"] .settings-about-row strong {
+  color: var(--text-primary) !important;
+}
+
+html[data-theme="light"] .nav-tabs,
+html[data-theme="light"] .settings-tabs,
+html[data-theme="light"] .top-nav-tabs,
+html[data-theme="light"] .modal-content,
+html[data-theme="light"] .account-card,
+html[data-theme="light"] .mode-card,
+html[data-theme="light"] .settings-page-content,
+html[data-theme="light"] .settings-about-card,
+html[data-theme="light"] .settings-about-row,
+html[data-theme="light"] .settings-path-card,
+html[data-theme="light"] .connect-block,
+html[data-theme="light"] .settings-option,
+html[data-theme="light"] .update-dialog-card,
+html[data-theme="light"] .oauth-url-card,
+html[data-theme="light"] .empty-state-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.84));
+  border-color: var(--border-app);
+}

@@ -1,0 +1,50 @@
+:root {
+  /* 深色主题：Codex Graphite */
+  --bg-app: #181818;
+  --bg-subtle: #222222;
+
+  --bg-panel: #222222;
+  --bg-row-hover: #343434;
+
+  --border-app: #343434;
+  --border-panel: #3d3d3d;
+
+  --text-primary: #f3f3f3;
+  --text-secondary: #c2c2c2;
+  --text-tertiary: #8f8f8f;
+
+  --accent: #339CFF;
+  --accent-glow: rgba(51, 156, 255, 0.18);
+  --success: #36D399;
+  --warning: #f6c453;
+  --danger: #ff7b8a;
+  --account-card-height: 208px;
+
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  --font-sans: "HarmonyOS Sans SC", "MiSans", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  outline: none;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+}

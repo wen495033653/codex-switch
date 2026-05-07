@@ -1,0 +1,56 @@
+html[data-theme="light"] .search-input,
+html[data-theme="light"] .api-mode-input,
+html[data-theme="light"] .settings-input,
+html[data-theme="light"] .token-modal-text,
+html[data-theme="light"] .connect-refresh-input {
+  background: #ffffff;
+  color: var(--text-primary);
+  border-color: var(--border-app);
+}
+
+html[data-theme="light"] .api-config-card .api-mode-input {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+html[data-theme="light"] .search-input:focus,
+html[data-theme="light"] .api-mode-input:focus,
+html[data-theme="light"] .settings-input:focus {
+  background: #ffffff;
+  border-color: rgba(37, 99, 235, 0.46);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+html[data-theme="light"] .btn-secondary,
+html[data-theme="light"] .icon-btn,
+html[data-theme="light"] .page-btn {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: var(--border-app);
+  color: var(--text-secondary);
+}
+
+html[data-theme="light"] .btn-secondary:hover,
+html[data-theme="light"] .icon-btn:hover,
+html[data-theme="light"] .page-btn:hover:not(:disabled) {
+  background: var(--bg-row-hover);
+  color: var(--text-primary);
+}
+
+html[data-theme="light"] .btn-primary {
+  background: #182231;
+  color: #ffffff;
+}
+
+html[data-theme="light"] .btn-primary:hover {
+  background: #0f172a;
+}
+
+html[data-theme="light"] .btn:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  background: rgba(226, 232, 240, 0.86);
+  border-color: rgba(203, 213, 225, 0.8);
+  color: #64748b;
+  transform: none;
+}

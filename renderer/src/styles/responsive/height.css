@@ -1,0 +1,81 @@
+@media (max-height: 860px) {
+  :root {
+    --account-card-height: 196px;
+  }
+
+  .navbar {
+    height: 70px;
+    padding: 10px 24px 0 24px;
+  }
+
+  .main-content {
+    padding: 18px 24px;
+    gap: 12px;
+  }
+
+  .toolbar {
+    gap: 12px;
+  }
+
+  .panel-footer {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  .account-grid {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .account-card {
+    padding: 12px;
+    gap: 10px;
+  }
+}
+
+@media (max-height: 720px) {
+  :root {
+    --account-card-height: 178px;
+  }
+
+  .navbar {
+    height: 64px;
+  }
+
+  .brand {
+    font-size: 18px;
+  }
+
+  .main-content {
+    padding: 14px 18px;
+    gap: 10px;
+  }
+
+  .toolbar {
+    gap: 10px;
+  }
+
+  .account-grid {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .account-card {
+    padding: 11px;
+    gap: 8px;
+  }
+
+  .account-card-name {
+    font-size: 15px;
+  }
+
+  .quota-item-card {
+    gap: 5px;
+  }
+
+  .panel-footer {
+    min-height: 55px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+}

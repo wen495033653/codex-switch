@@ -1,0 +1,81 @@
+html[data-theme="light"] .nav-item {
+  color: #475569;
+}
+
+html[data-theme="light"] .settings-about-card-title {
+  color: #0f172a;
+}
+
+html[data-theme="light"] .settings-about-card-icon.github {
+  color: #1e293b;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+html[data-theme="light"] .settings-about-card-icon.author {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+html[data-theme="light"] .settings-path-value {
+  color: var(--text-primary);
+  background: rgba(15, 23, 42, 0.06);
+}
+
+html[data-theme="light"] .nav-item span {
+  opacity: 0.72 !important;
+}
+
+html[data-theme="light"] .account-filter-count {
+  color: #475569;
+  opacity: 0.82 !important;
+}
+
+html[data-theme="light"] .nav-item.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+}
+
+html[data-theme="light"] .top-nav-item {
+  color: #475569;
+}
+
+html[data-theme="light"] .top-nav-item:hover {
+  color: #1d4ed8;
+}
+
+html[data-theme="light"] .top-nav-item.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+}
+
+html[data-theme="light"] .current-mode-pill,
+html[data-theme="light"] .mode-page-notice,
+html[data-theme="light"] .api-mode-current-badge {
+  background: rgba(255, 255, 255, 0.74);
+  border-color: var(--border-app);
+}
+
+html[data-theme="light"] .current-mode-detail {
+  color: #64748b;
+}
+
+html[data-theme="light"] .mode-page-notice strong,
+html[data-theme="light"] .api-mode-current-title {
+  color: var(--text-primary);
+}
+
+html[data-theme="light"] .settings-tab {
+  color: #475569;
+}
+
+html[data-theme="light"] .settings-tab:hover {
+  color: #1d4ed8;
+}
+
+html[data-theme="light"] .settings-tab.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+}

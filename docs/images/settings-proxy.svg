@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Switch 代理设置页面示意图</title>
+  <desc id="desc">展示 Codex app 启动代理配置。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#10141c"/>
+      <stop offset="1" stop-color="#05070a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="720" rx="32" fill="url(#bg)"/>
+  <rect x="34" y="30" width="1132" height="74" rx="22" fill="#0b0f16" stroke="#243040"/>
+  <text x="66" y="77" fill="#ffffff" font-family="Segoe UI, Arial" font-size="28" font-weight="700">Codex Switch</text>
+  <text x="380" y="72" fill="#a1a8b3" font-family="Segoe UI, Arial" font-size="16">账号</text>
+  <text x="454" y="72" fill="#a1a8b3" font-family="Segoe UI, Arial" font-size="16">API</text>
+  <rect x="522" y="47" width="86" height="38" rx="19" fill="#66cc8a"/>
+  <text x="550" y="72" fill="#051008" font-family="Segoe UI, Arial" font-size="16" font-weight="700">设置</text>
+
+  <rect x="170" y="142" width="860" height="438" rx="28" fill="#0d1117" stroke="#2f3a4a"/>
+  <text x="218" y="204" fill="#ffffff" font-family="Segoe UI, Arial" font-size="26" font-weight="800">设置</text>
+  <rect x="218" y="244" width="116" height="40" rx="20" fill="#141b24"/>
+  <text x="250" y="270" fill="#a1a8b3" font-family="Segoe UI, Arial" font-size="15">通用</text>
+  <rect x="352" y="244" width="116" height="40" rx="20" fill="#141b24"/>
+  <text x="384" y="270" fill="#a1a8b3" font-family="Segoe UI, Arial" font-size="15">账号</text>
+  <rect x="486" y="244" width="126" height="40" rx="20" fill="#66cc8a"/>
+  <text x="510" y="270" fill="#061009" font-family="Segoe UI, Arial" font-size="15" font-weight="800">Codex app</text>
+  <rect x="630" y="244" width="116" height="40" rx="20" fill="#141b24"/>
+  <text x="662" y="270" fill="#a1a8b3" font-family="Segoe UI, Arial" font-size="15">关于</text>
+
+  <rect x="218" y="326" width="764" height="164" rx="22" fill="#111821" stroke="#2b3648"/>
+  <text x="254" y="378" fill="#ffffff" font-family="Segoe UI, Arial" font-size="22" font-weight="800">Codex app 启动代理</text>
+  <text x="254" y="410" fill="#a1a8b3" font-family="Segoe UI, Arial" font-size="15">仅通过 Codex Switch 或桌面图标启动时注入 HTTP/HTTPS/WS 代理环境变量</text>
+  <rect x="254" y="438" width="348" height="46" rx="14" fill="#121821" stroke="#273244"/>
+  <text x="278" y="468" fill="#dbe4ef" font-family="Segoe UI, Arial" font-size="17">127.0.0.1:10808</text>
+  <rect x="614" y="438" width="128" height="46" rx="14" fill="#66cc8a"/>
+  <text x="646" y="468" fill="#061009" font-family="Segoe UI, Arial" font-size="16" font-weight="800">启动 Codex</text>
+  <rect x="754" y="438" width="176" height="46" rx="14" fill="#141b24" stroke="#273244"/>
+  <text x="792" y="468" fill="#dbe4ef" font-family="Segoe UI, Arial" font-size="16" font-weight="700">创建桌面图标</text>
+</svg>

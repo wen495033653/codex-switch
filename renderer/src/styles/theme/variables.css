@@ -1,0 +1,19 @@
+html[data-theme="light"] {
+  --bg-app: #eef2f7;
+  --bg-subtle: #e7edf5;
+  --bg-panel: #f8fafc;
+  --bg-row-hover: #edf3fb;
+
+  --border-app: #c8d3e1;
+  --border-panel: #d4deeb;
+
+  --text-primary: #182231;
+  --text-secondary: #536174;
+  --text-tertiary: #8a96a8;
+
+  --accent: #2563eb;
+  --accent-glow: rgba(37, 99, 235, 0.14);
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
+}

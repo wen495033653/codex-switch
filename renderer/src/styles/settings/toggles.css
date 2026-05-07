@@ -1,0 +1,137 @@
+.settings-toggle-row {
+  width: 100%;
+  padding: 14px 15px;
+  border-radius: 12px;
+  border: 1px solid var(--border-app);
+  background: var(--bg-subtle);
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.settings-toggle-row:hover {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-toggle-row-with-icon {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+}
+
+.settings-toggle-leading-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-toggle-leading-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.settings-toggle-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-toggle-title {
+  color: #f4f4f5;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-toggle-desc {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.settings-switch {
+  width: 44px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.28);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  transition: all 0.2s ease;
+}
+
+.settings-switch-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.22);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.settings-toggle-row.active .settings-switch {
+  background: var(--accent);
+}
+
+.settings-toggle-row.active .settings-switch-thumb {
+  transform: translateX(20px);
+}
+
+.settings-switch-button {
+  width: 48px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.settings-switch-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.settings-switch-button.active .settings-switch {
+  background: var(--accent);
+}
+
+.settings-switch-button.active .settings-switch-thumb {
+  transform: translateX(20px);
+}
+
+.settings-refresh-section {
+  gap: 0;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border-app);
+  background: var(--bg-subtle);
+}
+
+.settings-refresh-section .settings-toggle-row {
+  padding: 2px 0 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.settings-refresh-section .settings-toggle-row:hover {
+  background: transparent;
+}
+
+.settings-refresh-section .settings-inline-field-row {
+  padding: 14px 0 0;
+}
