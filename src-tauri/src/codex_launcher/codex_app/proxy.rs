@@ -132,8 +132,15 @@ pub(super) fn create_codex_proxy_desktop_shortcut_impl(proxy_url: &str) -> Resul
     }
     let codex_info = get_codex_package_info()?;
     let shortcut_icon_path = codex_shortcut_icon_path(&codex_info)?;
-    let launcher_path =
-        std::env::current_exe().map_err(|err| format!("读取 Codex Switch 路径失败: {err}"))?;
+    let codex_executable_path = PathBuf::from(string_field(&codex_info, "ExecutablePath"));
+    let launcher_path = if proxy_enabled {
+        Some(std::env::current_exe().map_err(|err| format!("读取 Codex Switch 路径失败: {err}"))?)
+    } else {
+        None
+    };
+    let shortcut_target_path = launcher_path
+        .clone()
+        .unwrap_or_else(|| codex_executable_path.clone());
     let shortcut_path = windows_desktop_dir()?.join(if proxy_enabled {
         "Codex 代理启动.lnk"
     } else {
@@ -143,7 +150,7 @@ pub(super) fn create_codex_proxy_desktop_shortcut_impl(proxy_url: &str) -> Resul
     fs::create_dir_all(launcher_dir()?).map_err(|err| format!("创建 launcher 目录失败: {err}"))?;
     let script = create_windows_shortcut_script(
         &shortcut_path,
-        &launcher_path,
+        &shortcut_target_path,
         &shortcut_arguments(proxy_enabled, &normalized_proxy_url),
         &shortcut_icon_path.to_string_lossy(),
         if proxy_enabled {
@@ -154,9 +161,13 @@ pub(super) fn create_codex_proxy_desktop_shortcut_impl(proxy_url: &str) -> Resul
     );
     run_pwsh(&script)?;
     write_launcher_log(&format!(
-        "desktop shortcut created shortcut={} launcher={} proxyEnabled={} proxy={}",
+        "desktop shortcut created shortcut={} target={} launcher={} proxyEnabled={} proxy={}",
         shortcut_path.to_string_lossy(),
-        launcher_path.to_string_lossy(),
+        shortcut_target_path.to_string_lossy(),
+        launcher_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
         proxy_enabled,
         normalized_proxy_url
     ))?;
@@ -164,7 +175,11 @@ pub(super) fn create_codex_proxy_desktop_shortcut_impl(proxy_url: &str) -> Resul
     Ok(json!({
         "proxy_enabled": proxy_enabled,
         "shortcut_path": shortcut_path.to_string_lossy(),
-        "launcher_path": launcher_path.to_string_lossy(),
+        "target_path": shortcut_target_path.to_string_lossy(),
+        "launcher_path": launcher_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
         "icon_path": shortcut_icon_path.to_string_lossy(),
         "proxy_url": normalized_proxy_url
     }))
