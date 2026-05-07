@@ -46,19 +46,68 @@
   font-weight: 700;
 }
 
-.settings-proxy-row {
+.settings-proxy-section {
+  gap: 16px;
+}
+
+.settings-proxy-head {
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-proxy-switch-button {
+  min-width: 132px;
+  height: 40px;
+  padding: 0 10px 0 15px;
+  border: 1px solid var(--border-app);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.settings-proxy-switch-button:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: var(--bg-row-hover);
+}
+
+.settings-proxy-switch-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.settings-proxy-switch-button.active {
+  border-color: rgba(51, 156, 255, 0.46);
+  background: rgba(51, 156, 255, 0.13);
+}
+
+.settings-proxy-switch-button.active .settings-switch {
+  background: var(--accent);
+}
+
+.settings-proxy-switch-button.active .settings-switch-thumb {
+  transform: translateX(20px);
+}
+
+.settings-proxy-switch-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .settings-proxy-field {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
-.settings-proxy-env-toggle {
-  flex: 0 0 300px;
-  min-height: 62px;
+.settings-proxy-input {
+  height: 42px;
+  border-radius: 12px;
 }

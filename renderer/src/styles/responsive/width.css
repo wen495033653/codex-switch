@@ -219,13 +219,13 @@
     width: 100%;
   }
 
-  .settings-proxy-row {
-    align-items: stretch;
+  .settings-proxy-head {
+    align-items: flex-start;
     flex-direction: column;
   }
 
-  .settings-proxy-env-toggle {
-    flex-basis: auto;
+  .settings-proxy-switch-button {
+    width: 100%;
   }
 
   .account-toolbar-row {

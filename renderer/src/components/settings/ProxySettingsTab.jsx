@@ -10,42 +10,36 @@ export default function ProxySettingsTab({
     const saving = savingProxySettings || savingCodexProxyEnv;
 
     return (
-        <section className="settings-section">
-            <div className="settings-section-head">
+        <section className="settings-section settings-proxy-section">
+            <div className="settings-proxy-head">
                 <div className="settings-section-title">Codex app 代理</div>
+                <button
+                    type="button"
+                    className={`settings-proxy-switch-button ${proxyEnvEnabled ? 'active' : ''}`}
+                    aria-pressed={proxyEnvEnabled}
+                    disabled={saving}
+                    onClick={() => setCodexProxyEnvEnabled(!proxyEnvEnabled)}
+                >
+                    <span className="settings-proxy-switch-label">启用代理</span>
+                    <span className="settings-switch" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                    </span>
+                </button>
             </div>
 
-            <div className="settings-field-list">
-                <div className="settings-proxy-row">
-                    <label className="settings-field settings-proxy-field">
-                        <span className="settings-inline-field-label">代理地址</span>
-                        <input
-                            className="settings-input"
-                            value={settingsDraft.codex_proxy_url || ''}
-                            placeholder="127.0.0.1:10808"
-                            onChange={e => setSettingsDraft(prev => ({ ...prev, codex_proxy_url: e.target.value }))}
-                            onBlur={e => updateCodexProxySettings({ codex_proxy_url: e.target.value })}
-                            onKeyDown={e => {
-                                if (e.key === 'Enter') e.currentTarget.blur();
-                            }}
-                        />
-                    </label>
-                    <button
-                        type="button"
-                        className={`settings-toggle-row settings-proxy-env-toggle ${proxyEnvEnabled ? 'active' : ''}`}
-                        aria-pressed={proxyEnvEnabled}
-                        disabled={saving}
-                        onClick={() => setCodexProxyEnvEnabled(!proxyEnvEnabled)}
-                    >
-                        <span className="settings-toggle-copy">
-                            <span className="settings-toggle-title">启用代理</span>
-                        </span>
-                        <span className="settings-switch" aria-hidden="true">
-                            <span className="settings-switch-thumb" />
-                        </span>
-                    </button>
-                </div>
-            </div>
+            <label className="settings-field settings-proxy-field">
+                <span className="settings-inline-field-label">代理地址</span>
+                <input
+                    className="settings-input settings-proxy-input"
+                    value={settingsDraft.codex_proxy_url || ''}
+                    placeholder="127.0.0.1:10808"
+                    onChange={e => setSettingsDraft(prev => ({ ...prev, codex_proxy_url: e.target.value }))}
+                    onBlur={e => updateCodexProxySettings({ codex_proxy_url: e.target.value })}
+                    onKeyDown={e => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                />
+            </label>
         </section>
     );
 }
