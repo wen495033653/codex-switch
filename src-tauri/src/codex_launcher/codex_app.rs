@@ -49,7 +49,7 @@ fn read_codex_env_content(path: &Path) -> Result<String, String> {
         return Ok(String::new());
     }
     fs::read_to_string(path)
-        .map_err(|err| format!("读取 Codex .env 失败 {}: {err}", path.display()))
+        .map_err(|err| format!("读取 Codex app 代理配置失败 {}: {err}", path.display()))
 }
 
 fn write_codex_env_content(path: &Path, content: &str) -> Result<(), String> {
@@ -57,7 +57,7 @@ fn write_codex_env_content(path: &Path, content: &str) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| format!("创建 Codex 目录失败: {err}"))?;
     }
     fs::write(path, content)
-        .map_err(|err| format!("写入 Codex .env 失败 {}: {err}", path.display()))
+        .map_err(|err| format!("保存 Codex app 代理配置失败 {}: {err}", path.display()))
 }
 
 fn set_codex_proxy_env_file_enabled(enabled: bool, proxy_url: &str) -> Result<String, String> {
@@ -77,7 +77,7 @@ fn set_codex_proxy_env_file_enabled(enabled: bool, proxy_url: &str) -> Result<St
     if kept_lines.iter().all(|line| line.trim().is_empty()) {
         if path.exists() {
             fs::remove_file(&path)
-                .map_err(|err| format!("删除 Codex .env 失败 {}: {err}", path.display()))?;
+                .map_err(|err| format!("关闭 Codex app 代理失败 {}: {err}", path.display()))?;
         }
         return Ok(String::new());
     }
@@ -164,9 +164,9 @@ pub(crate) fn set_codex_proxy_env_enabled(
     Ok(json!({
         "ok": true,
         "message": if enabled {
-            "Codex app 代理已写入 .env"
+            "Codex app 代理已启用"
         } else {
-            "Codex app 代理已从 .env 移除"
+            "Codex app 代理已关闭"
         },
         "settings": settings,
         "env_path": codex_env_path()?.to_string_lossy().to_string(),

@@ -73,10 +73,10 @@ export function useSettingsActions({
     try {
       const res = await window.api.setCodexProxyEnvEnabled({ enabled, proxyUrl });
       applySettings(res);
-      toast((res && res.message) || (enabled ? 'Codex app 代理已写入 .env' : 'Codex app 代理已从 .env 移除'));
+      toast((res && res.message) || (enabled ? 'Codex app 代理已启用' : 'Codex app 代理已关闭'));
     } catch (err) {
       setSettingsDraft(settings);
-      toast(getErrorMessage(err, enabled ? '写入 Codex app 代理失败' : '移除 Codex app 代理失败'), 7000);
+      toast(getErrorMessage(err, enabled ? '启用 Codex app 代理失败' : '关闭 Codex app 代理失败'), 7000);
     } finally {
       setSavingCodexProxyEnv(false);
     }

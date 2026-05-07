@@ -13,7 +13,7 @@ export default function ProxySettingsTab({
         <section className="settings-section">
             <div className="settings-section-head">
                 <div className="settings-section-title">Codex app 代理</div>
-                <div className="settings-section-desc">开启后写入 ~/.codex/.env，Codex 下次启动时读取代理变量。</div>
+                <div className="settings-section-desc">开启后，Codex 下次启动时会使用这里的代理设置。</div>
             </div>
 
             <div className="settings-field-list">
@@ -39,9 +39,9 @@ export default function ProxySettingsTab({
                         onClick={() => setCodexProxyEnvEnabled(!proxyEnvEnabled)}
                     >
                         <span className="settings-toggle-copy">
-                            <span className="settings-toggle-title">写入 .env</span>
+                            <span className="settings-toggle-title">启用代理</span>
                             <span className="settings-toggle-desc">
-                                {proxyEnvEnabled ? '已写入 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY' : '关闭时移除 .env 中的代理变量'}
+                                {proxyEnvEnabled ? '已为 Codex app 启用代理' : '关闭后 Codex app 不再使用这里的代理'}
                             </span>
                         </span>
                         <span className="settings-switch" aria-hidden="true">
