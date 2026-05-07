@@ -9,18 +9,16 @@ assignees: ""
 ## Summary
 
 
-## Problem
+## Use Case
 
 
 ## Proposed Behavior
 
 
-## Alternatives Considered
-
-
-## Platform Impact
+## Impact
 
 - Windows:
 - macOS:
+- Codex account/API/session/proxy/update behavior:
 
 ## Additional Context

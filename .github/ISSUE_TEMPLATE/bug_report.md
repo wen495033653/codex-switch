@@ -13,10 +13,10 @@ assignees: ""
 
 - OS:
 - Codex Switch version:
-- Install source: GitHub Release / local build
-- Codex app version, if relevant:
+- Install source: GitHub Release / local build:
+- Codex app version, if related:
 
-## Steps to Reproduce
+## Reproduction
 
 1.
 2.
@@ -31,6 +31,6 @@ assignees: ""
 ## Logs or Screenshots
 
 
-## Sensitive Data Check
+## Before Submitting
 
-Before submitting, remove token, refresh token, API Key, email, account ID, local username, and local file path from logs or screenshots.
+- I removed token, refresh token, API Key, email, account ID, local username, and local file path from logs or screenshots.

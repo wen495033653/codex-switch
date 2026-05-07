@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
-import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const targetDir = path.join(os.tmpdir(), 'codex-switch-tauri-target');
+const targetDir = path.join(ROOT, 'src-tauri', 'target');
 
 const result = spawnSync('cargo', [
   'check',
