@@ -1,18 +1,19 @@
 export default function ProxySettingsTab({
-    createCodexProxyDesktopShortcut,
-    creatingCodexProxyDesktopShortcut,
-    launchCodexWithProxy,
-    launchingCodexWithProxy,
+    savingCodexProxyEnv,
     savingProxySettings,
     setSettingsDraft,
+    setCodexProxyEnvEnabled,
     settingsDraft,
     updateCodexProxySettings
 }) {
+    const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
+    const saving = savingProxySettings || savingCodexProxyEnv;
+
     return (
         <section className="settings-section">
             <div className="settings-section-head">
-                <div className="settings-section-title">Codex app 启动代理</div>
-                <div className="settings-section-desc">只在通过 Codex Switch 或桌面图标启动 Codex 时注入 HTTP/HTTPS/WS 代理环境变量。</div>
+                <div className="settings-section-title">Codex app 代理</div>
+                <div className="settings-section-desc">开启后写入 ~/.codex/.env，Codex 下次启动时读取代理变量。</div>
             </div>
 
             <div className="settings-field-list">
@@ -30,24 +31,23 @@ export default function ProxySettingsTab({
                             }}
                         />
                     </label>
-                    <div className="settings-proxy-launch">
-                        <button
-                            type="button"
-                            className="btn btn-primary"
-                            onClick={launchCodexWithProxy}
-                            disabled={savingProxySettings || launchingCodexWithProxy || creatingCodexProxyDesktopShortcut}
-                        >
-                            {launchingCodexWithProxy ? '启动中...' : '启动 Codex'}
-                        </button>
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={createCodexProxyDesktopShortcut}
-                            disabled={savingProxySettings || launchingCodexWithProxy || creatingCodexProxyDesktopShortcut}
-                        >
-                            {creatingCodexProxyDesktopShortcut ? '创建中...' : '创建桌面图标'}
-                        </button>
-                    </div>
+                    <button
+                        type="button"
+                        className={`settings-toggle-row settings-proxy-env-toggle ${proxyEnvEnabled ? 'active' : ''}`}
+                        aria-pressed={proxyEnvEnabled}
+                        disabled={saving}
+                        onClick={() => setCodexProxyEnvEnabled(!proxyEnvEnabled)}
+                    >
+                        <span className="settings-toggle-copy">
+                            <span className="settings-toggle-title">写入 .env</span>
+                            <span className="settings-toggle-desc">
+                                {proxyEnvEnabled ? '已写入 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY' : '关闭时移除 .env 中的代理变量'}
+                            </span>
+                        </span>
+                        <span className="settings-switch" aria-hidden="true">
+                            <span className="settings-switch-thumb" />
+                        </span>
+                    </button>
                 </div>
             </div>
         </section>

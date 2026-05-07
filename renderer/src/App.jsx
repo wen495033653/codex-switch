@@ -233,18 +233,13 @@ export default function App() {
   });
 
   const {
-    cancelCodexProxyDesktopShortcut,
-    codexShortcutConfirm,
-    confirmCodexProxyDesktopShortcut,
-    createCodexProxyDesktopShortcut,
-    creatingCodexProxyDesktopShortcut,
-    launchCodexWithProxy,
-    launchingCodexWithProxy,
     openCodexConfigToml,
     openDataDir,
     openRepository,
     openSettingsPage,
+    savingCodexProxyEnv,
     savingProxySettings,
+    setCodexProxyEnvEnabled,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   } = useSettingsActions({
@@ -319,11 +314,9 @@ export default function App() {
             dataDir,
             appVersion,
             checkingUpdate,
-            createCodexProxyDesktopShortcut,
-            creatingCodexProxyDesktopShortcut,
-            launchingCodexWithProxy,
+            savingCodexProxyEnv,
             savingProxySettings,
-            launchCodexWithProxy,
+            setCodexProxyEnvEnabled,
             updateSettingsDraftAndSave,
             normalizeBackgroundRefreshInterval,
             openDataDir,
@@ -377,12 +370,6 @@ export default function App() {
 
         <AppDialogs
           message={message}
-          codexShortcut={{
-            modal: codexShortcutConfirm,
-            isLoading: creatingCodexProxyDesktopShortcut,
-            onCancel: cancelCodexProxyDesktopShortcut,
-            onConfirm: confirmCodexProxyDesktopShortcut
-          }}
           addAccount={{
             visible: addModal,
             oauth,

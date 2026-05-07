@@ -224,13 +224,8 @@
     flex-direction: column;
   }
 
-  .settings-proxy-launch {
-    width: 100%;
-    justify-content: stretch;
-  }
-
-  .settings-proxy-launch .btn {
-    flex: 1 1 0;
+  .settings-proxy-env-toggle {
+    flex-basis: auto;
   }
 
   .account-toolbar-row {

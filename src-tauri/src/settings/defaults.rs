@@ -32,6 +32,7 @@ pub(crate) fn default_settings() -> Value {
         "background_refresh_enabled": true,
         "background_refresh_interval_minutes": BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES,
         "codex_proxy_url": DEFAULT_CODEX_PROXY_URL,
+        "codex_proxy_env_enabled": false,
         "codex_session_sync_enabled": true,
         "mask_account_name": false,
         "ui_theme": "light",

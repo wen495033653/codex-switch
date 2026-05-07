@@ -12,11 +12,9 @@ export default function SettingsPage({
     dataDir,
     appVersion,
     checkingUpdate,
-    createCodexProxyDesktopShortcut,
-    creatingCodexProxyDesktopShortcut,
-    launchingCodexWithProxy,
+    savingCodexProxyEnv,
     savingProxySettings,
-    launchCodexWithProxy,
+    setCodexProxyEnvEnabled,
     updateSettingsDraftAndSave,
     normalizeBackgroundRefreshInterval,
     openDataDir,
@@ -67,12 +65,10 @@ export default function SettingsPage({
 
                     {settingsTab === 'proxy' && (
                         <ProxySettingsTab
-                            createCodexProxyDesktopShortcut={createCodexProxyDesktopShortcut}
-                            creatingCodexProxyDesktopShortcut={creatingCodexProxyDesktopShortcut}
-                            launchCodexWithProxy={launchCodexWithProxy}
-                            launchingCodexWithProxy={launchingCodexWithProxy}
+                            savingCodexProxyEnv={savingCodexProxyEnv}
                             savingProxySettings={savingProxySettings}
                             setSettingsDraft={setSettingsDraft}
+                            setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
                             settingsDraft={settingsDraft}
                             updateCodexProxySettings={updateCodexProxySettings}
                         />

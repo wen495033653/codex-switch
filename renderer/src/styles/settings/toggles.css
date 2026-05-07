@@ -19,6 +19,11 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
+.settings-toggle-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .settings-toggle-row-with-icon {
   display: grid;
   grid-template-columns: 44px 1fr auto;

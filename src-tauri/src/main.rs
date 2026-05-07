@@ -35,13 +35,6 @@ use quota::{
 use updater::UpdateRuntime;
 
 fn main() {
-    if let Some(result) = codex_launcher::run_codex_shortcut_from_args(std::env::args()) {
-        if let Err(err) = result {
-            let _ = codex_launcher::write_launcher_log(&format!("shortcut launch failed: {err}"));
-        }
-        return;
-    }
-
     tauri::Builder::default()
         .manage(AppRuntime::default())
         .manage(OAuthRuntime::default())
@@ -90,9 +83,7 @@ fn main() {
             commands::delete_account,
             commands::switch_account,
             commands::switch_api_mode,
-            codex_launcher::check_codex_proxy,
-            codex_launcher::launch_codex_with_proxy,
-            codex_launcher::create_codex_proxy_desktop_shortcut,
+            codex_launcher::set_codex_proxy_env_enabled,
             codex_launcher::restart_open_ides,
             codex_launcher::discard_ide_snapshot,
             codex_sessions::sync_codex_sessions,

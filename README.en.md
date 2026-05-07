@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | [Releases](https://github.com/wen495033653/codex-switch/releases)
 
-Codex Switch is a local desktop tool for switching Codex subscription accounts, applying an OpenAI-compatible API profile, and launching Codex with a selected proxy.
+Codex Switch is a local desktop tool for switching Codex subscription accounts, applying an OpenAI-compatible API profile, and managing Codex local proxy settings.
 
 ## Features
 
@@ -11,8 +11,7 @@ Codex Switch is a local desktop tool for switching Codex subscription accounts, 
 - Switch between subscription accounts and API mode.
 - Save API Base URL and API Key, with normalization for common Base URL inputs.
 - Sync local session lists between subscription/API mode.
-- Inject `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `WS_PROXY`, and `WSS_PROXY` when Codex is launched through Codex Switch.
-- Create Codex desktop shortcuts; an empty proxy address creates a plain Codex shortcut, while a non-empty proxy address creates a proxy launch shortcut.
+- Write or remove `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` in `~/.codex/.env`.
 - Check, download, and install updates from GitHub Releases.
 
 ## Installation
@@ -31,6 +30,7 @@ Codex Switch reads and writes the local files already used by Codex:
 
 - `~/.codex/auth.json`
 - `~/.codex/config.toml`
+- `~/.codex/.env`
 - `~/.codex/sessions/**/rollout-*.jsonl`
 - `~/.codex/state_5.sqlite`
 

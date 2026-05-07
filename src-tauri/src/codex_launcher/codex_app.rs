@@ -1,114 +1,175 @@
 use super::*;
 
-mod package;
-mod process;
-mod proxy;
+const CODEX_PROXY_ENV_NAMES: [&str; 4] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+const CODEX_NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1";
 
-const SHORTCUT_LAUNCH_ARG: &str = "--codex-switch-launch-codex";
-const SHORTCUT_PROXY_URL_ARG: &str = "--codex-switch-proxy-url";
+struct CodexProxyEnvState {
+    enabled: bool,
+    proxy_url: String,
+}
 
-pub(crate) fn run_codex_shortcut_from_args<I>(args: I) -> Option<Result<(), String>>
-where
-    I: IntoIterator<Item = String>,
-{
-    let args = args.into_iter().collect::<Vec<_>>();
-    if !args.iter().any(|arg| arg == SHORTCUT_LAUNCH_ARG) {
+fn codex_env_path() -> Result<PathBuf, String> {
+    Ok(codex_dir()?.join(".env"))
+}
+
+fn managed_proxy_env_name(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
         return None;
     }
-
-    Some(run_codex_shortcut(&args))
+    let assignment = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+    let (name, _) = assignment.split_once('=')?;
+    let name = name.trim();
+    CODEX_PROXY_ENV_NAMES
+        .iter()
+        .any(|expected| name.eq_ignore_ascii_case(expected))
+        .then_some(name)
 }
 
-fn run_codex_shortcut(args: &[String]) -> Result<(), String> {
-    let proxy_url = shortcut_arg_value(args, SHORTCUT_PROXY_URL_ARG).unwrap_or_default();
-    let settings = read_settings_value()?;
-    let profile = settings.get("api_mode").unwrap_or(&Value::Null);
-    let openai_base_url = string_field(profile, "base_url");
+fn remove_managed_proxy_lines(content: &str) -> Vec<&str> {
+    content
+        .lines()
+        .filter(|line| managed_proxy_env_name(line).is_none())
+        .collect()
+}
 
-    if proxy_url.trim().is_empty() {
-        proxy::launch_codex_plain_impl()?;
-        return Ok(());
+fn build_codex_env_content(existing: &str, proxy_url: &str) -> String {
+    let mut output = remove_managed_proxy_lines(existing).join("\n");
+    if !output.trim().is_empty() {
+        output.push('\n');
+    }
+    output.push_str(&format!(
+        "HTTP_PROXY={proxy_url}\nHTTPS_PROXY={proxy_url}\nALL_PROXY={proxy_url}\nNO_PROXY={CODEX_NO_PROXY_VALUE}\n"
+    ));
+    output
+}
+
+fn read_codex_env_content(path: &Path) -> Result<String, String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(path)
+        .map_err(|err| format!("读取 Codex .env 失败 {}: {err}", path.display()))
+}
+
+fn write_codex_env_content(path: &Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| format!("创建 Codex 目录失败: {err}"))?;
+    }
+    fs::write(path, content)
+        .map_err(|err| format!("写入 Codex .env 失败 {}: {err}", path.display()))
+}
+
+fn set_codex_proxy_env_file_enabled(enabled: bool, proxy_url: &str) -> Result<String, String> {
+    let path = codex_env_path()?;
+    let existing = read_codex_env_content(&path)?;
+    if enabled {
+        let normalized_proxy_url = normalize_proxy_url(proxy_url)?;
+        if normalized_proxy_url.is_empty() {
+            return Err("代理地址不能为空".to_string());
+        }
+        let content = build_codex_env_content(&existing, &normalized_proxy_url);
+        write_codex_env_content(&path, &content)?;
+        return Ok(normalize_proxy_display_url(&normalized_proxy_url));
     }
 
-    let normalized_proxy_url = normalize_proxy_url(&proxy_url)?;
-    proxy::launch_codex_with_proxy_impl(&normalized_proxy_url, &openai_base_url)?;
-    Ok(())
-}
-
-fn shortcut_arg_value(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|items| items.first().is_some_and(|item| item == name))
-        .and_then(|items| items.get(1))
-        .cloned()
-}
-
-#[tauri::command]
-pub(crate) fn check_codex_proxy(proxy_url: String) -> Result<Value, String> {
-    proxy::check_codex_proxy_impl(proxy_url)
-}
-
-#[tauri::command]
-pub(crate) fn launch_codex_with_proxy(options: Option<Value>) -> Result<Value, String> {
-    let opts = options.unwrap_or_else(|| json!({}));
-    let settings = read_settings_value()?;
-    let profile = settings.get("api_mode").unwrap_or(&Value::Null);
-    let requested_proxy_url = {
-        let snake_case = string_field(&opts, "proxy_url");
-        if snake_case.is_empty() {
-            string_field(&opts, "proxyUrl")
-        } else {
-            snake_case
+    let kept_lines = remove_managed_proxy_lines(&existing);
+    if kept_lines.iter().all(|line| line.trim().is_empty()) {
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|err| format!("删除 Codex .env 失败 {}: {err}", path.display()))?;
         }
+        return Ok(String::new());
+    }
+
+    let mut content = kept_lines.join("\n");
+    content.push('\n');
+    write_codex_env_content(&path, &content)?;
+    Ok(String::new())
+}
+
+fn read_codex_proxy_env_state() -> Result<CodexProxyEnvState, String> {
+    let path = codex_env_path()?;
+    let content = read_codex_env_content(&path)?;
+    let mut proxy_url = String::new();
+    let mut has_http_proxy = false;
+    let mut has_https_proxy = false;
+    let mut has_all_proxy = false;
+
+    for line in content.lines() {
+        let Some(name) = managed_proxy_env_name(line) else {
+            continue;
+        };
+        let value = line
+            .split_once('=')
+            .map(|(_, value)| value.trim().trim_matches('"').trim_matches('\''))
+            .unwrap_or("");
+        if name.eq_ignore_ascii_case("HTTP_PROXY") {
+            has_http_proxy = !value.is_empty();
+            proxy_url = value.to_string();
+        } else if name.eq_ignore_ascii_case("HTTPS_PROXY") {
+            has_https_proxy = !value.is_empty();
+            if proxy_url.is_empty() {
+                proxy_url = value.to_string();
+            }
+        } else if name.eq_ignore_ascii_case("ALL_PROXY") {
+            has_all_proxy = !value.is_empty();
+            if proxy_url.is_empty() {
+                proxy_url = value.to_string();
+            }
+        }
+    }
+
+    Ok(CodexProxyEnvState {
+        enabled: has_http_proxy && has_https_proxy && has_all_proxy,
+        proxy_url: normalize_proxy_display_url(&proxy_url),
+    })
+}
+
+pub(crate) fn apply_codex_proxy_env_state_to_settings(
+    mut settings: Value,
+) -> Result<Value, String> {
+    let state = read_codex_proxy_env_state()?;
+    let Some(settings) = settings.as_object_mut() else {
+        return Ok(settings);
     };
-    let saved_proxy_url = string_field(&settings, "codex_proxy_url");
-    let proxy_url = if !requested_proxy_url.is_empty() {
-        normalize_proxy_url(&requested_proxy_url)?
-    } else if !saved_proxy_url.is_empty() {
-        normalize_proxy_url(&saved_proxy_url)?
-    } else {
-        return Err("代理地址不能为空".to_string());
-    };
-    let openai_base_url = string_field(profile, "base_url");
-    let result = proxy::launch_codex_with_proxy_impl(&proxy_url, &openai_base_url)?;
-    let proxy_connected = bool_field(&result, "proxy_connected");
-    Ok(json!({
-        "ok": true,
-        "message": if proxy_connected {
-            "已启动 Codex，并为本次启动注入代理"
-        } else {
-            "Codex 已启动，但未观察到代理连接"
-        },
-        "result": result
-    }))
+
+    settings.insert(
+        "codex_proxy_env_enabled".to_string(),
+        Value::Bool(state.enabled),
+    );
+    if state.enabled && !state.proxy_url.is_empty() {
+        settings.insert(
+            "codex_proxy_url".to_string(),
+            Value::String(state.proxy_url),
+        );
+    }
+    Ok(Value::Object(settings.clone()))
 }
 
 #[tauri::command]
-pub(crate) fn create_codex_proxy_desktop_shortcut(options: Option<Value>) -> Result<Value, String> {
-    let opts = options.unwrap_or_else(|| json!({}));
-    let settings = read_settings_value()?;
-    let requested_proxy_url = if opts.get("proxy_url").is_some() {
-        Some(string_field(&opts, "proxy_url"))
-    } else if opts.get("proxyUrl").is_some() {
-        Some(string_field(&opts, "proxyUrl"))
-    } else {
-        None
-    };
-    let saved_proxy_url = string_field(&settings, "codex_proxy_url");
-    let proxy_url = match requested_proxy_url {
-        Some(value) if !value.is_empty() => normalize_proxy_url(&value)?,
-        Some(_) => String::new(),
-        None if !saved_proxy_url.is_empty() => normalize_proxy_url(&saved_proxy_url)?,
-        None => String::new(),
-    };
-    let result = proxy::create_codex_proxy_desktop_shortcut_impl(&proxy_url)?;
-    let proxy_enabled = bool_field(&result, "proxy_enabled");
+pub(crate) fn set_codex_proxy_env_enabled(
+    enabled: bool,
+    proxy_url: String,
+) -> Result<Value, String> {
+    let proxy_url = set_codex_proxy_env_file_enabled(enabled, &proxy_url)?;
+    let mut patch = json!({
+        "codex_proxy_env_enabled": enabled
+    });
+    if enabled {
+        patch["codex_proxy_url"] = Value::String(proxy_url.clone());
+    }
+    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
+
     Ok(json!({
         "ok": true,
-        "message": if proxy_enabled {
-            "已创建 Codex 代理启动图标"
+        "message": if enabled {
+            "Codex app 代理已写入 .env"
         } else {
-            "已创建 Codex 启动图标"
+            "Codex app 代理已从 .env 移除"
         },
-        "result": result
+        "settings": settings,
+        "env_path": codex_env_path()?.to_string_lossy().to_string(),
+        "proxy_url": proxy_url
     }))
 }

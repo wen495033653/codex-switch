@@ -12,13 +12,8 @@ export function useSettingsActions({
   toast,
   toastError
 }) {
-  const [launchingCodexWithProxy, setLaunchingCodexWithProxy] = useState(false);
-  const [creatingCodexProxyDesktopShortcut, setCreatingCodexProxyDesktopShortcut] = useState(false);
-  const [codexShortcutConfirm, setCodexShortcutConfirm] = useState({
-    visible: false,
-    proxyUrl: ''
-  });
   const [savingProxySettings, setSavingProxySettings] = useState(false);
+  const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
 
   const openSettingsPage = async () => {
     try {
@@ -51,7 +46,12 @@ export function useSettingsActions({
     setSavingProxySettings(true);
     try {
       nextPatch.codex_proxy_url = String(nextPatch.codex_proxy_url || '').trim();
-      const saveRes = await window.api.updateSettings(nextPatch);
+      const saveRes = settingsDraft.codex_proxy_env_enabled === true
+        ? await window.api.setCodexProxyEnvEnabled({
+          enabled: true,
+          proxyUrl: nextPatch.codex_proxy_url
+        })
+        : await window.api.updateSettings(nextPatch);
       applySettings(saveRes);
     } catch (err) {
       setSettingsDraft(settings);
@@ -61,45 +61,24 @@ export function useSettingsActions({
     }
   };
 
-  const launchCodexWithProxy = async () => {
-    if (launchingCodexWithProxy || savingProxySettings) return;
-    setLaunchingCodexWithProxy(true);
-    try {
-      const proxyUrl = String(settingsDraft.codex_proxy_url || '').trim();
-      const res = await window.api.launchCodexWithProxy(proxyUrl ? { proxyUrl } : {});
-      toast((res && res.message) || '已启动 Codex');
-    } catch (err) {
-      toast(getErrorMessage(err, '启动 Codex 失败'), 7000);
-    } finally {
-      setLaunchingCodexWithProxy(false);
+  const setCodexProxyEnvEnabled = async (enabled) => {
+    if (savingCodexProxyEnv || savingProxySettings) return;
+    const proxyUrl = String(settingsDraft.codex_proxy_url || '').trim();
+    if (enabled && !proxyUrl) {
+      toast('代理地址不能为空', 7000);
+      return;
     }
-  };
 
-  const createCodexProxyDesktopShortcut = async () => {
-    if (creatingCodexProxyDesktopShortcut || launchingCodexWithProxy || savingProxySettings) return;
-    setCodexShortcutConfirm({
-      visible: true,
-      proxyUrl: String(settingsDraft.codex_proxy_url || '').trim()
-    });
-  };
-
-  const cancelCodexProxyDesktopShortcut = () => {
-    if (creatingCodexProxyDesktopShortcut) return;
-    setCodexShortcutConfirm({ visible: false, proxyUrl: '' });
-  };
-
-  const confirmCodexProxyDesktopShortcut = async () => {
-    if (creatingCodexProxyDesktopShortcut || launchingCodexWithProxy || savingProxySettings) return;
-    setCreatingCodexProxyDesktopShortcut(true);
+    setSavingCodexProxyEnv(true);
     try {
-      const proxyUrl = String(codexShortcutConfirm.proxyUrl || '').trim();
-      const res = await window.api.createCodexProxyDesktopShortcut({ proxyUrl });
-      toast((res && res.message) || '已创建桌面图标');
-      setCodexShortcutConfirm({ visible: false, proxyUrl: '' });
+      const res = await window.api.setCodexProxyEnvEnabled({ enabled, proxyUrl });
+      applySettings(res);
+      toast((res && res.message) || (enabled ? 'Codex app 代理已写入 .env' : 'Codex app 代理已从 .env 移除'));
     } catch (err) {
-      toast(getErrorMessage(err, '创建桌面图标失败'), 7000);
+      setSettingsDraft(settings);
+      toast(getErrorMessage(err, enabled ? '写入 Codex app 代理失败' : '移除 Codex app 代理失败'), 7000);
     } finally {
-      setCreatingCodexProxyDesktopShortcut(false);
+      setSavingCodexProxyEnv(false);
     }
   };
 
@@ -128,18 +107,13 @@ export function useSettingsActions({
   };
 
   return {
-    cancelCodexProxyDesktopShortcut,
-    codexShortcutConfirm,
-    confirmCodexProxyDesktopShortcut,
-    createCodexProxyDesktopShortcut,
-    creatingCodexProxyDesktopShortcut,
-    launchCodexWithProxy,
-    launchingCodexWithProxy,
     openCodexConfigToml,
     openDataDir,
     openRepository,
     openSettingsPage,
+    savingCodexProxyEnv,
     savingProxySettings,
+    setCodexProxyEnvEnabled,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   };

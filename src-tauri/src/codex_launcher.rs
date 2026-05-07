@@ -5,18 +5,14 @@ use crate::{
     },
     json_util::{bool_field, raw_string_field, string_field, value_u64_field},
     paths::codex_dir,
-    proxy_config::{
-        assert_proxy_ready, build_proxy_environment, normalize_proxy_display_url,
-        normalize_proxy_url,
-    },
-    settings::{default_api_mode, read_settings_value},
+    proxy_config::{normalize_proxy_display_url, normalize_proxy_url},
+    settings::{default_api_mode, read_settings_value, update_settings_value},
     time_util::now_string,
 };
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},

@@ -38,14 +38,14 @@ pub(crate) fn open_data_dir() -> Result<Value, String> {
 pub(crate) fn get_settings() -> Result<Value, String> {
     Ok(json!({
         "ok": true,
-        "settings": read_settings_value()?
+        "settings": apply_codex_proxy_env_state_to_settings(read_settings_value()?)?
     }))
 }
 
 #[tauri::command]
 pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
     let should_sync_auto_start = has_key(&patch, "auto_start");
-    let settings = update_settings_value(&patch)?;
+    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
     if should_sync_auto_start {
         sync_system_auto_start(&app, bool_field(&settings, "auto_start"))?;
     }

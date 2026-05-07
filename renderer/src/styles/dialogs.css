@@ -142,47 +142,6 @@
   background: var(--danger);
 }
 
-.shortcut-confirm-details {
-  display: grid;
-  gap: 12px;
-  text-align: left;
-}
-
-.shortcut-confirm-summary {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.shortcut-confirm-card {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border-app);
-  border-radius: 10px;
-  background: var(--bg-subtle);
-}
-
-.shortcut-confirm-row {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-}
-
-.shortcut-confirm-row span {
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-
-.shortcut-confirm-row strong {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
 .update-dialog-content {
   display: grid;
   gap: 10px;

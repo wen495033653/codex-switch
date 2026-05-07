@@ -73,6 +73,12 @@ pub(super) fn apply_settings_patch(
             Value::String(normalize_proxy_display_url(&proxy_url)),
         );
     }
+    if has_key(patch, "codex_proxy_env_enabled") {
+        object.insert(
+            "codex_proxy_env_enabled".to_string(),
+            Value::Bool(bool_field(patch, "codex_proxy_env_enabled")),
+        );
+    }
     if has_key(patch, "codex_session_sync_enabled") {
         object.insert(
             "codex_session_sync_enabled".to_string(),

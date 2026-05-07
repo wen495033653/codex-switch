@@ -36,9 +36,10 @@ const COMMAND_BINDINGS = {
   switchAccount: ['switch_account', id => ({ id })],
   switchApiMode: ['switch_api_mode'],
   syncCodexSessions: ['sync_codex_sessions'],
-  checkCodexProxy: ['check_codex_proxy', proxyUrl => ({ proxyUrl })],
-  launchCodexWithProxy: ['launch_codex_with_proxy', options => ({ options })],
-  createCodexProxyDesktopShortcut: ['create_codex_proxy_desktop_shortcut', options => ({ options })],
+  setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({
+    enabled: Boolean(payload && payload.enabled),
+    proxyUrl: payload && payload.proxyUrl ? payload.proxyUrl : ''
+  })],
   restartOpenIdes: ['restart_open_ides', snapshotId => ({ snapshotId })],
   discardIdeSnapshot: ['discard_ide_snapshot', snapshotId => ({ snapshotId })],
   importAccounts: ['import_accounts'],

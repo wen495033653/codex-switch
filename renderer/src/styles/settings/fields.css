@@ -48,7 +48,7 @@
 
 .settings-proxy-row {
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 12px;
   width: 100%;
 }
@@ -58,15 +58,7 @@
   min-width: 0;
 }
 
-.settings-proxy-launch {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.settings-proxy-launch .btn {
-  height: 38px;
-  min-width: 68px;
+.settings-proxy-env-toggle {
+  flex: 0 0 300px;
+  min-height: 62px;
 }
