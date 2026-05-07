@@ -21,6 +21,6 @@ impl ApiModeProfile {
     }
 
     pub(super) fn provider_name(&self) -> String {
-        api_provider_name(&self.name, &self.base_url)
+        api_provider_name(&self.name)
     }
 }

@@ -3,10 +3,8 @@ use url::Url;
 pub(crate) const DEFAULT_API_NAME: &str = "api";
 pub(crate) const OPENAI_PROVIDER_ID: &str = "openai";
 pub(crate) const API_PROVIDER_ID: &str = "api";
-pub(crate) const LEGACY_API_PROVIDER_IDS: [&str; 3] =
-    ["newapi", "codex-switcher-api", "codex-switch-api"];
 
-pub(crate) fn api_provider_name(name: &str, _base_url: &str) -> String {
+pub(crate) fn api_provider_name(name: &str) -> String {
     let trimmed_name = name.trim();
     if !trimmed_name.is_empty() {
         return trimmed_name.to_string();
@@ -85,21 +83,12 @@ mod tests {
 
     #[test]
     fn api_provider_name_uses_api_when_name_is_default() {
-        assert_eq!(
-            api_provider_name(DEFAULT_API_NAME, "https://api.example.com/v1"),
-            DEFAULT_API_NAME
-        );
-        assert_eq!(
-            api_provider_name("", "https://api.example.com/v1"),
-            DEFAULT_API_NAME
-        );
+        assert_eq!(api_provider_name(DEFAULT_API_NAME), DEFAULT_API_NAME);
+        assert_eq!(api_provider_name(""), DEFAULT_API_NAME);
     }
 
     #[test]
     fn api_provider_name_preserves_custom_name() {
-        assert_eq!(
-            api_provider_name("Custom Provider", "https://api.example.com/v1"),
-            "Custom Provider"
-        );
+        assert_eq!(api_provider_name("Custom Provider"), "Custom Provider");
     }
 }

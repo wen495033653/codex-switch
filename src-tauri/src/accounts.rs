@@ -1,5 +1,5 @@
 use crate::{
-    api_config::{API_PROVIDER_ID, LEGACY_API_PROVIDER_IDS},
+    api_config::API_PROVIDER_ID,
     codex_config::{
         read_root_config, read_table_config, remove_config_values, remove_table_config,
         set_config_values, set_table_config,

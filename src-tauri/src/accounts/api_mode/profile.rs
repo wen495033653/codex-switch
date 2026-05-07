@@ -22,9 +22,6 @@ pub(crate) fn set_subscription_mode() -> Result<(), String> {
         "model_provider",
     ])?;
     remove_table_config(&format!("model_providers.{API_PROVIDER_ID}"))?;
-    for legacy_provider_id in LEGACY_API_PROVIDER_IDS {
-        remove_table_config(&format!("model_providers.{legacy_provider_id}"))?;
-    }
     Ok(())
 }
 
@@ -60,8 +57,5 @@ pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
             ("requires_openai_auth", Value::Bool(true)),
         ],
     )?;
-    for legacy_provider_id in LEGACY_API_PROVIDER_IDS {
-        remove_table_config(&format!("model_providers.{legacy_provider_id}"))?;
-    }
     Ok(())
 }
