@@ -8,6 +8,10 @@ Codex Switch 是一个本地桌面工具，用来管理多个 Codex 订阅账号
 
 ![Codex Switch 首页](./docs/images/home.png)
 
+## 下载
+
+从 [GitHub Releases](https://github.com/wen495033653/codex-switch/releases) 下载最新版本。发布签名说明见 [Code signing policy](./CODE_SIGNING.md)。
+
 ## 功能
 
 ### 账号管理

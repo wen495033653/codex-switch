@@ -8,6 +8,10 @@ It brings account switching, API configuration, session sync, proxy controls, an
 
 ![Codex Switch home screen](./docs/images/home.png)
 
+## Download
+
+Download the latest version from [GitHub Releases](https://github.com/wen495033653/codex-switch/releases). See the [code signing policy](./CODE_SIGNING.md) for release signing details.
+
 ## Features
 
 ### Account Management
