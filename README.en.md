@@ -2,14 +2,48 @@
 
 [简体中文](./README.md)
 
-Codex Switch is a local desktop tool for switching Codex subscription accounts, applying an OpenAI-compatible API profile, and managing Codex local proxy settings.
+Codex Switch is a local desktop tool for managing multiple Codex subscription accounts and switching between subscription accounts and OpenAI-compatible API mode.
+
+It brings account switching, API configuration, session sync, proxy controls, and update checks into one interface, reducing the need to edit settings manually.
 
 ## Features
 
-- Manage multiple Codex subscription accounts.
+### Account Management
+
+- Manage multiple Codex subscription accounts and switch between them quickly.
 - Import accounts with OAuth, `refresh_token`, or JSON files.
-- Switch between subscription accounts and API mode.
-- Save API Base URL and API Key, with normalization for common Base URL inputs.
-- Sync local session lists between subscription/API mode.
-- Manage Codex local HTTP/HTTPS proxy settings.
-- Check, download, and install updates from GitHub Releases.
+- View account status, usage information, and refresh time.
+- Import, export, delete, and rename accounts for long-term account maintenance.
+
+### API Mode
+
+- Configure an OpenAI-compatible API profile.
+- Accept common Base URL input formats and normalize them into a usable endpoint.
+- Hide or reveal the API Key when needed.
+- Switch between subscription accounts and API mode with one action.
+
+### Session Sync
+
+- Share the same local session list between subscription/API mode.
+- Keep previous conversations visible after switching modes.
+- Process session sync in the background to avoid blocking the interface.
+
+### Codex App Proxy
+
+- Configure a local HTTP/HTTPS proxy for Codex app traffic.
+- Accept proxy inputs such as `127.0.0.1:10808` and `http://127.0.0.1:10808`.
+- Remove the proxy configuration when the switch is turned off.
+
+### Updates and Experience
+
+- Check for new versions inside the app.
+- Support light and dark mode.
+- Keep common settings and actions in a compact interface.
+- Include a support entry for users who want to support maintenance.
+
+## Use Cases
+
+- Frequently switching between multiple Codex subscription accounts.
+- Using both Codex subscription accounts and an OpenAI-compatible API.
+- Keeping the session list consistent across subscription/API mode.
+- Managing Codex-related settings through a graphical interface instead of manual edits.
