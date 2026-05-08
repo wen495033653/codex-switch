@@ -6,6 +6,8 @@ Codex Switch is a local desktop tool for managing multiple Codex subscription ac
 
 It brings account switching, API configuration, session sync, proxy controls, and update checks into one interface, reducing the need to edit settings manually.
 
+![Codex Switch home screen](./docs/images/home.png)
+
 ## Features
 
 ### Account Management

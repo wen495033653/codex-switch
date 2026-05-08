@@ -6,6 +6,8 @@ Codex Switch 是一个本地桌面工具，用来管理多个 Codex 订阅账号
 
 它把常用的账号切换、API 配置、会话同步、代理开关和更新检查放在同一个界面里，减少手动修改配置的操作。
 
+![Codex Switch 首页](./docs/images/home.png)
+
 ## 功能
 
 ### 账号管理
