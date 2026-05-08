@@ -11,7 +11,7 @@ Codex Switch 是一个本地桌面工具，用来切换 Codex 订阅账号、应
 - 在订阅账号和 API 模式之间切换。
 - 保存 API Base URL 和 API Key，并自动规范化常见 Base URL 输入。
 - 同步订阅/API 模式的本地会话列表。
-- 写入或清理 `~/.codex/.env` 中的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`。
+- 管理 Codex 的本地 HTTP/HTTPS 代理配置。
 - 从 GitHub Releases 检查、下载并安装更新。
 
 ## 安装
@@ -30,7 +30,6 @@ Codex Switch 会读写 Codex 本身使用的本地文件：
 
 - `~/.codex/auth.json`
 - `~/.codex/config.toml`
-- `~/.codex/.env`
 - `~/.codex/sessions/**/rollout-*.jsonl`
 - `~/.codex/state_5.sqlite`
 

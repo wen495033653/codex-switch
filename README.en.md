@@ -11,7 +11,7 @@ Codex Switch is a local desktop tool for switching Codex subscription accounts, 
 - Switch between subscription accounts and API mode.
 - Save API Base URL and API Key, with normalization for common Base URL inputs.
 - Sync local session lists between subscription/API mode.
-- Write or remove `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` in `~/.codex/.env`.
+- Manage Codex local HTTP/HTTPS proxy settings.
 - Check, download, and install updates from GitHub Releases.
 
 ## Installation
@@ -30,7 +30,6 @@ Codex Switch reads and writes the local files already used by Codex:
 
 - `~/.codex/auth.json`
 - `~/.codex/config.toml`
-- `~/.codex/.env`
 - `~/.codex/sessions/**/rollout-*.jsonl`
 - `~/.codex/state_5.sqlite`
 
