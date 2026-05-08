@@ -52,3 +52,19 @@ html[data-theme="light"] .update-dialog-notes-heading,
 html[data-theme="light"] .update-dialog-notes-body {
   color: var(--text-primary);
 }
+
+html[data-theme="light"] .support-dialog-title {
+  color: var(--text-primary);
+}
+
+html[data-theme="light"] .token-modal-error,
+html[data-theme="light"] .oauth-error-text {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
+html[data-theme="light"] .oauth-error-code,
+html[data-theme="light"] .update-dialog-error {
+  color: #b91c1c;
+}

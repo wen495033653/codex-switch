@@ -31,9 +31,9 @@ export function useAccountOperations({
     try {
       const res = await window.api.refreshAccount(accountId);
       if (res && res.store) setStore(res.store);
-      toast(res && res.message ? res.message : '账号信息已刷新');
+      toast(res && res.message ? res.message : '配额已刷新');
     } catch (err) {
-      toastError(err, '刷新账号信息失败');
+      toastError(err, '刷新配额失败');
     } finally {
       setRefreshingAccountId(prev => (prev === accountId ? '' : prev));
     }

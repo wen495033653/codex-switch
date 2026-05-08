@@ -71,6 +71,24 @@ html[data-theme="light"] .plan-api {
   border-color: #c7d2fe;
 }
 
+html[data-theme="light"] .status-badge.auth-error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+html[data-theme="light"] .expire-date {
+  background: #f8fafc;
+  color: #64748b;
+  border-color: #cbd5e1;
+}
+
+html[data-theme="light"] .account-id-badge {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+
 html[data-theme="light"] .current-badge {
   background: #2563eb;
   border-color: #2563eb;
@@ -79,4 +97,16 @@ html[data-theme="light"] .current-badge {
 html[data-theme="light"] .quota-reset-inline,
 html[data-theme="light"] .quota-reset-card {
   color: #64748b;
+}
+
+html[data-theme="light"] .quota-error {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
+html[data-theme="light"] .quota-status-info {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #cbd5e1;
 }

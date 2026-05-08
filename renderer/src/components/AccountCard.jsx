@@ -3,10 +3,49 @@ import { parseAuthInfo, getAccountName, getAccountId, maskAccountDisplayName } f
 
 const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
 
+function authErrorIncludes(message, patterns) {
+    const value = typeof message === 'string' ? message.toLowerCase() : '';
+    return patterns.some(pattern => value.includes(String(pattern).toLowerCase()));
+}
+
+function getAuthErrorLabel(info) {
+    const message = typeof info.authStatusMessage === 'string' ? info.authStatusMessage : '';
+    if (info.isApiMode) {
+        return message.includes('API Key') ? 'API Key 未配置' : 'API 配置异常';
+    }
+
+    if (message.includes('账号数据异常') || authErrorIncludes(message, ['id_token', 'claims'])) {
+        return '账号数据异常';
+    }
+    if (message.includes('刷新后账号标识不一致')) {
+        return '账号不匹配';
+    }
+    if (authErrorIncludes(message, ['timeout', 'timed out', 'dns', 'proxy', 'connect', 'connection', 'tls', 'network'])) {
+        return '网络刷新失败';
+    }
+    if (authErrorIncludes(message, ['too many requests', 'http 429'])) {
+        return '刷新太频繁';
+    }
+    if (authErrorIncludes(message, ['service temporarily unavailable', 'http 500', 'http 502', 'http 503', 'http 504'])) {
+        return '服务暂不可用';
+    }
+    if (authErrorIncludes(message, ['deactivated_workspace', 'workspace has been deactivated'])) {
+        return 'Workspace 已停用';
+    }
+    if (authErrorIncludes(message, ['invalid_grant', 'unauthorized', 'authorization expired', '缺少 refreshtoken', '缺少 refresh_token', '刷新结果缺少 refresh_token'])) {
+        return '登录已失效';
+    }
+
+    return '登录刷新失败';
+}
+
 function getAuthBadge(info) {
     if (info.authStatus === 'error') {
+        const label = getAuthErrorLabel(info);
+        const message = typeof info.authStatusMessage === 'string' ? info.authStatusMessage.trim() : '';
         return {
-            label: '认证异常',
+            label,
+            title: message ? `${label}：${message}` : label,
             className: 'status-badge auth-error'
         };
     }
@@ -47,7 +86,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
                         </span>
                     )}
                     {authBadge && (
-                        <span className={authBadge.className} title={info.authStatusMessage || authBadge.label}>
+                        <span className={authBadge.className} title={authBadge.title}>
                             {authBadge.label}
                         </span>
                     )}
@@ -103,8 +142,14 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
                         </button>
                     )}
                     {!info.isApiMode && (
-                        <button className="icon-btn" title="刷新账号信息" onClick={() => onRefresh(accountId)} disabled={refreshing}>
-                            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <button
+                            className="icon-btn"
+                            title={refreshing ? '刷新配额中' : '刷新配额'}
+                            aria-label={refreshing ? '刷新配额中' : '刷新配额'}
+                            onClick={() => onRefresh(accountId)}
+                            disabled={refreshing}
+                        >
+                            <svg className={refreshing ? 'icon-spin' : ''} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
                         </button>
