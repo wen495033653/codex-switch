@@ -40,9 +40,15 @@ html[data-theme="light"] .settings-path-card,
 html[data-theme="light"] .connect-block,
 html[data-theme="light"] .settings-option,
 html[data-theme="light"] .update-dialog-card,
+html[data-theme="light"] .update-dialog-notes-body,
 html[data-theme="light"] .oauth-url-card,
 html[data-theme="light"] .empty-state-card {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.84));
   border-color: var(--border-app);
+}
+
+html[data-theme="light"] .update-dialog-notes-heading,
+html[data-theme="light"] .update-dialog-notes-body {
+  color: var(--text-primary);
 }

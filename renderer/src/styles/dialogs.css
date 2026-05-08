@@ -292,6 +292,54 @@
   overflow-wrap: anywhere;
 }
 
+.update-dialog-notes {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.update-dialog-section-title {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.update-dialog-notes-body {
+  display: grid;
+  gap: 8px;
+  max-height: 150px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #e4e4e7;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.update-dialog-notes-heading {
+  color: #f4f4f5;
+  font-weight: 700;
+}
+
+.update-dialog-notes-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.update-dialog-notes-list li {
+  padding-left: 2px;
+}
+
+.update-dialog-notes-list li::marker {
+  color: var(--accent);
+}
+
+.update-dialog-notes-paragraph {
+  margin: 0;
+}
+
 .update-dialog-progress {
   height: 8px;
   overflow: hidden;
