@@ -1,11 +1,10 @@
 use crate::accounts::{OAUTH_AUTHORIZE_ENDPOINT, OAUTH_CLIENT_ID, OAUTH_SCOPE};
 use base64::{engine::general_purpose, Engine as _};
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 pub(crate) fn random_urlsafe(bytes_len: usize) -> String {
     let mut bytes = vec![0_u8; bytes_len];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

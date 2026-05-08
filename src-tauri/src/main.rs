@@ -35,6 +35,8 @@ use quota::{
 use updater::UpdateRuntime;
 
 fn main() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tauri::Builder::default()
         .manage(AppRuntime::default())
         .manage(OAuthRuntime::default())

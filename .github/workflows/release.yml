@@ -44,6 +44,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Load release notes
+        id: release_notes
+        shell: pwsh
+        run: |
+          $notesFile = Join-Path ".github/release-notes" "${{ github.ref_name }}.md"
+          if (-not (Test-Path -LiteralPath $notesFile)) {
+            throw "Missing release notes file: $notesFile"
+          }
+
+          "body<<__CODEX_SWITCH_RELEASE_NOTES__" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Get-Content -LiteralPath $notesFile -Raw -Encoding utf8 | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "__CODEX_SWITCH_RELEASE_NOTES__" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -53,7 +66,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Codex Switch ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install this version."
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           releaseDraft: false

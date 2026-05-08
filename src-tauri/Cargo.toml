@@ -1,13 +1,13 @@
 [package]
 name = "codex-switch"
-version = "5.0.0-rc.3"
+version = "5.1.0"
 description = "Desktop tool for managing and switching Codex accounts."
 authors = ["Codex Switch contributors"]
 license = "MIT"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.1", features = [] }
 
 [profile.release]
 strip = true
@@ -17,21 +17,21 @@ codegen-units = 1
 panic = "abort"
 
 [dependencies]
-arboard = "3"
-base64 = "0.22"
-open = "5"
-rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "charset", "http2", "json", "rustls-tls", "system-proxy"] }
-updater-reqwest = { package = "reqwest", version = "0.13", default-features = false, features = ["system-proxy"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-tauri = { version = "2", features = ["protocol-asset", "image-png", "tray-icon"] }
-tauri-plugin-autostart = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2"
-time = { version = "0.3", features = ["formatting"] }
-url = "2"
+arboard = "3.6.1"
+base64 = "0.22.1"
+open = "5.3.4"
+rand = "0.10.1"
+reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "charset", "form", "http2", "json", "rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+tauri = { version = "2.11.1", features = ["protocol-asset", "image-png", "tray-icon"] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-opener = "2.5.4"
+tauri-plugin-single-instance = "2.4.2"
+tauri-plugin-updater = "2.10.1"
+time = { version = "0.3.47", features = ["formatting"] }
+url = "2.5.8"
