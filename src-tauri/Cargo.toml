@@ -1,6 +1,6 @@
 [package]
 name = "codex-switch"
-version = "5.0.0-rc.2"
+version = "5.0.0"
 description = "Desktop tool for managing and switching Codex accounts."
 authors = ["Codex Switch contributors"]
 license = "MIT"
@@ -21,7 +21,7 @@ arboard = "3"
 base64 = "0.22"
 open = "5"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "charset", "http2", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "charset", "http2", "json", "rustls-tls", "system-proxy"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

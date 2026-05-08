@@ -29,6 +29,9 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
     const displayName = maskAccountName ? maskAccountDisplayName(name) : name;
     const accountId = getAccountId(acc);
     const accountTag = accountId ? accountId.split('-')[0] : '';
+    const usageNoticeTitle = info.usageNotice
+        ? (info.usageNotice.detail || info.usageNotice.message)
+        : '';
 
     return (
         <div className={`account-card ${isCurrent ? 'active' : ''}`}>
@@ -64,9 +67,13 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
             <div className="account-card-body">
                 <div className={`account-card-quotas ${info.usageNotice ? 'account-card-quotas-status' : ''}`}>
                     {info.usageNotice ? (
-                        <div className={info.usageNotice.tone === 'error' ? 'quota-error' : 'quota-status quota-status-info'}>
+                        <div
+                            className={info.usageNotice.tone === 'error' ? 'quota-error' : 'quota-status quota-status-info'}
+                            title={usageNoticeTitle}
+                            aria-label={usageNoticeTitle}
+                        >
                             <span className="error-icon">{info.usageNotice.tone === 'error' ? '⚠️' : 'ℹ️'}</span>
-                            <span className="error-msg">{info.usageNotice.message}</span>
+                            <span className="error-msg" title={usageNoticeTitle}>{info.usageNotice.message}</span>
                         </div>
                     ) : (
                         <>

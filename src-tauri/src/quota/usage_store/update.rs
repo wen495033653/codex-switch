@@ -68,7 +68,7 @@ fn update_account_usage_result_in_store(
                 .chars()
                 .next()
                 .map(|_| raw_string_field(&error, "message"))
-                .unwrap_or_else(|| "配额刷新失败，请稍后手动刷新".to_string());
+                .unwrap_or_else(|| "Usage refresh failed, please refresh manually".to_string());
             set_usage_state(
                 accounts[index].get("custom"),
                 "error",

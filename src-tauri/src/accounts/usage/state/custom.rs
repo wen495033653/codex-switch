@@ -39,7 +39,11 @@ pub(crate) fn set_usage_state(
         next["usage_info"] = value;
     }
     next["usage_status"] = Value::String(status.to_string());
-    next["usage_status_message"] = Value::String(message.to_string());
+    next["usage_status_message"] = Value::String(if status == "error" {
+        String::new()
+    } else {
+        message.to_string()
+    });
     next["usage_error"] = if status == "error" {
         error
     } else {

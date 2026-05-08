@@ -1,5 +1,7 @@
 use super::{mutation::add_account_to_store, query::find_store_account};
-use crate::accounts::{build_error_state, set_auth_state, write_account_auth};
+use crate::accounts::{
+    build_error_state, get_codex_state_value, set_auth_state, write_account_auth,
+};
 use crate::json_util::raw_string_field;
 use serde_json::{json, Value};
 
@@ -8,6 +10,12 @@ use super::super::persistence::read_store_value;
 pub(crate) fn sync_auth_file_if_active(account_id: &str) -> Result<(), String> {
     let store = read_store_value()?;
     if raw_string_field(&store, "active_id") != account_id {
+        return Ok(());
+    }
+    let state = get_codex_state_value();
+    if raw_string_field(&state, "mode") != "chatgpt"
+        || raw_string_field(&state, "account_id") != account_id
+    {
         return Ok(());
     }
     let account = find_store_account(account_id)?;

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Codex Switch",
-  "version": "5.0.0-rc.2",
+  "version": "5.0.0",
   "identifier": "com.codex.switch",
   "build": {
     "beforeDevCommand": "npm run dev:renderer",
@@ -44,7 +44,18 @@
     },
     "windows": {
       "nsis": {
+        "template": "./windows/installer.nsi",
+        "installerIcon": "../build/icon.ico",
+        "uninstallerIcon": "../build/icon.ico",
+        "headerImage": "./windows/assets/installer-header.bmp",
+        "sidebarImage": "./windows/assets/installer-sidebar.bmp",
+        "uninstallerHeaderImage": "./windows/assets/installer-header.bmp",
         "installMode": "currentUser",
+        "languages": ["English", "SimpChinese"],
+        "customLanguageFiles": {
+          "English": "./windows/languages/English.nsh",
+          "SimpChinese": "./windows/languages/SimpChinese.nsh"
+        },
         "displayLanguageSelector": false
       }
     }

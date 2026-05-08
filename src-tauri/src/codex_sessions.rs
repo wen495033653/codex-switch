@@ -59,6 +59,14 @@ pub(crate) fn queue_codex_sessions_to_provider(target_provider: &str) -> Result<
     queue_codex_sessions_to_provider_impl(target_provider, true)
 }
 
+pub(crate) fn sync_codex_session_index_then_queue_rollouts(
+    target_provider: &str,
+) -> Result<bool, String> {
+    let target_provider = normalize_target_provider(target_provider)?;
+    sync_codex_state_threads_to_provider_if_exists(&target_provider)?;
+    queue_codex_sessions_to_provider_impl(&target_provider, true)
+}
+
 fn queue_codex_sessions_to_current_mode_if_idle() -> Result<bool, String> {
     let target_provider = current_session_provider()?;
     queue_codex_sessions_to_provider_impl(&target_provider, false)

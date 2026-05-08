@@ -43,7 +43,7 @@ pub(crate) fn account_from_exchange(
                 .chars()
                 .next()
                 .map(|_| raw_string_field(&error, "message"))
-                .unwrap_or_else(|| "配额刷新失败，请稍后手动刷新".to_string());
+                .unwrap_or_else(|| "Usage refresh failed, please refresh manually".to_string());
             set_usage_state(Some(&custom), "error", &message, None, error)
         }
     };
@@ -92,7 +92,7 @@ pub(crate) fn account_from_exchange_syncing(
     custom = set_usage_state(
         Some(&custom),
         "syncing",
-        "配额同步中，请稍候...",
+        "Usage syncing, please wait...",
         None,
         Value::Null,
     );

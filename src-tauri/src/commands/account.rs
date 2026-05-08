@@ -55,11 +55,15 @@ pub(crate) async fn export_accounts(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn refresh_account(id: String) -> Result<Value, String> {
-    refresh_account_impl(id)
+pub(crate) async fn refresh_account(id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || refresh_account_impl(id))
+        .await
+        .map_err(|err| format!("刷新账号任务异常: {err}"))?
 }
 
 #[tauri::command]
-pub(crate) fn refresh_account_token(id: String) -> Result<Value, String> {
-    refresh_account_token_impl(id)
+pub(crate) async fn refresh_account_token(id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || refresh_account_token_impl(id))
+        .await
+        .map_err(|err| format!("刷新 Refresh Token 任务异常: {err}"))?
 }

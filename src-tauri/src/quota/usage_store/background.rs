@@ -35,7 +35,7 @@ pub(crate) fn sync_account_usage_in_background(
                     .chars()
                     .next()
                     .map(|_| raw_string_field(&error, "message"))
-                    .unwrap_or_else(|| "配额同步失败，请稍后手动刷新".to_string());
+                    .unwrap_or_else(|| "Usage sync failed, please try again later".to_string());
                 set_usage_state(account.get("custom"), "error", &message, None, error)
             }
         };

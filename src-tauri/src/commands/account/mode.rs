@@ -9,7 +9,7 @@ fn codex_session_sync_enabled(settings: &Value) -> bool {
 
 fn sync_codex_sessions_if_enabled(settings: &Value, target_provider: &str) -> Result<bool, String> {
     if codex_session_sync_enabled(settings) {
-        queue_codex_sessions_to_provider(target_provider)
+        sync_codex_session_index_then_queue_rollouts(target_provider)
     } else {
         Ok(false)
     }

@@ -5,7 +5,7 @@ use crate::{
         apply_codex_proxy_env_state_to_settings, attach_ide_reopen, build_ide_reopen_payload,
         IdeRuntime,
     },
-    codex_sessions::queue_codex_sessions_to_provider,
+    codex_sessions::sync_codex_session_index_then_queue_rollouts,
     desktop::sync_system_auto_start,
     json_util::{bool_field, has_key, raw_string_field, string_field},
     paths::app_data_dir,

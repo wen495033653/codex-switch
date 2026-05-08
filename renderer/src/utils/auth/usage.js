@@ -18,16 +18,39 @@ export function getUsageWindows(usage) {
 export function normalizeErrorState(raw) {
     if (!raw || typeof raw !== 'object') return null;
 
-    const message = typeof raw.message === 'string' ? raw.message : '';
+    const message = sanitizeUsageText(typeof raw.message === 'string' ? raw.message : '');
     const code = typeof raw.code === 'string' ? raw.code : '';
+    const rawMessage = sanitizeUsageText(typeof raw.raw_message === 'string' ? raw.raw_message : '');
+    const path = typeof raw.path === 'string' ? raw.path : '';
+    const time = typeof raw.time === 'string' ? raw.time : '';
     const status = Number(raw.status);
-    if (!message && !code && !Number.isFinite(status)) return null;
+    if (!message && !code && !rawMessage && !path && !time && !Number.isFinite(status)) return null;
 
     return {
         message,
         code,
+        rawMessage,
+        path,
+        time,
         status: Number.isFinite(status) ? status : 0
     };
+}
+
+function sanitizeUsageText(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return '';
+
+    return text
+        .replace(/^配额请求失败[:：]\s*/, '')
+        .replace(/^配额刷新失败[:：]\s*/, '')
+        .replace(/^配额同步失败[:：]\s*/, '')
+        .replace(/^订阅已刷新，但配额刷新失败\s*/, '')
+        .trim();
+}
+
+function getErrorDetail(error) {
+    if (!error) return '';
+    return error.message || error.rawMessage || '';
 }
 
 export function getUsageNotice(custom, usage, usageWindows) {
@@ -35,28 +58,34 @@ export function getUsageNotice(custom, usage, usageWindows) {
     const usageStatus = typeof custom.usage_status === 'string' && custom.usage_status
         ? custom.usage_status
         : (usageError ? 'error' : (usage ? 'ok' : 'missing'));
-    const usageStatusMessage = typeof custom.usage_status_message === 'string'
+    const usageStatusMessage = sanitizeUsageText(typeof custom.usage_status_message === 'string'
         ? custom.usage_status_message
-        : '';
+        : '');
 
     if (usageStatus === 'error' || usageError) {
+        const message = usageStatusMessage || (usageError && usageError.message) || 'Usage state is abnormal';
         return {
             tone: 'error',
-            message: usageStatusMessage || (usageError && usageError.message) || '配额状态异常'
+            message,
+            detail: getErrorDetail(usageError) || message
         };
     }
 
     if (usageStatus === 'syncing') {
+        const message = usageStatusMessage || 'Usage syncing, please wait...';
         return {
             tone: 'info',
-            message: usageStatusMessage || '配额同步中，请稍候...'
+            message,
+            detail: message
         };
     }
 
     if (usageStatus === 'missing' || !usage || usageWindows.length === 0) {
+        const message = usageStatusMessage || 'Usage data missing, please refresh';
         return {
             tone: 'info',
-            message: usageStatusMessage || '配额数据缺失，请刷新'
+            message,
+            detail: message
         };
     }
 

@@ -22,17 +22,17 @@ pub(crate) fn parse_endpoint_error(status: u16, text: &str) -> (String, String, 
         .unwrap_or_else(|| raw_string_field(&parsed, "error_description"));
 
     let message = if err_code == "deactivated_workspace" {
-        "工作空间已停用".to_string()
+        "Workspace has been deactivated".to_string()
     } else if !err_message.is_empty() {
         err_message.clone()
     } else if status == 401 || status == 403 {
-        "授权已失效，请重新登录".to_string()
+        "Authorization expired, please sign in again".to_string()
     } else if status == 429 {
-        "请求过于频繁，请稍后再试".to_string()
+        "Too many requests, please try again later".to_string()
     } else if status >= 500 {
-        "服务暂时不可用，请稍后再试".to_string()
+        "Service temporarily unavailable, please try again later".to_string()
     } else {
-        "请求失败，请稍后再试".to_string()
+        "Request failed, please try again later".to_string()
     };
 
     let raw_message = if !err_message.is_empty() {
@@ -61,8 +61,9 @@ pub(crate) fn get_usage(
         .timeout(StdDuration::from_millis(timeout_ms))
         .build()
         .map_err(|err| {
+            let message = err.to_string();
             build_error_state(
-                &format!("配额请求失败: {err}"),
+                &message,
                 "usage_sync_failed",
                 "",
                 0,
@@ -80,8 +81,9 @@ pub(crate) fn get_usage(
         .header("chatgpt-account-id", account_id)
         .send()
         .map_err(|err| {
+            let message = err.to_string();
             build_error_state(
-                &format!("配额请求失败: {err}"),
+                &message,
                 "usage_sync_failed",
                 "",
                 0,
@@ -107,8 +109,9 @@ pub(crate) fn get_usage(
     }
 
     let data: Value = response.json().map_err(|err| {
+        let message = format!("Failed to parse quota response: {err}");
         build_error_state(
-            &format!("配额响应解析失败: {err}"),
+            &message,
             "usage_sync_failed",
             "",
             0,

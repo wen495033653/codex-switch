@@ -1,5 +1,7 @@
 use super::*;
 
+const MANUAL_QUOTA_TIMEOUT_MS: u64 = 10_000;
+
 pub(super) struct AccountRefreshContext {
     pub(super) account: Value,
     pub(super) exchange: Value,
@@ -73,7 +75,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
     let usage_result = get_usage(
         &string_field(&context.exchange, "access_token"),
         &context.account_id,
-        30_000,
+        MANUAL_QUOTA_TIMEOUT_MS,
     );
     let usage_error = usage_result.as_ref().err().cloned();
     let next_account = account_from_exchange(
@@ -89,10 +91,10 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
             .chars()
             .next()
             .map(|_| raw_string_field(&error, "message"))
-            .unwrap_or_else(|| "刷新账号信息失败".to_string());
+            .unwrap_or_else(|| "Usage refresh failed".to_string());
         return Ok(json!({
             "ok": false,
-            "message": format!("订阅已刷新，但配额刷新失败\n{message}"),
+            "message": format!("Subscription refreshed, but quota refresh failed\n{message}"),
             "code": raw_string_field(&error, "code"),
             "store": store
         }));
