@@ -3,7 +3,6 @@ export { useAccountOperations } from './useAccountOperations';
 export { useAccountPagination } from './useAccountPagination';
 export { useAppBootstrap } from './useAppBootstrap';
 export { useApiModeDraft } from './useApiModeDraft';
-export { useApiProfilePagination } from './useApiProfilePagination';
 export { useCodexSessionSync } from './useCodexSessionSync';
 export { useCurrentModeSummary } from './useCurrentModeSummary';
 export { useIdeReopen } from './useIdeReopen';

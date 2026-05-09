@@ -1,6 +1,5 @@
 use super::{
-    default_api_profile, normalize_background_refresh_interval_minutes, DEFAULT_API_NAME,
-    DEFAULT_API_PROFILE_ID, DEFAULT_CODEX_PROXY_URL,
+    normalize_background_refresh_interval_minutes, DEFAULT_API_NAME, DEFAULT_CODEX_PROXY_URL,
 };
 use crate::{
     api_config::normalize_api_base_url,
@@ -9,35 +8,10 @@ use crate::{
 };
 use serde_json::{json, Value};
 
-#[derive(Clone)]
-struct ApiProfileState {
-    active_id: String,
-    active_profile: Value,
-    profiles: Vec<Value>,
-}
-
-fn fallback_api_profile_id(index: usize) -> String {
-    if index == 0 {
-        DEFAULT_API_PROFILE_ID.to_string()
-    } else {
-        format!("api-{index}")
-    }
-}
-
-fn normalized_api_profile_id(data: &Value, fallback_id: &str) -> String {
-    let id = string_field(data, "id");
-    if id.is_empty() {
-        fallback_id.to_string()
-    } else {
-        id
-    }
-}
-
-fn normalize_api_profile(data: &Value, fallback_id: &str) -> Value {
+fn normalize_api_mode(data: &Value) -> Value {
     let name = string_field(data, "name");
     let base_url = string_field(data, "base_url");
     json!({
-        "id": normalized_api_profile_id(data, fallback_id),
         "name": if name.is_empty() { DEFAULT_API_NAME.to_string() } else { name },
         "base_url": if base_url.is_empty() {
             String::new()
@@ -48,70 +22,11 @@ fn normalize_api_profile(data: &Value, fallback_id: &str) -> Value {
     })
 }
 
-fn api_profile_id(profile: &Value) -> String {
-    string_field(profile, "id")
-}
-
-fn normalize_api_profiles_state(data: &Value) -> ApiProfileState {
-    let fallback_profile = normalize_api_profile(
-        data.get("api_mode").unwrap_or(&Value::Null),
-        DEFAULT_API_PROFILE_ID,
-    );
-    let raw_profiles = data
-        .get("api_profiles")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut profiles: Vec<Value> = Vec::new();
-
-    for (index, item) in raw_profiles.iter().enumerate() {
-        let fallback_id = fallback_api_profile_id(index);
-        let profile = normalize_api_profile(item, &fallback_id);
-        let profile_id = api_profile_id(&profile);
-        if profile_id.is_empty()
-            || profiles
-                .iter()
-                .any(|existing| api_profile_id(existing) == profile_id)
-        {
-            continue;
-        }
-        profiles.push(profile);
-    }
-
-    if profiles.is_empty() {
-        profiles.push(fallback_profile);
-    }
-
-    let requested_active_id = string_field(data, "active_api_profile_id");
-    let active_id = if requested_active_id.is_empty() {
-        api_profile_id(&profiles[0])
-    } else if profiles
-        .iter()
-        .any(|profile| api_profile_id(profile) == requested_active_id)
-    {
-        requested_active_id
-    } else {
-        api_profile_id(&profiles[0])
-    };
-    let active_profile = profiles
-        .iter()
-        .find(|profile| api_profile_id(profile) == active_id)
-        .cloned()
-        .unwrap_or_else(default_api_profile);
-
-    ApiProfileState {
-        active_id,
-        active_profile,
-        profiles,
-    }
-}
-
 pub(crate) fn normalize_settings(data: &Value) -> Value {
     let ui_theme = match string_field(data, "ui_theme").as_str() {
         "dark" => "dark",
         _ => "light",
     };
-    let api_profiles_state = normalize_api_profiles_state(data);
     let background_refresh_interval_minutes = normalize_background_refresh_interval_minutes(
         value_u64_field(data, "background_refresh_interval_minutes"),
     );
@@ -160,9 +75,7 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
             .unwrap_or(true),
         "mask_account_name": bool_field(data, "mask_account_name"),
         "ui_theme": ui_theme,
-        "active_api_profile_id": api_profiles_state.active_id,
-        "api_profiles": api_profiles_state.profiles,
-        "api_mode": api_profiles_state.active_profile,
+        "api_mode": normalize_api_mode(data.get("api_mode").unwrap_or(&Value::Null)),
         "window_bounds": {
             "width": width,
             "height": height
@@ -237,74 +150,6 @@ mod tests {
                 .and_then(|api_mode| api_mode.get("base_url"))
                 .and_then(Value::as_str),
             Some("https://gpt-pool.com/v1")
-        );
-    }
-
-    #[test]
-    fn normalize_settings_migrates_single_api_mode_to_profiles() {
-        let settings = normalize_settings(&json!({
-            "api_mode": {
-                "name": "Pool",
-                "base_url": "gpt-pool.com",
-                "api_key": "test-key"
-            }
-        }));
-
-        assert_eq!(
-            settings
-                .get("active_api_profile_id")
-                .and_then(Value::as_str),
-            Some(DEFAULT_API_PROFILE_ID)
-        );
-        assert_eq!(
-            settings
-                .get("api_profiles")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            settings
-                .get("api_mode")
-                .and_then(|api_mode| api_mode.get("name"))
-                .and_then(Value::as_str),
-            Some("Pool")
-        );
-    }
-
-    #[test]
-    fn normalize_settings_uses_active_api_profile() {
-        let settings = normalize_settings(&json!({
-            "active_api_profile_id": "backup",
-            "api_profiles": [
-                {
-                    "id": "default",
-                    "name": "Default",
-                    "base_url": "https://default.example.com/v1",
-                    "api_key": "default-key"
-                },
-                {
-                    "id": "backup",
-                    "name": "Backup",
-                    "base_url": "backup.example.com",
-                    "api_key": "backup-key"
-                }
-            ]
-        }));
-
-        assert_eq!(
-            settings
-                .get("api_mode")
-                .and_then(|api_mode| api_mode.get("name"))
-                .and_then(Value::as_str),
-            Some("Backup")
-        );
-        assert_eq!(
-            settings
-                .get("api_mode")
-                .and_then(|api_mode| api_mode.get("base_url"))
-                .and_then(Value::as_str),
-            Some("https://backup.example.com/v1")
         );
     }
 
