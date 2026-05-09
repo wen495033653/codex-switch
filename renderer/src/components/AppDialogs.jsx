@@ -19,6 +19,8 @@ export default function AppDialogs({
       {addAccount.visible && (
         <AddAccountModal
           oauth={addAccount.oauth}
+          oauthCallbackSubmitting={addAccount.oauthCallbackSubmitting}
+          oauthCallbackUrl={addAccount.oauthCallbackUrl}
           oauthTimeoutHint={addAccount.oauthTimeoutHint}
           refreshTokenInput={addAccount.refreshTokenInput}
           refreshTokenLoading={addAccount.refreshTokenLoading}
@@ -29,8 +31,10 @@ export default function AppDialogs({
           onCopyOauthUrl={addAccount.onCopyOauthUrl}
           onImportAccountsFromBackup={addAccount.onImportAccountsFromBackup}
           onImportByRefreshToken={addAccount.onImportByRefreshToken}
+          onOauthCallbackUrlChange={addAccount.onOauthCallbackUrlChange}
           onRefreshTokenInputChange={addAccount.onRefreshTokenInputChange}
           onStartOauth={addAccount.onStartOauth}
+          onSubmitOauthCallbackUrl={addAccount.onSubmitOauthCallbackUrl}
           onToggleRefreshTokenPanel={addAccount.onToggleRefreshTokenPanel}
         />
       )}

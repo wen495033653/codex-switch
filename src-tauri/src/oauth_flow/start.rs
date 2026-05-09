@@ -23,7 +23,7 @@ pub(super) fn oauth_start_impl(
     payload: Option<Value>,
 ) -> Result<Value, String> {
     let _ = payload;
-    let (flow_id, canceled) = start_oauth_flow(&runtime)?;
+    let (flow_id, canceled, manual_callbacks) = start_oauth_flow(&runtime)?;
 
     let result = (|| -> Result<Value, String> {
         set_subscription_mode()?;
@@ -68,7 +68,13 @@ pub(super) fn oauth_start_impl(
             );
         }
 
-        let exchange = wait_for_oauth_exchange(listener, &state, &verifier, Arc::clone(&canceled))?;
+        let exchange = wait_for_oauth_exchange(
+            listener,
+            &state,
+            &verifier,
+            Arc::clone(&canceled),
+            manual_callbacks,
+        )?;
         let account_id = string_field(&exchange, "account_id");
         let access_token = string_field(&exchange, "access_token");
         let account = account_from_exchange_syncing(&exchange, None)?;

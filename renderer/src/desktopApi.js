@@ -56,7 +56,8 @@ const COMMAND_BINDINGS = {
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
   startOauth: ['oauth_start', payload => ({ payload })],
-  cancelOauth: ['oauth_cancel']
+  cancelOauth: ['oauth_cancel'],
+  submitOauthCallback: ['oauth_submit_callback', callbackUrl => ({ callbackUrl })]
 };
 
 const EVENT_BINDINGS = {

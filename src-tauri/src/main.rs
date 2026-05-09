@@ -106,7 +106,8 @@ fn main() {
             commands::open_codex_config_toml,
             commands::list_brand_voice_files,
             oauth_flow::oauth_start,
-            oauth_flow::oauth_cancel
+            oauth_flow::oauth_cancel,
+            oauth_flow::oauth_submit_callback
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Codex Switch");
