@@ -34,7 +34,7 @@ const COMMAND_BINDINGS = {
   importRefreshToken: ['import_refresh_token', token => ({ token })],
   deleteAccount: ['delete_account', id => ({ id })],
   switchAccount: ['switch_account', id => ({ id })],
-  switchApiMode: ['switch_api_mode'],
+  switchApiMode: ['switch_api_mode', profileId => ({ profileId: profileId || null })],
   syncCodexSessions: ['sync_codex_sessions'],
   setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled),

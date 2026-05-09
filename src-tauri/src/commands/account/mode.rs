@@ -98,19 +98,40 @@ pub(super) fn switch_account_impl(
     ))
 }
 
-pub(super) fn switch_api_mode_impl(runtime: State<'_, Arc<IdeRuntime>>) -> Result<Value, String> {
-    let settings = read_settings_value()?;
+pub(super) fn switch_api_mode_impl(
+    runtime: State<'_, Arc<IdeRuntime>>,
+    profile_id: Option<String>,
+) -> Result<Value, String> {
+    let requested_profile_id = profile_id.unwrap_or_default().trim().to_string();
+    let mut settings = read_settings_value()?;
+    if !requested_profile_id.is_empty() {
+        let exists = settings
+            .get("api_profiles")
+            .and_then(Value::as_array)
+            .is_some_and(|profiles| {
+                profiles
+                    .iter()
+                    .any(|profile| string_field(profile, "id") == requested_profile_id)
+            });
+        if !exists {
+            return Err("API 配置不存在".to_string());
+        }
+        settings = update_settings_value(&json!({
+            "active_api_profile_id": requested_profile_id
+        }))?;
+    }
     let profile = settings
         .get("api_mode")
         .cloned()
         .unwrap_or_else(default_api_mode);
+    let active_profile_id = string_field(&profile, "id");
     set_api_mode(&profile)?;
     let state = get_codex_state_value();
     if raw_string_field(&state, "mode") != "api" {
         return Err("切换失败：Codex 未进入 API 模式".to_string());
     }
     let session_sync_result = sync_codex_sessions_if_enabled(&settings, "api");
-    let ide_reopen = build_ide_reopen_payload(runtime.inner().as_ref(), String::new(), true);
+    let ide_reopen = build_ide_reopen_payload(runtime.inner().as_ref(), active_profile_id, true);
     let message = match session_sync_result {
         Ok(true) => "已切换到 API 模式；会话正在后台同步".to_string(),
         Ok(false) => "已切换到 API 模式".to_string(),

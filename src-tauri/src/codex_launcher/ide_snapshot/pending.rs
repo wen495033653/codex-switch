@@ -55,13 +55,37 @@ pub(crate) fn attach_ide_reopen(mut payload: Value, ide_reopen: Option<Value>) -
     payload
 }
 
+fn pending_api_profile(settings: &Value, profile_id: &str) -> Value {
+    let profile_id = profile_id.trim();
+    if !profile_id.is_empty() {
+        if let Some(profile) = settings
+            .get("api_profiles")
+            .and_then(Value::as_array)
+            .and_then(|profiles| {
+                profiles
+                    .iter()
+                    .find(|profile| string_field(profile, "id") == profile_id)
+            })
+        {
+            return profile.clone();
+        }
+    }
+
+    settings
+        .get("api_mode")
+        .cloned()
+        .unwrap_or_else(default_api_mode)
+}
+
 pub(super) fn apply_pending_ide_auth(pending: &IdePending) -> Result<(), String> {
     if pending.api_mode {
-        let settings = read_settings_value()?;
-        let profile = settings
-            .get("api_mode")
-            .cloned()
-            .unwrap_or_else(default_api_mode);
+        let mut settings = read_settings_value()?;
+        if !pending.account_id.trim().is_empty() {
+            settings = update_settings_value(&json!({
+                "active_api_profile_id": pending.account_id
+            }))?;
+        }
+        let profile = pending_api_profile(&settings, &pending.account_id);
         set_api_mode(&profile)?;
         return Ok(());
     }

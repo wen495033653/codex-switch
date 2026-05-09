@@ -1,10 +1,12 @@
 import AddAccountModal from './AddAccountModal';
+import ApiProfileModal from './ApiProfileModal';
 import ConfirmDialog from './ConfirmDialog';
 import RefreshTokenDialog from './RefreshTokenDialog';
 import UpdateDialog from './UpdateDialog';
 
 export default function AppDialogs({
   addAccount,
+  apiProfile,
   deleteAccount,
   ideReopen,
   message,
@@ -32,6 +34,29 @@ export default function AppDialogs({
           onRefreshTokenInputChange={addAccount.onRefreshTokenInputChange}
           onStartOauth={addAccount.onStartOauth}
           onToggleRefreshTokenPanel={addAccount.onToggleRefreshTokenPanel}
+        />
+      )}
+
+      {apiProfile.modal.visible && (
+        <ApiProfileModal
+          modal={apiProfile.modal}
+          saving={apiProfile.saving}
+          onClose={apiProfile.onClose}
+          onSave={apiProfile.onSave}
+          onUpdate={apiProfile.onUpdate}
+        />
+      )}
+
+      {apiProfile.deleteModal.visible && (
+        <ConfirmDialog
+          title="删除 API 配置"
+          message={`确定删除 API 配置：${apiProfile.deleteModal.profileName || apiProfile.deleteModal.profileId}？\n删除后不可恢复。`}
+          isLoading={apiProfile.deleteModal.loading}
+          confirmText="删除"
+          loadingText="删除中..."
+          confirmVariant="danger"
+          onConfirm={apiProfile.onConfirmDelete}
+          onCancel={apiProfile.onCancelDelete}
         />
       )}
 

@@ -20,8 +20,6 @@ export function useCurrentModeSummary({
     const activeSubscriptionPlan = activeSubscriptionAccount
       ? parseAuthInfo(activeSubscriptionAccount).planType.toUpperCase()
       : '';
-    const apiBaseUrlText = (apiDraft && apiDraft.base_url) || codexState.openai_base_url || '';
-    const apiKeyConfigured = Boolean((apiDraft && apiDraft.api_key) || codexState.api_key_present);
     const apiProviderDisplayName = codexState.provider_name
       || getApiProviderDisplayName(apiDraft)
       || 'API Provider';
@@ -33,7 +31,6 @@ export function useCurrentModeSummary({
         : '未检测到 Codex 登录状态';
 
     return {
-      apiConfigComplete: Boolean(apiBaseUrlText && apiKeyConfigured),
       apiModeActive,
       currentAccountId: apiModeActive ? API_MODE_ACCOUNT_ID : store.active_id,
       currentModeDetail,
