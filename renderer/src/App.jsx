@@ -219,13 +219,17 @@ export default function App() {
     importAccountsFromBackup,
     importByRefreshToken,
     oauth,
+    oauthCallbackSubmitting,
+    oauthCallbackUrl,
     openAddModal,
     refreshTokenInput,
     refreshTokenLoading,
     setRefreshTokenInput,
+    setOauthCallbackUrl,
     setShowRefreshTokenPanel,
     showRefreshTokenPanel,
-    startOauth
+    startOauth,
+    submitOauthCallbackUrl
   } = useAddAccountFlow({
     handleRes,
     toast,
@@ -373,6 +377,8 @@ export default function App() {
           addAccount={{
             visible: addModal,
             oauth,
+            oauthCallbackSubmitting,
+            oauthCallbackUrl,
             oauthTimeoutHint: OAUTH_TIMEOUT_HINT,
             refreshTokenInput,
             refreshTokenLoading,
@@ -384,7 +390,9 @@ export default function App() {
             onImportAccountsFromBackup: importAccountsFromBackup,
             onImportByRefreshToken: importByRefreshToken,
             onRefreshTokenInputChange: setRefreshTokenInput,
+            onOauthCallbackUrlChange: setOauthCallbackUrl,
             onStartOauth: startOauth,
+            onSubmitOauthCallbackUrl: submitOauthCallbackUrl,
             onToggleRefreshTokenPanel: () => setShowRefreshTokenPanel(v => !v)
           }}
           refreshToken={{

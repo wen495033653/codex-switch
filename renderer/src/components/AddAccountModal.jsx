@@ -2,6 +2,8 @@ import Modal from './Modal';
 
 export default function AddAccountModal({
     oauth,
+    oauthCallbackSubmitting,
+    oauthCallbackUrl,
     oauthTimeoutHint,
     refreshTokenInput,
     refreshTokenLoading,
@@ -12,8 +14,10 @@ export default function AddAccountModal({
     onCopyOauthUrl,
     onImportAccountsFromBackup,
     onImportByRefreshToken,
+    onOauthCallbackUrlChange,
     onRefreshTokenInputChange,
     onStartOauth,
+    onSubmitOauthCallbackUrl,
     onToggleRefreshTokenPanel
 }) {
     return (
@@ -42,6 +46,37 @@ export default function AddAccountModal({
                                 </button>
                             </div>
                             <div className="oauth-hint-text">{oauthTimeoutHint}</div>
+                            <form
+                                className="oauth-callback-form"
+                                onSubmit={event => {
+                                    event.preventDefault();
+                                    onSubmitOauthCallbackUrl();
+                                }}
+                            >
+                                <label className="oauth-callback-label" htmlFor="oauth-callback-url">
+                                    回调 URL
+                                </label>
+                                <div className="oauth-callback-row">
+                                    <input
+                                        id="oauth-callback-url"
+                                        className="search-input oauth-callback-input"
+                                        placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+                                        value={oauthCallbackUrl}
+                                        onChange={event => onOauthCallbackUrlChange(event.target.value)}
+                                        disabled={oauthCallbackSubmitting}
+                                    />
+                                    <button
+                                        className="btn btn-secondary oauth-callback-submit"
+                                        type="submit"
+                                        disabled={oauthCallbackSubmitting || !oauthCallbackUrl.trim()}
+                                    >
+                                        {oauthCallbackSubmitting ? '提交中...' : '提交回调 URL'}
+                                    </button>
+                                </div>
+                                <div className="oauth-hint-text">
+                                    远程浏览器模式：授权跳转到 localhost 回调页后，复制完整 URL 到这里。
+                                </div>
+                            </form>
                         </div>
                     )}
                     {oauth.error && <div className="oauth-error-text">{oauth.error}</div>}

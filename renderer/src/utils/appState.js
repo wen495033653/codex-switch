@@ -18,7 +18,7 @@ export const DEFAULT_REFRESH_ALL_STATUS = {
   message: ''
 };
 
-export const OAUTH_TIMEOUT_HINT = '等待浏览器授权，3 分钟未完成会自动取消。';
+export const OAUTH_TIMEOUT_HINT = '等待浏览器授权，5 分钟未完成会自动取消。';
 export const DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES = 30;
 export const DEFAULT_CODEX_PROXY_URL = '127.0.0.1:10808';
 export const DEFAULT_API_NAME = 'api';
@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS = {
   codex_proxy_url: DEFAULT_CODEX_PROXY_URL,
   codex_proxy_env_enabled: false,
   codex_session_sync_enabled: true,
+  codex_active_mode: '',
   mask_account_name: false,
   ui_theme: 'light',
   api_mode: {
@@ -51,6 +52,7 @@ export const DEFAULT_CODEX_STATE = {
   supports_websockets: false,
   openai_base_url: '',
   api_key_present: false,
+  api_provider_ready: false,
   account_id: ''
 };
 

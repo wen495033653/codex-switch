@@ -49,6 +49,7 @@ pub(super) fn import_refresh_token_impl(app: AppHandle, token: String) -> Result
     }
 
     set_subscription_mode()?;
+    update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let exchange = exchange_refresh_token(refresh_token)?;
     let account_id = string_field(&exchange, "account_id");
     let access_token = string_field(&exchange, "access_token");
@@ -82,6 +83,7 @@ pub(super) fn switch_account_impl(
     let settings = read_settings_value()?;
     let account = find_store_account(account_id)?;
     write_account_auth(&account)?;
+    update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let session_sync_result = sync_codex_sessions_if_enabled(&settings, "openai");
     let store = mark_store_account_used(account_id)?;
     refresh_active_account_usage_in_background(app);
@@ -109,6 +111,7 @@ pub(super) fn switch_api_mode_impl(runtime: State<'_, Arc<IdeRuntime>>) -> Resul
     if raw_string_field(&state, "mode") != "api" {
         return Err("切换失败：Codex 未进入 API 模式".to_string());
     }
+    update_settings_value(&json!({ "codex_active_mode": "api" }))?;
     let session_sync_result = sync_codex_sessions_if_enabled(&settings, "api");
     let ide_reopen = build_ide_reopen_payload(runtime.inner().as_ref(), String::new(), true);
     let message = match session_sync_result {

@@ -1,6 +1,7 @@
 mod model;
 
 use super::*;
+use crate::settings::{default_api_mode, read_settings_value};
 use model::ApiModeProfile;
 
 impl ApiModeProfile {
@@ -58,4 +59,29 @@ pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
         ],
     )?;
     Ok(())
+}
+
+pub(crate) fn restore_api_mode_if_selected() -> Result<bool, String> {
+    let settings = read_settings_value()?;
+    if raw_string_field(&settings, "codex_active_mode") != "api" {
+        return Ok(false);
+    }
+
+    let profile = settings
+        .get("api_mode")
+        .cloned()
+        .unwrap_or_else(default_api_mode);
+    if string_field(&profile, "base_url").is_empty() {
+        return Ok(false);
+    }
+
+    let state = super::state::get_codex_state_value();
+    if raw_string_field(&state, "mode") == "api"
+        && raw_string_field(&state, "model_provider") == API_PROVIDER_ID
+    {
+        return Ok(false);
+    }
+
+    set_api_mode(&profile)?;
+    Ok(true)
 }

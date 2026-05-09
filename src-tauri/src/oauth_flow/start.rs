@@ -12,6 +12,7 @@ use std::{
     net::TcpListener,
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::Receiver,
         Arc,
     },
     thread,
@@ -32,10 +33,10 @@ pub(super) fn oauth_start_impl(
 ) -> Result<Value, String> {
     let _ = payload;
     let runtime = Arc::clone(runtime.inner());
-    let (flow_id, canceled) = start_oauth_flow(runtime.as_ref())?;
+    let (flow_id, canceled, manual_callbacks) = start_oauth_flow(runtime.as_ref())?;
 
     thread::spawn(move || {
-        let result = run_oauth_flow(app.clone(), Arc::clone(&canceled));
+        let result = run_oauth_flow(app.clone(), Arc::clone(&canceled), manual_callbacks);
 
         finish_oauth_flow(runtime.as_ref(), flow_id);
         if let Err(message) = &result {
@@ -67,7 +68,11 @@ pub(super) fn oauth_start_impl(
     }))
 }
 
-fn run_oauth_flow(app: AppHandle, canceled: Arc<AtomicBool>) -> Result<(), String> {
+fn run_oauth_flow(
+    app: AppHandle,
+    canceled: Arc<AtomicBool>,
+    manual_callbacks: Receiver<String>,
+) -> Result<(), String> {
     set_subscription_mode()?;
     let listener =
         TcpListener::bind(("127.0.0.1", OAUTH_CALLBACK_PORT)).map_err(|err| match err.kind() {
@@ -98,7 +103,13 @@ fn run_oauth_flow(app: AppHandle, canceled: Arc<AtomicBool>) -> Result<(), Strin
 
     open_oauth_url_in_background(app.clone(), auth_url.clone());
 
-    let exchange = wait_for_oauth_exchange(listener, &state, &verifier, Arc::clone(&canceled))?;
+    let exchange = wait_for_oauth_exchange(
+        listener,
+        &state,
+        &verifier,
+        Arc::clone(&canceled),
+        manual_callbacks,
+    )?;
     if canceled.load(Ordering::SeqCst) {
         return Err(OAUTH_CANCEL_MESSAGE.to_string());
     }

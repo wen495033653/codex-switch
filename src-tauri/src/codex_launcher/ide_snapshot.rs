@@ -49,32 +49,10 @@ pub(crate) fn restart_open_ides(
 
     apply_pending_ide_auth(&pending)?;
     let result = restart_from_ide_snapshot(&pending.snapshot)?;
-    let summary_text = result
-        .get("summary")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| {
-            let name = string_field(&item, "displayName");
-            let count = value_u64_field(&item, "count").unwrap_or(0);
-            if count > 1 {
-                format!("{name} x{count}")
-            } else {
-                name
-            }
-        })
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("、");
     let message = if bool_field(&result, "restarted") {
-        if summary_text.is_empty() {
-            "已重新打开编辑器".to_string()
-        } else {
-            format!("已重新打开 {summary_text}")
-        }
+        "Codex app 重启成功".to_string()
     } else {
-        "未能重新打开编辑器".to_string()
+        "未能重启 Codex app".to_string()
     };
     store_payload(Some(&message))
 }

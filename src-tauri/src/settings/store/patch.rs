@@ -90,6 +90,17 @@ pub(super) fn apply_settings_patch(
             ),
         );
     }
+    if has_key(patch, "codex_active_mode") {
+        let value = match string_field(patch, "codex_active_mode").as_str() {
+            "api" => "api",
+            "chatgpt" => "chatgpt",
+            _ => "",
+        };
+        object.insert(
+            "codex_active_mode".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
     if has_key(patch, "mask_account_name") {
         object.insert(
             "mask_account_name".to_string(),
@@ -191,6 +202,24 @@ mod tests {
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_codex_active_mode() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_active_mode": "api"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object.get("codex_active_mode").and_then(Value::as_str),
+            Some("api")
         );
     }
 }
