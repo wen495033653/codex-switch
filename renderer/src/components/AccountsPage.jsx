@@ -36,7 +36,6 @@ export default function AccountsPage({
             {apiModeActive && (
                 <div className="mode-page-notice api">
                     <div>
-                        <strong>当前正在使用 API 模式</strong>
                         <span>账号列表仅用于管理；点击任意账号的切换按钮会切回订阅模式。</span>
                     </div>
                 </div>

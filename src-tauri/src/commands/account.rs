@@ -45,8 +45,11 @@ pub(crate) fn switch_account(
 }
 
 #[tauri::command]
-pub(crate) fn switch_api_mode(runtime: State<'_, Arc<IdeRuntime>>) -> Result<Value, String> {
-    switch_api_mode_impl(runtime)
+pub(crate) fn switch_api_mode(
+    profile_id: Option<String>,
+    runtime: State<'_, Arc<IdeRuntime>>,
+) -> Result<Value, String> {
+    switch_api_mode_impl(runtime, profile_id)
 }
 
 #[tauri::command]
