@@ -60,6 +60,9 @@ fn main() {
             if let Err(err) = sync_system_auto_start_from_settings(app.handle()) {
                 eprintln!("同步开机自启状态失败: {err}");
             }
+            if let Err(err) = accounts::restore_api_mode_if_selected() {
+                eprintln!("恢复 Codex API 模式失败: {err}");
+            }
             start_account_token_auto_refresher(app.handle().clone());
             start_active_quota_auto_refresher(app.handle().clone());
             start_background_quota_auto_refresher(

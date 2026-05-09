@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS = {
   codex_proxy_url: DEFAULT_CODEX_PROXY_URL,
   codex_proxy_env_enabled: false,
   codex_session_sync_enabled: true,
+  codex_active_mode: '',
   mask_account_name: false,
   ui_theme: 'light',
   api_mode: {
@@ -44,6 +45,7 @@ export const DEFAULT_CODEX_STATE = {
   supports_websockets: false,
   openai_base_url: '',
   api_key_present: false,
+  api_provider_ready: false,
   account_id: ''
 };
 

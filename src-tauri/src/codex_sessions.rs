@@ -1,5 +1,5 @@
 use crate::{
-    accounts::get_codex_state_value,
+    accounts::{get_codex_state_value, restore_api_mode_if_selected},
     api_config::{API_PROVIDER_ID, OPENAI_PROVIDER_ID},
     json_util::raw_string_field,
     paths::codex_dir,
@@ -29,6 +29,7 @@ static SESSION_SYNC_STATE: Mutex<SessionSyncState> = Mutex::new(SessionSyncState
 });
 
 fn current_session_provider() -> Result<String, String> {
+    restore_api_mode_if_selected()?;
     let state = get_codex_state_value();
     let model_provider = raw_string_field(&state, "model_provider");
     if !model_provider.is_empty() {

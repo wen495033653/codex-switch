@@ -5,8 +5,8 @@
   overflow-x: hidden;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  grid-auto-rows: var(--account-card-height);
-  align-items: start;
+  grid-auto-rows: minmax(var(--account-card-height), var(--account-card-height));
+  align-items: stretch;
   gap: 16px;
   padding: 16px;
   align-content: start;

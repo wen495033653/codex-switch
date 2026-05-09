@@ -22,6 +22,14 @@ fn normalize_api_mode(data: &Value) -> Value {
     })
 }
 
+fn normalize_codex_active_mode(data: &Value) -> String {
+    match string_field(data, "codex_active_mode").as_str() {
+        "api" => "api".to_string(),
+        "chatgpt" => "chatgpt".to_string(),
+        _ => String::new(),
+    }
+}
+
 pub(crate) fn normalize_settings(data: &Value) -> Value {
     let ui_theme = match string_field(data, "ui_theme").as_str() {
         "dark" => "dark",
@@ -73,6 +81,7 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
             .get("codex_session_sync_enabled")
             .and_then(Value::as_bool)
             .unwrap_or(true),
+        "codex_active_mode": normalize_codex_active_mode(data),
         "mask_account_name": bool_field(data, "mask_account_name"),
         "ui_theme": ui_theme,
         "api_mode": normalize_api_mode(data.get("api_mode").unwrap_or(&Value::Null)),
@@ -162,6 +171,30 @@ mod tests {
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_known_codex_active_mode() {
+        let settings = normalize_settings(&json!({
+            "codex_active_mode": "api"
+        }));
+
+        assert_eq!(
+            settings.get("codex_active_mode").and_then(Value::as_str),
+            Some("api")
+        );
+    }
+
+    #[test]
+    fn normalize_settings_drops_unknown_codex_active_mode() {
+        let settings = normalize_settings(&json!({
+            "codex_active_mode": "other"
+        }));
+
+        assert_eq!(
+            settings.get("codex_active_mode").and_then(Value::as_str),
+            Some("")
         );
     }
 }
