@@ -1,27 +1,17 @@
 pub(crate) use crate::api_config::DEFAULT_API_NAME;
 use serde_json::{json, Value};
 
-pub(crate) const DEFAULT_API_PROFILE_ID: &str = "default";
 pub(crate) const DEFAULT_CODEX_PROXY_URL: &str = "127.0.0.1:10808";
 pub(crate) const BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES: u64 = 30;
 const BACKGROUND_REFRESH_MIN_INTERVAL_MINUTES: u64 = 1;
 const BACKGROUND_REFRESH_MAX_INTERVAL_MINUTES: u64 = 24 * 60;
 
-pub(crate) fn default_api_profile() -> Value {
+pub(crate) fn default_api_mode() -> Value {
     json!({
-        "id": DEFAULT_API_PROFILE_ID,
         "name": DEFAULT_API_NAME,
         "base_url": "",
         "api_key": ""
     })
-}
-
-pub(crate) fn default_api_profiles() -> Value {
-    json!([default_api_profile()])
-}
-
-pub(crate) fn default_api_mode() -> Value {
-    default_api_profile()
 }
 
 pub(crate) fn normalize_background_refresh_interval_minutes(value: Option<u64>) -> u64 {
@@ -47,8 +37,6 @@ pub(crate) fn default_settings() -> Value {
         "codex_active_mode": "",
         "mask_account_name": false,
         "ui_theme": "light",
-        "active_api_profile_id": DEFAULT_API_PROFILE_ID,
-        "api_profiles": default_api_profiles(),
         "api_mode": default_api_mode(),
         "window_bounds": {
             "width": 0,
