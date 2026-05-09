@@ -21,10 +21,15 @@ export default function AddAccountModal({
             <div className="connect-modal">
                 <section className="connect-block">
                     <button className="btn btn-primary connect-oauth-btn" onClick={onStartOauth} disabled={oauth.running}>
-                        {oauth.running ? '等待浏览器授权...' : '✨ OAuth 自动登录 (推荐)'}
+                        {oauth.running && <span className="oauth-spinner" aria-hidden="true" />}
+                        <span>{oauth.running ? '等待浏览器授权...' : '✨ OAuth 自动登录 (推荐)'}</span>
                     </button>
                     {oauth.running && (
                         <div className="oauth-url-card">
+                            <div className="oauth-wait-row">
+                                <span className="oauth-spinner oauth-card-spinner" aria-hidden="true" />
+                                <span className="oauth-wait-text">正在等待网页登录完成</span>
+                            </div>
                             {oauth.url && <div className="oauth-url-text">{oauth.url}</div>}
                             <div className="oauth-action-row">
                                 {oauth.url && (

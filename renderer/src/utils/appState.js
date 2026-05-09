@@ -1,4 +1,11 @@
-export const createEmptyOauthState = () => ({ running: false, url: '', success: false, error: '', errorCode: '' });
+export const createEmptyOauthState = () => ({
+  running: false,
+  url: '',
+  success: false,
+  error: '',
+  errorCode: '',
+  message: ''
+});
 
 export const DEFAULT_REFRESH_ALL_STATUS = {
   running: false,

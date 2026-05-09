@@ -39,7 +39,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(AppRuntime::default())
-        .manage(OAuthRuntime::default())
+        .manage(Arc::new(OAuthRuntime::default()))
         .manage(Arc::new(RefreshAllRuntime::default()))
         .manage(Arc::new(UpdateRuntime::default()))
         .manage(Arc::new(IdeRuntime::default()))

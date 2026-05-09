@@ -2,7 +2,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
-use tauri::State;
 
 pub(crate) struct OAuthFlowControl {
     flow_id: u64,
@@ -15,9 +14,7 @@ pub(crate) struct OAuthRuntime {
     seq: AtomicU64,
 }
 
-pub(super) fn start_oauth_flow(
-    runtime: &State<'_, OAuthRuntime>,
-) -> Result<(u64, Arc<AtomicBool>), String> {
+pub(super) fn start_oauth_flow(runtime: &OAuthRuntime) -> Result<(u64, Arc<AtomicBool>), String> {
     let mut current = runtime
         .current
         .lock()
@@ -34,7 +31,7 @@ pub(super) fn start_oauth_flow(
     Ok((flow_id, canceled))
 }
 
-pub(super) fn finish_oauth_flow(runtime: &State<'_, OAuthRuntime>, flow_id: u64) {
+pub(super) fn finish_oauth_flow(runtime: &OAuthRuntime, flow_id: u64) {
     if let Ok(mut current) = runtime.current.lock() {
         if current.as_ref().is_some_and(|flow| flow.flow_id == flow_id) {
             *current = None;
@@ -42,15 +39,16 @@ pub(super) fn finish_oauth_flow(runtime: &State<'_, OAuthRuntime>, flow_id: u64)
     }
 }
 
-pub(super) fn cancel_oauth_flow(runtime: &State<'_, OAuthRuntime>) -> bool {
+pub(super) fn cancel_oauth_flow(runtime: &OAuthRuntime) -> bool {
     runtime
         .current
         .lock()
         .ok()
-        .and_then(|mut current| current.take())
-        .map(|flow| {
-            flow.canceled.store(true, Ordering::SeqCst);
-            true
+        .and_then(|current| {
+            current.as_ref().map(|flow| {
+                flow.canceled.store(true, Ordering::SeqCst);
+                true
+            })
         })
         .unwrap_or(false)
 }
