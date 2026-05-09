@@ -158,19 +158,8 @@
     justify-content: stretch;
   }
 
-  .api-session-sync-control {
-    flex: 1 1 100%;
-  }
-
-  .api-page-actions .btn,
-  .api-session-sync-toggle {
+  .api-page-actions .btn {
     flex: 1 1 140px;
-  }
-
-  .api-mode-field {
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 16px;
   }
 
   .api-promo-banner {
@@ -178,8 +167,12 @@
     gap: 8px;
   }
 
-  .api-mode-current {
-    flex-direction: column;
+  .api-profile-add-button {
+    width: 100%;
+  }
+
+  .api-profile-grid {
+    grid-template-columns: 1fr;
   }
 }
 

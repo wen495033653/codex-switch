@@ -11,9 +11,12 @@ export default function SettingsPage({
     setSettingsDraft,
     dataDir,
     appVersion,
+    codexSessionSyncEnabled,
     checkingUpdate,
+    savingCodexSessionSync,
     savingCodexProxyEnv,
     savingProxySettings,
+    onToggleCodexSessionSync,
     setCodexProxyEnvEnabled,
     updateSettingsDraftAndSave,
     normalizeBackgroundRefreshInterval,
@@ -47,8 +50,11 @@ export default function SettingsPage({
                 <div className="settings-modal settings-page-content">
                     {settingsTab === 'general' && (
                         <GeneralSettingsTab
+                            codexSessionSyncEnabled={codexSessionSyncEnabled}
                             dataDir={dataDir}
+                            onToggleCodexSessionSync={onToggleCodexSessionSync}
                             openDataDir={openDataDir}
+                            savingCodexSessionSync={savingCodexSessionSync}
                             settingsDraft={settingsDraft}
                             updateSettingsDraftAndSave={updateSettingsDraftAndSave}
                         />
