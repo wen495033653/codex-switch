@@ -32,11 +32,16 @@ npm run dev:renderer
 
 ## 验证
 
-提交 PR 前至少运行：
+建议在提交 PR 前按改动范围运行基础检查：
 
 ```powershell
 npm run check
 npm run check:tauri
+```
+
+如果修改 Rust / Tauri 代码，建议在 `src-tauri/` 目录运行：
+
+```powershell
 cargo fmt --check
 cargo test
 cargo clippy -- -D warnings
@@ -44,16 +49,22 @@ cargo clippy -- -D warnings
 
 `npm run check` 会执行 JavaScript 语法检查、开源敏感信息基础扫描，并构建 React renderer。`npm run check:tauri` 会对 Rust/Tauri 侧执行 `cargo check`，并把 Cargo target 放到系统临时目录，避免在仓库内生成大型构建产物。`cargo fmt`、`cargo test` 与 `cargo clippy` 需要在 `src-tauri/` 目录运行。
 
-如果修改安装包、updater、Tauri config 或平台集成逻辑，还应在目标平台运行：
+如果修改安装包、updater、Tauri config 或平台集成逻辑，可以视本地环境运行：
 
 ```powershell
 npm run dist
 ```
 
-当前仓库没有单独的 unit test script。不要把单独的 `npm run build:renderer` 当作完整验证；它只覆盖 renderer 构建。
+如果本地环境不具备完整验证条件，请在 PR 描述中说明已运行的命令和未运行的原因。当前仓库没有单独的 unit test script。不要把单独的 `npm run build:renderer` 当作完整验证；它只覆盖 renderer 构建。
 
 ## 分支与 PR
 
+- 外部贡献流程：fork 本仓库 -> 在 fork 内创建 `feature/fix/chore` 分支 -> 提交 PR。
+- 外部贡献者不要直接 push 到本仓库分支；除非维护者明确授权，所有改动都通过 PR 进入。
+- `main` 是受保护的发布基线，不直接在 `main` 上开发。
+- 新功能默认使用 `feature/<slug>`。
+- bugfix 默认使用 `fix/<slug>`。
+- 维护、文档、构建或流程调整默认使用 `chore/<slug>`。
 - 一个 PR 只解决一个清晰问题。
 - PR 描述应包含改动摘要、验证命令和影响范围。
 - UI 改动请附截图或录屏。
@@ -71,14 +82,3 @@ npm run dist
 - 相关日志或截图。
 
 请先删除 token、refresh token、API Key、邮箱、账号 ID、本机用户名、本机路径等敏感信息。
-
-## Release
-
-Release 由 `.github/workflows/release.yml` 处理，推送 `vX.Y.Z` tag 或手动运行 Workflow 会构建 Windows / macOS 安装包并发布 GitHub Release。版本号保持三位格式，例如 `4.9.1`。
-
-发布 updater artifact 前，仓库需要配置：
-
-- `TAURI_SIGNING_PRIVATE_KEY`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-
-私钥和密码不要提交到仓库。fork 后发布自己的安装包时，请使用自己的 updater key，并同步修改 updater endpoint 与 public key。
