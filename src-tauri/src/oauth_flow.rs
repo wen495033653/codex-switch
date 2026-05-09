@@ -7,6 +7,7 @@ mod submit;
 use cancel::oauth_cancel_impl;
 use serde_json::Value;
 use start::oauth_start_impl;
+use std::sync::Arc;
 use submit::oauth_submit_callback_impl;
 use tauri::{AppHandle, Emitter, State};
 
@@ -19,23 +20,23 @@ pub(crate) fn emit_oauth_update(app: &AppHandle, payload: Value) {
     let _ = app.emit("oauth-update", payload);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn oauth_start(
     app: AppHandle,
-    runtime: State<'_, OAuthRuntime>,
+    runtime: State<'_, Arc<OAuthRuntime>>,
     payload: Option<Value>,
 ) -> Result<Value, String> {
     oauth_start_impl(app, runtime, payload)
 }
 
-#[tauri::command]
-pub(crate) fn oauth_cancel(app: AppHandle, runtime: State<'_, OAuthRuntime>) -> Value {
+#[tauri::command(async)]
+pub(crate) fn oauth_cancel(app: AppHandle, runtime: State<'_, Arc<OAuthRuntime>>) -> Value {
     oauth_cancel_impl(app, runtime)
 }
 
 #[tauri::command]
 pub(crate) fn oauth_submit_callback(
-    runtime: State<'_, OAuthRuntime>,
+    runtime: State<'_, Arc<OAuthRuntime>>,
     callback_url: String,
 ) -> Result<Value, String> {
     oauth_submit_callback_impl(runtime, callback_url)

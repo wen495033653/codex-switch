@@ -17,6 +17,33 @@
   justify-content: center;
 }
 
+.connect-oauth-btn:disabled {
+  cursor: wait;
+  opacity: 0.96;
+  transform: none;
+}
+
+.oauth-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.36);
+  border-top-color: #ffffff;
+  animation: oauth-spin 0.8s linear infinite;
+}
+
+.oauth-card-spinner {
+  border-color: rgba(51, 156, 255, 0.2);
+  border-top-color: var(--accent);
+}
+
+@keyframes oauth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .oauth-url-card {
   display: grid;
   gap: 10px;
@@ -24,6 +51,23 @@
   border-radius: 8px;
   border: 1px solid var(--border-app);
   background: var(--bg-app);
+}
+
+.oauth-wait-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.oauth-wait-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .oauth-url-text {
@@ -47,6 +91,8 @@
 
 .oauth-cancel-btn {
   justify-content: center;
+  border-color: rgba(255, 123, 138, 0.36);
+  color: var(--danger);
 }
 
 .oauth-hint-text {

@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tauri::State;
 
 use super::{
@@ -7,11 +8,11 @@ use super::{
 };
 
 pub(super) fn oauth_submit_callback_impl(
-    runtime: State<'_, OAuthRuntime>,
+    runtime: State<'_, Arc<OAuthRuntime>>,
     callback_url: String,
 ) -> Result<Value, String> {
     let url = parse_manual_callback_url(&callback_url)?;
-    submit_oauth_callback(&runtime, url.to_string())?;
+    submit_oauth_callback(runtime.as_ref(), url.to_string())?;
 
     Ok(json!({
         "ok": true,

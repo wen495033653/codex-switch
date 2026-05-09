@@ -31,6 +31,16 @@ export function useAddAccountFlow({
   }, [addModal, oauth.success]);
 
   const applyOauthUpdate = (data) => {
+    if (data && data.errorCode === 'OAUTH_CANCELED') {
+      setOauth(createEmptyOauthState());
+      return;
+    }
+    if (data && data.success && data.message) {
+      toast(data.message);
+    }
+    if (data && data.running === false && data.error && data.errorCode !== 'OAUTH_CANCELED') {
+      toast(data.error, 7000);
+    }
     setOauth(prev => ({ ...prev, ...data }));
   };
 
@@ -53,13 +63,14 @@ export function useAddAccountFlow({
     setOauth(createEmptyOauthState());
     setOauthCallbackUrl('');
     setOauthCallbackSubmitting(false);
-    setOauth({ running: true, url: '', success: false, error: '', errorCode: '' });
+    setOauth({ running: true, url: '', success: false, error: '', errorCode: '', message: '' });
     try {
-      const res = await window.api.startOauth();
-      handleRes(res);
+      await window.api.startOauth();
     } catch (err) {
       const message = getErrorMessage(err, 'OAuth 登录失败');
-      const errorCode = err && typeof err.code === 'string' ? err.code : '';
+      const errorCode = message.includes('进行中')
+        ? 'OAUTH_ALREADY_RUNNING'
+        : (err && typeof err.code === 'string' ? err.code : '');
       if (errorCode === 'OAUTH_CANCELED') {
         setOauth(createEmptyOauthState());
         return;
