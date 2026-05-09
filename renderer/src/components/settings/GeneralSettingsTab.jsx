@@ -1,11 +1,16 @@
 import { AUTO_START_OPTIONS, DEFAULT_UI_THEME, UI_THEME_OPTIONS } from './options';
 
 export default function GeneralSettingsTab({
+    codexSessionSyncEnabled,
     dataDir,
+    onToggleCodexSessionSync,
     openDataDir,
+    savingCodexSessionSync,
     settingsDraft,
     updateSettingsDraftAndSave
 }) {
+    const sessionSyncHelp = '订阅模式和 API 模式沿用同一份 Codex 会话列表；开启后会立即尝试同步现有会话。';
+
     return (
         <>
             <section className="settings-section">
@@ -61,6 +66,25 @@ export default function GeneralSettingsTab({
                         );
                     })}
                 </div>
+            </section>
+
+            <section className="settings-section">
+                <button
+                    type="button"
+                    className={`settings-toggle-row ${codexSessionSyncEnabled ? 'active' : ''} ${savingCodexSessionSync ? 'disabled' : ''}`}
+                    aria-pressed={codexSessionSyncEnabled}
+                    title={sessionSyncHelp}
+                    disabled={savingCodexSessionSync}
+                    onClick={() => onToggleCodexSessionSync(!codexSessionSyncEnabled)}
+                >
+                    <span className="settings-toggle-copy">
+                        <span className="settings-toggle-title">会话同步</span>
+                        <span className="settings-toggle-desc">订阅/API 沿用同一份会话列表</span>
+                    </span>
+                    <span className="settings-switch" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                    </span>
+                </button>
             </section>
 
             <section className="settings-section">

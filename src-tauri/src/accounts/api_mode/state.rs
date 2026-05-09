@@ -57,11 +57,13 @@ pub(crate) fn get_codex_state_value() -> Value {
         .unwrap_or("")
         .to_string();
 
-    let mode = if auth_mode == "apikey"
+    let api_provider_ready = model_provider == API_PROVIDER_ID && !provider_base_url.is_empty();
+    let api_credentials_ready = auth_mode == "apikey"
         || api_key_present
         || preferred_auth_method == "api"
-        || forced_login_method == "api"
-    {
+        || forced_login_method == "api";
+
+    let mode = if api_credentials_ready && api_provider_ready {
         "api"
     } else if auth_mode == "chatgpt" || !account_id.is_empty() {
         "chatgpt"
@@ -80,6 +82,7 @@ pub(crate) fn get_codex_state_value() -> Value {
         "supports_websockets": supports_websockets,
         "openai_base_url": openai_base_url,
         "api_key_present": api_key_present,
+        "api_provider_ready": api_provider_ready,
         "account_id": account_id
     })
 }

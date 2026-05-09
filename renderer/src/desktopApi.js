@@ -34,7 +34,7 @@ const COMMAND_BINDINGS = {
   importRefreshToken: ['import_refresh_token', token => ({ token })],
   deleteAccount: ['delete_account', id => ({ id })],
   switchAccount: ['switch_account', id => ({ id })],
-  switchApiMode: ['switch_api_mode'],
+  switchApiMode: ['switch_api_mode', profileId => ({ profileId: profileId || null })],
   syncCodexSessions: ['sync_codex_sessions'],
   setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled),
@@ -56,7 +56,8 @@ const COMMAND_BINDINGS = {
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
   startOauth: ['oauth_start', payload => ({ payload })],
-  cancelOauth: ['oauth_cancel']
+  cancelOauth: ['oauth_cancel'],
+  submitOauthCallback: ['oauth_submit_callback', callbackUrl => ({ callbackUrl })]
 };
 
 const EVENT_BINDINGS = {

@@ -1,21 +1,33 @@
-import { useState } from 'react';
+import { useApiProfilePagination } from '../hooks';
 
 export default function ApiModePage({
-  apiConfigComplete,
-  apiDraft,
-  codexSessionSyncEnabled,
-  apiModeActive,
+  activeApiProfileId,
+  apiProfiles,
+  onAddApiProfile,
+  onDeleteApiProfile,
+  onEditApiProfile,
   onOpenCodexConfigToml,
   onOpenGptPool,
-  onToggleCodexSessionSync,
   onSwitchToApiMode,
-  onUpdateApiDraft,
   savingApiMode,
-  savingCodexSessionSync,
   switching
 }) {
-  const [showApiKey, setShowApiKey] = useState(false);
-  const sessionSyncHelp = 'Codex 订阅和 API 模式默认使用独立 workspace，会话列表不同步；开启后会同步两种模式的会话列表。';
+  const profiles = Array.isArray(apiProfiles) && apiProfiles.length > 0
+    ? apiProfiles
+    : [];
+  const {
+    apiProfileGridRef,
+    currentItems,
+    page,
+    pageSize,
+    setPage,
+    startIdx,
+    total,
+    totalPages
+  } = useApiProfilePagination({
+    activeId: activeApiProfileId,
+    profiles
+  });
 
   return (
     <div className="api-mode-page">
@@ -33,38 +45,6 @@ export default function ApiModePage({
         <div className="api-config-stack">
           <div className="api-config-cluster">
             <div className="api-page-actions">
-              <div className="api-session-sync-control">
-                <label
-                  className={`api-session-sync-toggle ${codexSessionSyncEnabled ? 'active' : ''} ${savingCodexSessionSync || switching ? 'disabled' : ''}`}
-                  title={sessionSyncHelp}
-                >
-                  <span className="api-session-sync-copy">
-                    <span className="api-session-sync-title-row">
-                      <span className="api-session-sync-label">会话同步</span>
-                      <span
-                        className="api-session-sync-help"
-                        title={sessionSyncHelp}
-                        aria-label={sessionSyncHelp}
-                        role="img"
-                      >
-                        ?
-                      </span>
-                    </span>
-                    <span className="api-session-sync-desc">订阅/API 沿用同一份会话列表</span>
-                  </span>
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    checked={codexSessionSyncEnabled}
-                    disabled={savingCodexSessionSync || switching}
-                    aria-label="会话同步"
-                    onChange={event => onToggleCodexSessionSync(event.target.checked)}
-                  />
-                  <span className="settings-switch" aria-hidden="true">
-                    <span className="settings-switch-thumb" />
-                  </span>
-                </label>
-              </div>
               <button
                 type="button"
                 className="btn btn-secondary api-config-open-button"
@@ -72,66 +52,135 @@ export default function ApiModePage({
               >
                 打开 config.toml
               </button>
+              <button
+                type="button"
+                className="btn btn-primary api-profile-add-button"
+                onClick={onAddApiProfile}
+                disabled={savingApiMode || switching}
+              >
+                + 新增 API
+              </button>
             </div>
-            <div className={`mode-card api-config-card ${apiModeActive ? 'active' : ''}`}>
-              <div className="api-mode-current">
-                <div className="api-mode-current-text">
-                  <div className="api-mode-current-title">
-                    {apiModeActive ? '当前正在使用 API 模式' : '当前未启用 API 模式'}
-                  </div>
-                  {!apiModeActive && (
-                    <div className="api-mode-current-desc">
-                      填写 Base URL 和 API Key 后，点击“应用 API 模式”会保存并写入 Codex 配置。
-                    </div>
-                  )}
-                </div>
-                <span className={`api-mode-current-badge ${apiModeActive ? 'active' : ''}`}>
-                  {apiModeActive ? '已启用' : '未启用'}
-                </span>
-              </div>
-              <div className="api-mode-form">
-                <label className="api-mode-field">
-                  <span className="api-mode-label">Base URL</span>
-                  <input
-                    className="api-mode-input"
-                    value={(apiDraft && apiDraft.base_url) || ''}
-                    placeholder="https://api.example.com/v1"
-                    onChange={event => onUpdateApiDraft({ base_url: event.target.value })}
-                  />
-                </label>
-                <label className="api-mode-field">
-                  <span className="api-mode-label">API Key</span>
-                  <span className="api-key-input-wrap">
-                    <input
-                      className="api-mode-input api-key-input"
-                      type={showApiKey ? 'text' : 'password'}
-                      value={(apiDraft && apiDraft.api_key) || ''}
-                      placeholder="sk-..."
-                      onChange={event => onUpdateApiDraft({ api_key: event.target.value })}
-                    />
-                    <button
-                      type="button"
-                      className={`api-key-eye-button ${showApiKey ? 'active' : ''}`}
-                      aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
-                      title={showApiKey ? '隐藏 API Key' : '显示 API Key'}
-                      onClick={() => setShowApiKey(value => !value)}
+            <div className="list-panel api-profile-panel">
+              <div className="account-grid api-profile-grid" ref={apiProfileGridRef} role="list" aria-label="API 配置列表">
+                {currentItems.map((profile, index) => {
+                  const profileId = profile.id || `api-${startIdx + index}`;
+                  const configured = Boolean(profile.name && profile.base_url && profile.api_key);
+                  const active = profileId === activeApiProfileId;
+                  const profileName = profile.name || `API ${startIdx + index + 1}`;
+                  const baseUrl = profile.base_url || '';
+                  const deleteTitle = active
+                    ? '当前正在使用，不能删除'
+                    : profiles.length <= 1
+                      ? '至少保留一个 API'
+                      : '删除配置';
+                  return (
+                    <div
+                      key={profileId}
+                      className={`account-card api-profile-card ${active ? 'active' : ''}`}
+                      role="listitem"
                     >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M12 5.5c4.22 0 7.56 2.36 9.5 6.5-1.94 4.14-5.28 6.5-9.5 6.5S4.44 16.14 2.5 12C4.44 7.86 7.78 5.5 12 5.5Zm0 2C8.78 7.5 6.17 9.08 4.73 12 6.17 14.92 8.78 16.5 12 16.5s5.83-1.58 7.27-4.5C17.83 9.08 15.22 7.5 12 7.5Zm0 2.25A2.25 2.25 0 1 1 12 14.25 2.25 2.25 0 0 1 12 9.75Z" />
-                      </svg>
-                    </button>
-                  </span>
-                </label>
-                <div className="api-mode-actions">
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={onSwitchToApiMode}
-                    disabled={!apiConfigComplete || savingApiMode || switching}
-                  >
-                    {switching || savingApiMode ? '应用中...' : '应用 API 模式'}
-                  </button>
+                      <div className="account-card-head">
+                        <div className="account-card-name-row">
+                          <div className="account-card-name" title={profileName}>{profileName}</div>
+                          {active && <span className="current-badge">当前</span>}
+                        </div>
+                        <div className="account-badges account-card-badges">
+                          <span className="plan-badge plan-api">API</span>
+                          <span className={`status-badge ${configured ? 'api-status-ready' : 'auth-error'}`}>
+                            {configured ? '已配置' : '未完整'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="account-card-body">
+                        <div className="api-profile-card-info">
+                          <div className="api-profile-card-info-row">
+                            <span className="api-profile-card-label">Base URL</span>
+                            <span
+                              className={`api-profile-card-value ${baseUrl ? '' : 'muted'}`}
+                              title={baseUrl || '未配置 Base URL'}
+                            >
+                              {baseUrl || '未配置 Base URL'}
+                            </span>
+                          </div>
+                          <div className="api-profile-card-info-row">
+                            <span className="api-profile-card-label">API Key</span>
+                            <span className={`api-profile-card-value ${profile.api_key ? '' : 'muted'}`}>
+                              {profile.api_key ? '已保存' : '未配置'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="account-card-footer">
+                        <div className="action-btns">
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title="编辑此配置"
+                            onClick={event => {
+                              event.stopPropagation();
+                              onEditApiProfile(profileId);
+                            }}
+                          >
+                            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m16.862 4.487 1.688-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.5 7.125 16.875 4.5M18 14v4.75A2.25 2.25 0 0 1 15.75 21h-10.5A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                            </svg>
+                          </button>
+                          {!active && (
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title={configured ? '切换到此 API' : '配置未完整'}
+                              disabled={!configured || savingApiMode || switching}
+                              onClick={() => onSwitchToApiMode(profileId)}
+                            >
+                              ⚡
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="icon-btn danger"
+                            title={deleteTitle}
+                            disabled={active || profiles.length <= 1 || savingApiMode || switching}
+                            onClick={() => onDeleteApiProfile(profileId)}
+                          >
+                            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12m-9 0V5.75A1.75 1.75 0 0 1 10.75 4h2.5A1.75 1.75 0 0 1 15 5.75V7m-7.75 0 .75 12.25A1.75 1.75 0 0 0 9.75 21h4.5A1.75 1.75 0 0 0 16 19.25L16.75 7M10 11v6m4-6v6" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {currentItems.length === 0 && (
+                  <div className="empty-state empty-state-card">暂无 API 配置</div>
+                )}
+              </div>
+
+              <div className="panel-footer">
+                <div className="footer-info">
+                  显示第 {total === 0 ? 0 : startIdx + 1} 到 {Math.min(startIdx + pageSize, total)} 条，共 {total} 条
                 </div>
+                {totalPages > 0 && (
+                  <div className="pagination">
+                    <button className="page-btn" disabled={page === 1} onClick={() => setPage(Math.max(1, page - 1))}>
+                      &lt;
+                    </button>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(item => (
+                      <button key={item} className={`page-btn ${page === item ? 'active' : ''}`} onClick={() => setPage(item)}>
+                        {item}
+                      </button>
+                    ))}
+                    <button className="page-btn" disabled={page === totalPages} onClick={() => setPage(Math.min(totalPages, page + 1))}>
+                      &gt;
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

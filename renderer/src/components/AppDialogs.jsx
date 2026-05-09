@@ -1,10 +1,12 @@
 import AddAccountModal from './AddAccountModal';
+import ApiProfileModal from './ApiProfileModal';
 import ConfirmDialog from './ConfirmDialog';
 import RefreshTokenDialog from './RefreshTokenDialog';
 import UpdateDialog from './UpdateDialog';
 
 export default function AppDialogs({
   addAccount,
+  apiProfile,
   deleteAccount,
   ideReopen,
   message,
@@ -19,6 +21,8 @@ export default function AppDialogs({
       {addAccount.visible && (
         <AddAccountModal
           oauth={addAccount.oauth}
+          oauthCallbackSubmitting={addAccount.oauthCallbackSubmitting}
+          oauthCallbackUrl={addAccount.oauthCallbackUrl}
           oauthTimeoutHint={addAccount.oauthTimeoutHint}
           refreshTokenInput={addAccount.refreshTokenInput}
           refreshTokenLoading={addAccount.refreshTokenLoading}
@@ -29,9 +33,34 @@ export default function AppDialogs({
           onCopyOauthUrl={addAccount.onCopyOauthUrl}
           onImportAccountsFromBackup={addAccount.onImportAccountsFromBackup}
           onImportByRefreshToken={addAccount.onImportByRefreshToken}
+          onOauthCallbackUrlChange={addAccount.onOauthCallbackUrlChange}
           onRefreshTokenInputChange={addAccount.onRefreshTokenInputChange}
           onStartOauth={addAccount.onStartOauth}
+          onSubmitOauthCallbackUrl={addAccount.onSubmitOauthCallbackUrl}
           onToggleRefreshTokenPanel={addAccount.onToggleRefreshTokenPanel}
+        />
+      )}
+
+      {apiProfile.modal.visible && (
+        <ApiProfileModal
+          modal={apiProfile.modal}
+          saving={apiProfile.saving}
+          onClose={apiProfile.onClose}
+          onSave={apiProfile.onSave}
+          onUpdate={apiProfile.onUpdate}
+        />
+      )}
+
+      {apiProfile.deleteModal.visible && (
+        <ConfirmDialog
+          title="删除 API 配置"
+          message={`确定删除 API 配置：${apiProfile.deleteModal.profileName || apiProfile.deleteModal.profileId}？\n删除后不可恢复。`}
+          isLoading={apiProfile.deleteModal.loading}
+          confirmText="删除"
+          loadingText="删除中..."
+          confirmVariant="danger"
+          onConfirm={apiProfile.onConfirmDelete}
+          onCancel={apiProfile.onCancelDelete}
         />
       )}
 
@@ -72,8 +101,8 @@ export default function AppDialogs({
 
       {ideReopen.modal.visible && (
         <ConfirmDialog
-          title="检测到编辑器正在运行"
-          message={`切换已完成。是否关闭并重新打开：${ideReopen.summaryText}？`}
+          title="是否重启 Codex app"
+          message={`切换已完成。是否重启 Codex app：${ideReopen.summaryText}？`}
           isLoading={ideReopen.modal.loading}
           confirmText="重新打开"
           loadingText="重启中..."

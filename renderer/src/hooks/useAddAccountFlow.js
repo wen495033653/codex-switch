@@ -9,12 +9,16 @@ export function useAddAccountFlow({
 }) {
   const [addModal, setAddModal] = useState(false);
   const [oauth, setOauth] = useState(createEmptyOauthState);
+  const [oauthCallbackUrl, setOauthCallbackUrl] = useState('');
+  const [oauthCallbackSubmitting, setOauthCallbackSubmitting] = useState(false);
   const [refreshTokenInput, setRefreshTokenInput] = useState('');
   const [refreshTokenLoading, setRefreshTokenLoading] = useState(false);
   const [showRefreshTokenPanel, setShowRefreshTokenPanel] = useState(false);
 
   const closeAddModal = () => {
     setAddModal(false);
+    setOauthCallbackUrl('');
+    setOauthCallbackSubmitting(false);
     setRefreshTokenInput('');
     setRefreshTokenLoading(false);
     setShowRefreshTokenPanel(false);
@@ -57,6 +61,8 @@ export function useAddAccountFlow({
 
   const startOauth = async () => {
     setOauth(createEmptyOauthState());
+    setOauthCallbackUrl('');
+    setOauthCallbackSubmitting(false);
     setOauth({ running: true, url: '', success: false, error: '', errorCode: '', message: '' });
     try {
       await window.api.startOauth();
@@ -87,6 +93,25 @@ export function useAddAccountFlow({
     setRefreshTokenInput('');
     setRefreshTokenLoading(false);
     setShowRefreshTokenPanel(false);
+  };
+
+  const submitOauthCallbackUrl = async () => {
+    const callbackUrl = oauthCallbackUrl.trim();
+    if (!callbackUrl) {
+      toast('请输入回调 URL');
+      return;
+    }
+
+    setOauthCallbackSubmitting(true);
+    try {
+      const res = await window.api.submitOauthCallback(callbackUrl);
+      if (res && res.message) toast(res.message, 5000);
+      setOauthCallbackUrl('');
+    } catch (err) {
+      toastError(err, '提交回调 URL 失败', 7000);
+    } finally {
+      setOauthCallbackSubmitting(false);
+    }
   };
 
   const copyOauthUrl = async () => {
@@ -148,12 +173,16 @@ export function useAddAccountFlow({
     importAccountsFromBackup,
     importByRefreshToken,
     oauth,
+    oauthCallbackSubmitting,
+    oauthCallbackUrl,
     openAddModal,
     refreshTokenInput,
     refreshTokenLoading,
     setRefreshTokenInput,
     setShowRefreshTokenPanel,
     showRefreshTokenPanel,
-    startOauth
+    startOauth,
+    submitOauthCallbackUrl,
+    setOauthCallbackUrl
   };
 }

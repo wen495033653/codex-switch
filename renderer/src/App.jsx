@@ -4,7 +4,9 @@ import {
   DEFAULT_CODEX_STATE,
   DEFAULT_SETTINGS,
   GPT_POOL_URL,
+  getActiveApiProfile,
   normalizeBackgroundRefreshInterval,
+  normalizeApiProfiles,
   OAUTH_TIMEOUT_HINT
 } from './utils/appState';
 import {
@@ -69,17 +71,23 @@ export default function App() {
     const rawSettings = res.settings && typeof res.settings === 'object'
       ? res.settings
       : {};
+    const nextApiProfiles = normalizeApiProfiles(rawSettings.api_profiles, rawSettings.api_mode);
+    const nextActiveApiProfile = getActiveApiProfile({
+      ...rawSettings,
+      api_profiles: nextApiProfiles
+    });
     const nextSettings = {
       ...DEFAULT_SETTINGS,
       ...rawSettings,
-      api_mode: {
-        ...DEFAULT_SETTINGS.api_mode,
-        ...((rawSettings.api_mode && typeof rawSettings.api_mode === 'object') ? rawSettings.api_mode : {})
-      }
+      active_api_profile_id: nextActiveApiProfile.id,
+      api_profiles: nextApiProfiles,
+      api_mode: nextActiveApiProfile
     };
     setSettings(nextSettings);
     setSettingsDraft(nextSettings);
     setApiDraft(nextSettings.api_mode || DEFAULT_SETTINGS.api_mode);
+    setApiProfiles(nextSettings.api_profiles || DEFAULT_SETTINGS.api_profiles);
+    setActiveApiProfileId(nextSettings.active_api_profile_id || DEFAULT_SETTINGS.active_api_profile_id);
     setSettingsLoaded(true);
     return nextSettings;
   };
@@ -93,14 +101,26 @@ export default function App() {
 
   const {
     apiDraft,
+    activeApiProfileId,
+    addApiProfile,
+    apiProfileModal,
+    apiProfileDeleteModal,
+    apiProfiles,
     clearApiAutoSaveTimer,
+    closeApiProfileModal,
+    closeDeleteApiProfileModal,
+    confirmDeleteApiProfile,
+    editApiProfile,
+    openDeleteApiProfileModal,
+    saveApiProfileModal,
+    savingApiProfile,
+    setActiveApiProfileId,
     setApiDraft,
-    updateApiPageDraft
+    setApiProfiles,
+    updateApiProfileModalDraft
   } = useApiModeDraft({
     applySettings,
-    settings,
-    toastError,
-    viewMode
+    toastError
   });
 
   const {
@@ -121,7 +141,6 @@ export default function App() {
   });
 
   const {
-    apiConfigComplete,
     apiModeActive,
     currentAccountId,
     currentModeDetail,
@@ -170,12 +189,15 @@ export default function App() {
     switchToApiModeFromPage
   } = useModeSwitching({
     apiDraft,
+    activeApiProfileId,
+    apiProfiles,
     applySettings,
     clearApiAutoSaveTimer,
     handleRes,
     showIdeReopen,
     toastError
   });
+  const apiProfileBusy = savingApiMode || savingApiProfile;
 
   const {
     closeRefreshTokenModal,
@@ -219,13 +241,17 @@ export default function App() {
     importAccountsFromBackup,
     importByRefreshToken,
     oauth,
+    oauthCallbackSubmitting,
+    oauthCallbackUrl,
     openAddModal,
     refreshTokenInput,
     refreshTokenLoading,
     setRefreshTokenInput,
+    setOauthCallbackUrl,
     setShowRefreshTokenPanel,
     showRefreshTokenPanel,
-    startOauth
+    startOauth,
+    submitOauthCallbackUrl
   } = useAddAccountFlow({
     handleRes,
     toast,
@@ -313,9 +339,12 @@ export default function App() {
             setSettingsDraft,
             dataDir,
             appVersion,
+            codexSessionSyncEnabled,
             checkingUpdate,
+            savingCodexSessionSync,
             savingCodexProxyEnv,
             savingProxySettings,
+            onToggleCodexSessionSync: updateCodexSessionSyncEnabled,
             setCodexProxyEnvEnabled,
             updateSettingsDraftAndSave,
             normalizeBackgroundRefreshInterval,
@@ -325,17 +354,15 @@ export default function App() {
             handleCheckUpdate
           }}
           apiModePageProps={{
-            apiConfigComplete,
-            apiDraft,
-            codexSessionSyncEnabled,
-            apiModeActive,
+            activeApiProfileId,
+            apiProfiles,
+            onAddApiProfile: addApiProfile,
+            onDeleteApiProfile: openDeleteApiProfileModal,
+            onEditApiProfile: editApiProfile,
             onOpenCodexConfigToml: openCodexConfigToml,
             onOpenGptPool: openGptPoolLanding,
-            onToggleCodexSessionSync: updateCodexSessionSyncEnabled,
             onSwitchToApiMode: switchToApiModeFromPage,
-            onUpdateApiDraft: updateApiPageDraft,
-            savingApiMode,
-            savingCodexSessionSync,
+            savingApiMode: apiProfileBusy,
             switching
           }}
           accountsPageProps={{
@@ -373,6 +400,8 @@ export default function App() {
           addAccount={{
             visible: addModal,
             oauth,
+            oauthCallbackSubmitting,
+            oauthCallbackUrl,
             oauthTimeoutHint: OAUTH_TIMEOUT_HINT,
             refreshTokenInput,
             refreshTokenLoading,
@@ -384,8 +413,20 @@ export default function App() {
             onImportAccountsFromBackup: importAccountsFromBackup,
             onImportByRefreshToken: importByRefreshToken,
             onRefreshTokenInputChange: setRefreshTokenInput,
+            onOauthCallbackUrlChange: setOauthCallbackUrl,
             onStartOauth: startOauth,
+            onSubmitOauthCallbackUrl: submitOauthCallbackUrl,
             onToggleRefreshTokenPanel: () => setShowRefreshTokenPanel(v => !v)
+          }}
+          apiProfile={{
+            modal: apiProfileModal,
+            deleteModal: apiProfileDeleteModal,
+            saving: apiProfileBusy || switching,
+            onClose: closeApiProfileModal,
+            onCancelDelete: closeDeleteApiProfileModal,
+            onConfirmDelete: confirmDeleteApiProfile,
+            onSave: saveApiProfileModal,
+            onUpdate: updateApiProfileModalDraft
           }}
           refreshToken={{
             accountName: refreshTokenAccountName,

@@ -56,8 +56,7 @@ html[data-theme="light"] .top-nav-item.active {
 }
 
 html[data-theme="light"] .current-mode-pill,
-html[data-theme="light"] .mode-page-notice,
-html[data-theme="light"] .api-mode-current-badge {
+html[data-theme="light"] .mode-page-notice {
   background: rgba(255, 255, 255, 0.74);
   border-color: var(--border-app);
 }
@@ -66,8 +65,7 @@ html[data-theme="light"] .current-mode-detail {
   color: #64748b;
 }
 
-html[data-theme="light"] .mode-page-notice strong,
-html[data-theme="light"] .api-mode-current-title {
+html[data-theme="light"] .mode-page-notice strong {
   color: var(--text-primary);
 }
 
