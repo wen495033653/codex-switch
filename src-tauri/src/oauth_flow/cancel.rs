@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use super::{
@@ -7,8 +8,8 @@ use super::{
     OAUTH_CANCEL_MESSAGE,
 };
 
-pub(super) fn oauth_cancel_impl(app: AppHandle, runtime: State<'_, OAuthRuntime>) -> Value {
-    let canceled = cancel_oauth_flow(&runtime);
+pub(super) fn oauth_cancel_impl(app: AppHandle, runtime: State<'_, Arc<OAuthRuntime>>) -> Value {
+    let canceled = cancel_oauth_flow(runtime.as_ref());
 
     if canceled {
         emit_oauth_update(

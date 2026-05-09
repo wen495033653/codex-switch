@@ -37,6 +37,11 @@ html[data-theme="light"] .page-btn:hover:not(:disabled) {
   color: var(--text-primary);
 }
 
+html[data-theme="light"] .oauth-cancel-btn {
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
 html[data-theme="light"] .btn-primary {
   background: #182231;
   color: #ffffff;

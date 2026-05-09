@@ -80,8 +80,23 @@ pub(super) fn wait_for_oauth_exchange(
                     return Err("Missing code".to_string());
                 }
 
+                if canceled.load(Ordering::SeqCst) {
+                    send_http_response(&mut stream, 400, "登录已取消", OAUTH_CANCEL_MESSAGE);
+                    return Err(OAUTH_CANCEL_MESSAGE.to_string());
+                }
+
                 match exchange_oauth_code(&code, OAUTH_CALLBACK_PORT, verifier) {
                     Ok(exchange) => {
+                        if canceled.load(Ordering::SeqCst) {
+                            send_http_response(
+                                &mut stream,
+                                400,
+                                "登录已取消",
+                                OAUTH_CANCEL_MESSAGE,
+                            );
+                            return Err(OAUTH_CANCEL_MESSAGE.to_string());
+                        }
+
                         send_http_response(
                             &mut stream,
                             200,
