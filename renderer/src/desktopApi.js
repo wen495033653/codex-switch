@@ -52,6 +52,7 @@ const COMMAND_BINDINGS = {
   downloadUpdate: ['download_update'],
   installUpdate: ['install_update'],
   dismissUpdateVersion: ['dismiss_update_version', version => ({ version })],
+  configureGptPoolApi: ['configure_gpt_pool_api'],
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],

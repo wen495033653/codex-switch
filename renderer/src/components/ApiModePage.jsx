@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { API_PROMO_CONFIG_URL } from '../utils/appState';
 
 export default function ApiModePage({
   apiConfigComplete,
@@ -6,6 +7,7 @@ export default function ApiModePage({
   codexSessionSyncEnabled,
   apiModeActive,
   onOpenCodexConfigToml,
+  onConfigureGptPoolApi,
   onOpenGptPool,
   onToggleCodexSessionSync,
   onSwitchToApiMode,
@@ -15,21 +17,86 @@ export default function ApiModePage({
   switching
 }) {
   const [showApiKey, setShowApiKey] = useState(false);
+  const [apiPromoVisible, setApiPromoVisible] = useState(true);
+  const [apiPromoMinimized, setApiPromoMinimized] = useState(false);
   const sessionSyncHelp = 'Codex 订阅和 API 模式默认使用独立 workspace，会话列表不同步；开启后会同步两种模式的会话列表。';
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadApiPromoConfig = async () => {
+      try {
+        const response = await fetch(`${API_PROMO_CONFIG_URL}?t=${Date.now()}`, {
+          cache: 'no-store'
+        });
+        if (!response.ok) return;
+
+        const config = await response.json();
+        if (!cancelled && config && config.apiPromo && config.apiPromo.enabled === false) {
+          setApiPromoVisible(false);
+        }
+      } catch (_err) {
+        // Keep the bundled promo unless the remote config explicitly disables it.
+      }
+    };
+
+    loadApiPromoConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="api-mode-page">
       <div className="api-console-grid">
-        <button
-          type="button"
-          className="api-promo-banner"
-          onClick={onOpenGptPool}
-        >
-          <span className="api-promo-ad-label">广告</span>
-          <span className="api-promo-brand">GPT Pool</span>
-          <span className="api-promo-title">低价、稳定的 API 站点</span>
-          <span className="api-promo-action">获取 API Key</span>
-        </button>
+        {apiPromoVisible && (
+          <div className={`api-promo-shell ${apiPromoMinimized ? 'minimized' : ''}`}>
+            {apiPromoMinimized ? (
+              <button
+                type="button"
+                className="api-promo-mini-window"
+                aria-label="展开公益站点广告"
+                title="展开公益站点广告"
+                onClick={() => setApiPromoMinimized(false)}
+              >
+                <span className="api-promo-mini-label">广告</span>
+              </button>
+            ) : (
+              <>
+                <div className="api-promo-banner">
+                  <button
+                    type="button"
+                    className="api-promo-link"
+                    aria-label="打开 GPT Pool 网站"
+                    title="打开 GPT Pool 网站"
+                    onClick={onOpenGptPool}
+                  >
+                    <span className="api-promo-ad-label">广告</span>
+                    <span className="api-promo-brand">GPT Pool</span>
+                    <span className="api-promo-title">公益站点，注册免费获取20$额度</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="api-promo-action"
+                    onClick={onConfigureGptPoolApi}
+                  >
+                    自动配置
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="api-promo-close"
+                  aria-label="缩小广告"
+                  title="缩小广告"
+                  onClick={() => setApiPromoMinimized(true)}
+                >
+                  ×
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <div className="api-config-stack">
           <div className="api-config-cluster">
             <div className="api-page-actions">

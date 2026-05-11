@@ -21,8 +21,10 @@ use tauri_plugin_dialog::{
 
 mod account;
 mod general;
+mod gpt_pool;
 mod quota;
 
 pub(crate) use account::*;
 pub(crate) use general::*;
+pub(crate) use gpt_pool::*;
 pub(crate) use quota::*;

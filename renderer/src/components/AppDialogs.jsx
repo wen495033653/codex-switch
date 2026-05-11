@@ -6,6 +6,7 @@ import UpdateDialog from './UpdateDialog';
 export default function AppDialogs({
   addAccount,
   deleteAccount,
+  gptPoolAutoConfig = { visible: false, loading: false },
   ideReopen,
   message,
   refreshAll,
@@ -71,6 +72,20 @@ export default function AppDialogs({
           loadingText="启动中..."
           onConfirm={refreshAll.onConfirm}
           onCancel={refreshAll.onCancel}
+        />
+      )}
+
+      {gptPoolAutoConfig.visible && (
+        <ConfirmDialog
+          title="自动配置 GPT Pool API"
+          message="将在默认浏览器打开 GPT Pool。登录后自动获取或创建 API Key，并写入本地 API 配置。"
+          isLoading={gptPoolAutoConfig.loading}
+          confirmText="自动配置"
+          loadingText="配置中..."
+          cancelText="稍后"
+          width="460px"
+          onConfirm={gptPoolAutoConfig.onConfirm}
+          onCancel={gptPoolAutoConfig.onCancel}
         />
       )}
 

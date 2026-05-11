@@ -59,6 +59,7 @@ export const DEFAULT_CODEX_STATE = {
 
 export const REPOSITORY_URL = 'https://github.com/wen495033653/codex-switch';
 export const GPT_POOL_URL = 'https://gpt-pool.com';
+export const API_PROMO_CONFIG_URL = 'https://raw.githubusercontent.com/wen495033653/codex-switch/main/renderer/public/ad-config.json';
 
 export const getFallbackPageSize = (viewportHeight) => {
   if (viewportHeight < 660) return 4;

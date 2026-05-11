@@ -12,7 +12,18 @@ html[data-theme="light"] .api-promo-banner {
   border-color: var(--border-app);
 }
 
+html[data-theme="light"] .api-promo-mini-window {
+  background:
+    radial-gradient(circle at 0% 50%, rgba(37, 99, 235, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(248, 250, 252, 0.76));
+  border-color: var(--border-app);
+}
+
 html[data-theme="light"] .api-promo-banner:hover {
+  border-color: rgba(37, 99, 235, 0.32);
+}
+
+html[data-theme="light"] .api-promo-mini-window:hover {
   border-color: rgba(37, 99, 235, 0.32);
 }
 
@@ -24,7 +35,29 @@ html[data-theme="light"] .api-promo-brand {
   color: #1d4ed8;
 }
 
+html[data-theme="light"] .api-promo-brand:hover {
+  color: #2563eb;
+}
+
+html[data-theme="light"] .api-promo-action {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.18);
+}
+
+html[data-theme="light"] .api-promo-action:hover {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
 html[data-theme="light"] .api-promo-ad-label {
+  color: #111827;
+  background: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.92);
+}
+
+html[data-theme="light"] .api-promo-mini-label {
   color: #111827;
   background: #f59e0b;
   border-color: rgba(245, 158, 11, 0.92);

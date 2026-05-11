@@ -176,6 +176,7 @@
   .api-promo-banner {
     grid-template-columns: 1fr;
     gap: 8px;
+    padding-right: 54px;
   }
 
   .api-mode-current {

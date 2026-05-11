@@ -106,6 +106,7 @@ fn main() {
             updater::download_update,
             updater::install_update,
             updater::dismiss_update_version,
+            commands::configure_gpt_pool_api,
             commands::open_external_url,
             commands::open_codex_config_toml,
             commands::list_brand_voice_files,

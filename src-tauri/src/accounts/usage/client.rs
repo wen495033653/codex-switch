@@ -76,7 +76,7 @@ pub(crate) fn get_usage(
         .header("Content-Type", "application/json")
         .header(
             "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
         )
         .header("chatgpt-account-id", account_id)
         .send()

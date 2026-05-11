@@ -35,6 +35,10 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState('general');
   const [appVersion, setAppVersion] = useState('');
   const [dataDir, setDataDir] = useState('');
+  const [gptPoolAutoConfigModal, setGptPoolAutoConfigModal] = useState({
+    visible: false,
+    loading: false
+  });
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const { message, toast, toastError } = useToast();
@@ -283,6 +287,44 @@ export default function App() {
     }
   };
 
+  const openGptPoolAutoConfigModal = () => {
+    setGptPoolAutoConfigModal(() => ({
+      visible: true,
+      loading: false
+    }));
+  };
+
+  const cancelGptPoolAutoConfig = () => {
+    setGptPoolAutoConfigModal(prev => (
+      prev.loading
+        ? prev
+        : { visible: false, loading: false }
+    ));
+  };
+
+  const confirmGptPoolAutoConfig = async () => {
+    if (gptPoolAutoConfigModal.loading) return;
+    setGptPoolAutoConfigModal({
+      visible: true,
+      loading: true
+    });
+    try {
+      const res = await window.api.configureGptPoolApi();
+      applySettings(res);
+      toast((res && res.message) || 'GPT Pool API 已配置');
+      setGptPoolAutoConfigModal({
+        visible: false,
+        loading: false
+      });
+    } catch (err) {
+      toastError(err, '自动配置 GPT Pool API 失败', 9000);
+      setGptPoolAutoConfigModal({
+        visible: false,
+        loading: false
+      });
+    }
+  };
+
   const {
     codexSessionSyncEnabled,
     savingCodexSessionSync,
@@ -333,6 +375,7 @@ export default function App() {
             apiDraft,
             codexSessionSyncEnabled,
             apiModeActive,
+            onConfigureGptPoolApi: openGptPoolAutoConfigModal,
             onOpenCodexConfigToml: openCodexConfigToml,
             onOpenGptPool: openGptPoolLanding,
             onToggleCodexSessionSync: updateCodexSessionSyncEnabled,
@@ -407,6 +450,12 @@ export default function App() {
             modal: deleteAccountModal,
             onCancel: closeDeleteAccountModal,
             onConfirm: confirmDeleteAccount
+          }}
+          gptPoolAutoConfig={{
+            visible: gptPoolAutoConfigModal.visible,
+            loading: gptPoolAutoConfigModal.loading,
+            onCancel: cancelGptPoolAutoConfig,
+            onConfirm: confirmGptPoolAutoConfig
           }}
           refreshAll={{
             visible: refreshModal,
