@@ -46,6 +46,13 @@
   font-weight: 700;
 }
 
+.settings-app-card-section {
+  padding: 22px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--bg-panel);
+}
+
 .settings-proxy-section {
   gap: 16px;
 }
@@ -110,4 +117,8 @@
 .settings-proxy-input {
   height: 42px;
   border-radius: 12px;
+}
+
+.settings-session-sync-section {
+  gap: 16px;
 }

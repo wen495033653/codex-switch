@@ -325,6 +325,8 @@ export default function App() {
     }
   };
 
+  const setApiPromoBarOpen = (open) => updateSettingsDraftAndSave({ api_promo_bar_open: open });
+
   const {
     codexSessionSyncEnabled,
     savingCodexSessionSync,
@@ -360,9 +362,13 @@ export default function App() {
             dataDir,
             appVersion,
             checkingUpdate,
+            codexSessionSyncEnabled,
             savingCodexProxyEnv,
+            savingCodexSessionSync,
             savingProxySettings,
             setCodexProxyEnvEnabled,
+            setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
+            switching,
             updateSettingsDraftAndSave,
             normalizeBackgroundRefreshInterval,
             openDataDir,
@@ -373,16 +379,15 @@ export default function App() {
           apiModePageProps={{
             apiConfigComplete,
             apiDraft,
-            codexSessionSyncEnabled,
+            apiPromoBarOpen: settingsDraft.api_promo_bar_open === true,
             apiModeActive,
             onConfigureGptPoolApi: openGptPoolAutoConfigModal,
             onOpenCodexConfigToml: openCodexConfigToml,
             onOpenGptPool: openGptPoolLanding,
-            onToggleCodexSessionSync: updateCodexSessionSyncEnabled,
+            onSetApiPromoBarOpen: setApiPromoBarOpen,
             onSwitchToApiMode: switchToApiModeFromPage,
             onUpdateApiDraft: updateApiPageDraft,
             savingApiMode,
-            savingCodexSessionSync,
             switching
           }}
           accountsPageProps={{

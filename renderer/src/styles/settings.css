@@ -85,6 +85,14 @@
   box-shadow: none;
 }
 
+.settings-page-content-split {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .settings-path-card {
   min-height: 56px;
   padding: 12px 14px;

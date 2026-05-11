@@ -158,12 +158,7 @@
     justify-content: stretch;
   }
 
-  .api-session-sync-control {
-    flex: 1 1 100%;
-  }
-
-  .api-page-actions .btn,
-  .api-session-sync-toggle {
+  .api-page-actions .btn {
     flex: 1 1 140px;
   }
 

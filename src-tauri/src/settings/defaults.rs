@@ -36,6 +36,7 @@ pub(crate) fn default_settings() -> Value {
         "codex_proxy_env_enabled": false,
         "codex_session_sync_enabled": true,
         "codex_active_mode": "",
+        "api_promo_bar_open": false,
         "mask_account_name": false,
         "ui_theme": "light",
         "api_mode": default_api_mode(),

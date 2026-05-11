@@ -4,22 +4,19 @@ import { API_PROMO_CONFIG_URL } from '../utils/appState';
 export default function ApiModePage({
   apiConfigComplete,
   apiDraft,
-  codexSessionSyncEnabled,
+  apiPromoBarOpen,
   apiModeActive,
   onOpenCodexConfigToml,
   onConfigureGptPoolApi,
   onOpenGptPool,
-  onToggleCodexSessionSync,
+  onSetApiPromoBarOpen,
   onSwitchToApiMode,
   onUpdateApiDraft,
   savingApiMode,
-  savingCodexSessionSync,
   switching
 }) {
   const [showApiKey, setShowApiKey] = useState(false);
-  const [apiPromoVisible, setApiPromoVisible] = useState(true);
-  const [apiPromoMinimized, setApiPromoMinimized] = useState(false);
-  const sessionSyncHelp = 'Codex 订阅和 API 模式默认使用独立 workspace，会话列表不同步；开启后会同步两种模式的会话列表。';
+  const [apiPromoEnabled, setApiPromoEnabled] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +30,7 @@ export default function ApiModePage({
 
         const config = await response.json();
         if (!cancelled && config && config.apiPromo && config.apiPromo.enabled === false) {
-          setApiPromoVisible(false);
+          setApiPromoEnabled(false);
         }
       } catch (_err) {
         // Keep the bundled promo unless the remote config explicitly disables it.
@@ -50,19 +47,9 @@ export default function ApiModePage({
   return (
     <div className="api-mode-page">
       <div className="api-console-grid">
-        {apiPromoVisible && (
-          <div className={`api-promo-shell ${apiPromoMinimized ? 'minimized' : ''}`}>
-            {apiPromoMinimized ? (
-              <button
-                type="button"
-                className="api-promo-mini-window"
-                aria-label="展开公益站点广告"
-                title="展开公益站点广告"
-                onClick={() => setApiPromoMinimized(false)}
-              >
-                <span className="api-promo-mini-label">广告</span>
-              </button>
-            ) : (
+        {apiPromoEnabled && (
+          <div className={`api-promo-shell ${apiPromoBarOpen ? '' : 'minimized'}`}>
+            {apiPromoBarOpen ? (
               <>
                 <div className="api-promo-banner">
                   <button
@@ -87,51 +74,29 @@ export default function ApiModePage({
                 <button
                   type="button"
                   className="api-promo-close"
-                  aria-label="缩小广告"
-                  title="缩小广告"
-                  onClick={() => setApiPromoMinimized(true)}
+                  aria-label="关闭广告"
+                  title="关闭广告"
+                  onClick={() => onSetApiPromoBarOpen(false)}
                 >
                   ×
                 </button>
               </>
+            ) : (
+              <button
+                type="button"
+                className="api-promo-mini-window"
+                aria-label="展开公益站点广告"
+                title="展开公益站点广告"
+                onClick={() => onSetApiPromoBarOpen(true)}
+              >
+                <span className="api-promo-mini-label">广告</span>
+              </button>
             )}
           </div>
         )}
         <div className="api-config-stack">
           <div className="api-config-cluster">
             <div className="api-page-actions">
-              <div className="api-session-sync-control">
-                <label
-                  className={`api-session-sync-toggle ${codexSessionSyncEnabled ? 'active' : ''} ${savingCodexSessionSync || switching ? 'disabled' : ''}`}
-                  title={sessionSyncHelp}
-                >
-                  <span className="api-session-sync-copy">
-                    <span className="api-session-sync-title-row">
-                      <span className="api-session-sync-label">会话同步</span>
-                      <span
-                        className="api-session-sync-help"
-                        title={sessionSyncHelp}
-                        aria-label={sessionSyncHelp}
-                        role="img"
-                      >
-                        ?
-                      </span>
-                    </span>
-                    <span className="api-session-sync-desc">订阅/API 沿用同一份会话列表</span>
-                  </span>
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    checked={codexSessionSyncEnabled}
-                    disabled={savingCodexSessionSync || switching}
-                    aria-label="会话同步"
-                    onChange={event => onToggleCodexSessionSync(event.target.checked)}
-                  />
-                  <span className="settings-switch" aria-hidden="true">
-                    <span className="settings-switch-thumb" />
-                  </span>
-                </label>
-              </div>
               <button
                 type="button"
                 className="btn btn-secondary api-config-open-button"

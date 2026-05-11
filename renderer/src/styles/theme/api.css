@@ -103,34 +103,3 @@ html[data-theme="light"] .api-mode-field + .api-mode-field {
 html[data-theme="light"] .api-mode-label {
   color: #64748b;
 }
-
-html[data-theme="light"] .api-session-sync-toggle {
-  background: rgba(255, 255, 255, 0.82);
-  border-color: var(--border-app);
-  color: var(--text-primary);
-  box-shadow:
-    0 8px 22px rgba(15, 23, 42, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.86);
-}
-
-html[data-theme="light"] .api-session-sync-toggle:hover {
-  background: #ffffff;
-  border-color: rgba(37, 99, 235, 0.28);
-  color: var(--text-primary);
-}
-
-html[data-theme="light"] .api-session-sync-desc,
-html[data-theme="light"] .api-session-sync-help {
-  color: var(--text-secondary);
-}
-
-html[data-theme="light"] .api-session-sync-help {
-  background: rgba(241, 245, 249, 0.92);
-  border-color: var(--border-app);
-}
-
-html[data-theme="light"] .api-session-sync-help:hover {
-  color: #2563eb;
-  background: #ffffff;
-  border-color: rgba(37, 99, 235, 0.32);
-}

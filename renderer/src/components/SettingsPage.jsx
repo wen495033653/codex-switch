@@ -12,9 +12,13 @@ export default function SettingsPage({
     dataDir,
     appVersion,
     checkingUpdate,
+    codexSessionSyncEnabled,
     savingCodexProxyEnv,
+    savingCodexSessionSync,
     savingProxySettings,
     setCodexProxyEnvEnabled,
+    setCodexSessionSyncEnabled,
+    switching,
     updateSettingsDraftAndSave,
     normalizeBackgroundRefreshInterval,
     openDataDir,
@@ -44,7 +48,7 @@ export default function SettingsPage({
                     </div>
                 </div>
 
-                <div className="settings-modal settings-page-content">
+                <div className={`settings-modal settings-page-content ${settingsTab === 'proxy' ? 'settings-page-content-split' : ''}`}>
                     {settingsTab === 'general' && (
                         <GeneralSettingsTab
                             dataDir={dataDir}
@@ -65,11 +69,15 @@ export default function SettingsPage({
 
                     {settingsTab === 'proxy' && (
                         <ProxySettingsTab
+                            codexSessionSyncEnabled={codexSessionSyncEnabled}
                             savingCodexProxyEnv={savingCodexProxyEnv}
+                            savingCodexSessionSync={savingCodexSessionSync}
                             savingProxySettings={savingProxySettings}
                             setSettingsDraft={setSettingsDraft}
                             setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
+                            setCodexSessionSyncEnabled={setCodexSessionSyncEnabled}
                             settingsDraft={settingsDraft}
+                            switching={switching}
                             updateCodexProxySettings={updateCodexProxySettings}
                         />
                     )}

@@ -34,7 +34,7 @@ Download the latest version from [GitHub Releases](https://github.com/wen4950336
 - Keep previous conversations visible after switching modes.
 - Process session sync in the background to avoid blocking the interface.
 
-### Codex App Proxy
+### Codex app proxy
 
 - Configure a local HTTP/HTTPS proxy for Codex app traffic.
 - Accept proxy inputs such as `127.0.0.1:10808` and `http://127.0.0.1:10808`.

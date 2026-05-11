@@ -34,6 +34,7 @@ html[data-theme="light"] .modal-content,
 html[data-theme="light"] .account-card,
 html[data-theme="light"] .mode-card,
 html[data-theme="light"] .settings-page-content,
+html[data-theme="light"] .settings-app-card-section,
 html[data-theme="light"] .settings-about-card,
 html[data-theme="light"] .settings-about-row,
 html[data-theme="light"] .settings-path-card,
@@ -46,6 +47,11 @@ html[data-theme="light"] .empty-state-card {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.84));
   border-color: var(--border-app);
+}
+
+html[data-theme="light"] .settings-page-content-split {
+  background: transparent;
+  border-color: transparent;
 }
 
 html[data-theme="light"] .update-dialog-notes-heading,
