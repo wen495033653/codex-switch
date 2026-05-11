@@ -61,7 +61,7 @@ export default function ApiModePage({
                   >
                     <span className="api-promo-ad-label">广告</span>
                     <span className="api-promo-brand">GPT Pool</span>
-                    <span className="api-promo-title">公益站点，注册免费获取20$额度</span>
+                    <span className="api-promo-title">公益站点，注册免费获取10$额度</span>
                   </button>
                   <button
                     type="button"
