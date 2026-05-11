@@ -1,4 +1,10 @@
-import { AUTO_START_OPTIONS, DEFAULT_UI_THEME, UI_THEME_OPTIONS } from './options';
+import {
+    AUTO_START_LAUNCH_OPTIONS,
+    AUTO_START_OPTIONS,
+    DEFAULT_AUTO_START_LAUNCH_MODE,
+    DEFAULT_UI_THEME,
+    UI_THEME_OPTIONS
+} from './options';
 
 export default function GeneralSettingsTab({
     dataDir,
@@ -6,6 +12,9 @@ export default function GeneralSettingsTab({
     settingsDraft,
     updateSettingsDraftAndSave
 }) {
+    const autoStartEnabled = settingsDraft.auto_start === true;
+    const autoStartLaunchMode = settingsDraft.auto_start_launch_mode || DEFAULT_AUTO_START_LAUNCH_MODE;
+
     return (
         <>
             <section className="settings-section">
@@ -33,6 +42,32 @@ export default function GeneralSettingsTab({
                         );
                     })}
                 </div>
+
+                {autoStartEnabled ? (
+                    <div className="settings-suboption-panel">
+                        <div className="settings-suboption-title">启动后</div>
+                        <div className="settings-option-list settings-option-list-inline settings-option-list-compact">
+                            {AUTO_START_LAUNCH_OPTIONS.map(option => {
+                                const active = autoStartLaunchMode === option.value;
+                                return (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        className={`settings-option ${active ? 'active' : ''}`}
+                                        onClick={() => updateSettingsDraftAndSave({ auto_start_launch_mode: option.value })}
+                                    >
+                                        <span className="settings-option-radio" aria-hidden="true">
+                                            <span className="settings-option-dot" />
+                                        </span>
+                                        <span className="settings-option-text">
+                                            <span className="settings-option-title">{option.title}</span>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                ) : null}
             </section>
 
             <section className="settings-section">

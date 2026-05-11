@@ -15,9 +15,13 @@ fn unique_sessions_dir(name: &str) -> PathBuf {
 }
 
 fn write_rollout_file(path: &Path, provider: &str, cwd: &str) {
+    write_rollout_file_with_timestamp(path, provider, cwd, "2026-05-07T00:00:00.000Z");
+}
+
+fn write_rollout_file_with_timestamp(path: &Path, provider: &str, cwd: &str, timestamp: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let session_meta = json!({
-        "timestamp": "2026-05-07T00:00:00.000Z",
+        "timestamp": timestamp,
         "type": "session_meta",
         "payload": {
             "id": "session-id",
@@ -152,6 +156,38 @@ fn sync_rollout_provider_preserves_final_line_without_newline() {
     assert_eq!(updated, 1);
     assert_eq!(meta["payload"]["model_provider"], "api");
     assert!(!content.ends_with('\n'));
+}
+
+#[test]
+fn sync_rollout_provider_only_updates_latest_activity_files() {
+    let sessions_dir = unique_sessions_dir("latest-limit");
+    let mut paths = Vec::new();
+    for index in 0..102 {
+        let path = sessions_dir.join(format!("rollout-{index:03}.jsonl"));
+        let timestamp = format!("2026-05-07T00:{:02}:{:02}.000Z", index / 60, index % 60);
+        write_rollout_file_with_timestamp(&path, "openai", "E:\\Project\\ai", &timestamp);
+        paths.push(path);
+    }
+
+    let updated = sync_codex_session_rollouts_to_provider(&sessions_dir, "api").unwrap();
+
+    assert_eq!(updated, 100);
+    for (index, path) in paths.iter().enumerate() {
+        let line = fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let meta: Value = serde_json::from_str(&line).unwrap();
+        if index < 2 {
+            assert_eq!(meta["payload"]["model_provider"], "openai");
+        } else {
+            assert_eq!(meta["payload"]["model_provider"], "api");
+        }
+    }
+
+    fs::remove_dir_all(&sessions_dir).unwrap();
 }
 
 #[test]

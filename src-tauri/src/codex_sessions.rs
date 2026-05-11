@@ -9,6 +9,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::{
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Mutex,
     thread,
@@ -16,7 +17,8 @@ use std::{
 };
 
 const SESSION_SYNC_WATCH_INTERVAL_SECONDS: u64 = 60;
-const SESSION_SYNC_FILE_PAUSE_MS: u64 = 15;
+const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 100;
+const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
 
 struct SessionSyncState {
     running: bool,
@@ -27,6 +29,7 @@ static SESSION_SYNC_STATE: Mutex<SessionSyncState> = Mutex::new(SessionSyncState
     running: false,
     pending_provider: None,
 });
+static SESSION_SYNC_IO_LOCK: Mutex<()> = Mutex::new(());
 
 fn current_session_provider() -> Result<String, String> {
     restore_api_mode_if_selected()?;
@@ -106,6 +109,9 @@ fn normalize_target_provider(target_provider: &str) -> Result<String, String> {
 
 fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
     let target_provider = normalize_target_provider(target_provider)?;
+    let _guard = SESSION_SYNC_IO_LOCK
+        .lock()
+        .map_err(|_| "Codex 会话同步 I/O 状态已损坏".to_string())?;
     let mut updated = 0;
     let mut errors = Vec::new();
 
@@ -183,7 +189,15 @@ fn sync_codex_session_rollouts_to_provider(
 ) -> Result<usize, String> {
     let mut updated = 0;
     let mut errors = Vec::new();
-    sync_rollouts_from_dir(sessions_dir, target_provider, &mut updated, &mut errors)?;
+    let rollout_files =
+        collect_recent_rollout_files(sessions_dir, SESSION_SYNC_RECENT_ROLLOUT_LIMIT)?;
+    for path in rollout_files {
+        match sync_rollout_file_provider(&path, target_provider) {
+            Ok(true) => updated += 1,
+            Ok(false) => {}
+            Err(err) => errors.push(err),
+        }
+    }
 
     if errors.is_empty() {
         Ok(updated)
@@ -196,11 +210,30 @@ fn sync_codex_session_rollouts_to_provider(
     }
 }
 
-fn sync_rollouts_from_dir(
+#[derive(Debug, Eq, PartialEq)]
+struct RolloutFileCandidate {
+    path: PathBuf,
+    sort_key: String,
+}
+
+fn collect_recent_rollout_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    collect_rollout_file_candidates(dir, &mut files)?;
+    files.sort_by(|a, b| {
+        b.sort_key
+            .cmp(&a.sort_key)
+            .then_with(|| b.path.cmp(&a.path))
+    });
+    Ok(files
+        .into_iter()
+        .take(limit)
+        .map(|candidate| candidate.path)
+        .collect())
+}
+
+fn collect_rollout_file_candidates(
     dir: &Path,
-    target_provider: &str,
-    updated: &mut usize,
-    errors: &mut Vec<String>,
+    files: &mut Vec<RolloutFileCandidate>,
 ) -> Result<(), String> {
     let entries = fs::read_dir(dir)
         .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", dir.display()))?;
@@ -211,14 +244,10 @@ fn sync_rollouts_from_dir(
             .file_type()
             .map_err(|err| format!("读取 Codex session 文件类型失败 {}: {err}", path.display()))?;
         if file_type.is_dir() {
-            sync_rollouts_from_dir(&path, target_provider, updated, errors)?;
+            collect_rollout_file_candidates(&path, files)?;
         } else if file_type.is_file() && is_rollout_jsonl(&path) {
-            match sync_rollout_file_provider(&path, target_provider) {
-                Ok(true) => *updated += 1,
-                Ok(false) => {}
-                Err(err) => errors.push(err),
-            }
-            thread::sleep(Duration::from_millis(SESSION_SYNC_FILE_PAUSE_MS));
+            let sort_key = rollout_activity_sort_key(&path);
+            files.push(RolloutFileCandidate { path, sort_key });
         }
     }
     Ok(())
@@ -229,6 +258,105 @@ fn is_rollout_jsonl(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .is_some_and(|file_name| file_name.starts_with("rollout-"))
         && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+}
+
+fn rollout_activity_sort_key(path: &Path) -> String {
+    read_rollout_tail_timestamp(path)
+        .or_else(|| rollout_filename_timestamp(path))
+        .or_else(|| rollout_path_date(path))
+        .unwrap_or_else(|| {
+            path.metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(format_system_time_sort_key)
+                .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string())
+        })
+}
+
+fn read_rollout_tail_timestamp(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let sample_len = len.min(SESSION_SYNC_TAIL_SAMPLE_BYTES);
+    if len > sample_len {
+        file.seek(SeekFrom::Start(len - sample_len)).ok()?;
+    }
+    let mut bytes = Vec::with_capacity(sample_len as usize);
+    file.take(sample_len).read_to_end(&mut bytes).ok()?;
+    if len > sample_len {
+        if let Some(index) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=index);
+        }
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut latest = None;
+    for line in text.lines() {
+        if let Some(timestamp) = rollout_line_timestamp(line) {
+            if latest.as_ref().is_none_or(|value| timestamp > *value) {
+                latest = Some(timestamp);
+            }
+        }
+    }
+    latest
+}
+
+fn rollout_line_timestamp(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let timestamp = raw_string_field(&value, "timestamp");
+    let timestamp = timestamp.trim();
+    if timestamp.is_empty() {
+        None
+    } else {
+        Some(normalize_timestamp_sort_key(timestamp))
+    }
+}
+
+fn normalize_timestamp_sort_key(timestamp: &str) -> String {
+    timestamp.replace('Z', "+00:00")
+}
+
+fn format_system_time_sort_key(time: std::time::SystemTime) -> Option<String> {
+    let datetime = ::time::OffsetDateTime::from(time);
+    datetime
+        .format(&::time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|timestamp| timestamp.replace('Z', "+00:00"))
+}
+
+fn rollout_filename_timestamp(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    let raw = file_name
+        .strip_prefix("rollout-")?
+        .strip_suffix(".jsonl")?
+        .get(..19)?;
+    Some(format!(
+        "{}T{}:{}:{}",
+        &raw[..10],
+        &raw[11..13],
+        &raw[14..16],
+        &raw[17..19]
+    ))
+}
+
+fn rollout_path_date(path: &Path) -> Option<String> {
+    let parts: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect();
+    for window in parts.windows(3) {
+        if window[0].len() == 4
+            && window[1].len() == 2
+            && window[2].len() == 2
+            && window
+                .iter()
+                .all(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            return Some(format!(
+                "{}-{}-{}T00:00:00",
+                window[0], window[1], window[2]
+            ));
+        }
+    }
+    None
 }
 
 fn sync_rollout_file_provider(path: &Path, target_provider: &str) -> Result<bool, String> {

@@ -77,7 +77,7 @@ export default function AppDialogs({
       {ideReopen.modal.visible && (
         <ConfirmDialog
           title="是否重启 Codex app"
-          message={`切换已完成。是否重启 Codex app：${ideReopen.summaryText}？`}
+          message="切换已完成。是否重启 Codex app？"
           isLoading={ideReopen.modal.loading}
           confirmText="重新打开"
           loadingText="重启中..."

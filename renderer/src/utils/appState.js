@@ -25,6 +25,7 @@ export const DEFAULT_API_NAME = 'api';
 
 export const DEFAULT_SETTINGS = {
   auto_start: true,
+  auto_start_launch_mode: 'tray',
   auto_check_updates: true,
   background_refresh_enabled: true,
   background_refresh_interval_minutes: DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES,

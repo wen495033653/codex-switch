@@ -6,7 +6,13 @@ use super::{
     *,
 };
 
-pub(crate) fn restart_from_ide_snapshot(snapshot: &Value) -> Result<Value, String> {
+pub(crate) fn restart_from_ide_snapshot<F>(
+    snapshot: &Value,
+    before_relaunch: F,
+) -> Result<Value, String>
+where
+    F: FnOnce(),
+{
     let entries = normalize_ide_entries(
         snapshot
             .get("entries")
@@ -65,6 +71,8 @@ pub(crate) fn restart_from_ide_snapshot(snapshot: &Value) -> Result<Value, Strin
             }
         ));
     }
+
+    before_relaunch();
 
     let mut restarted_paths = HashSet::new();
     for executable in executables {

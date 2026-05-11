@@ -24,8 +24,9 @@ mod updater;
 
 use codex_launcher::IdeRuntime;
 use desktop::{
-    focus_main_window, handle_main_window_event, restore_main_window_state, setup_tray,
-    sync_system_auto_start_from_settings, AppRuntime,
+    apply_main_window_startup_behavior, focus_main_window, handle_main_window_event,
+    restore_main_window_state, setup_tray, sync_system_auto_start_from_settings, AppRuntime,
+    AUTO_START_LAUNCH_ARG,
 };
 use oauth_flow::OAuthRuntime;
 use quota::{
@@ -48,6 +49,7 @@ fn main() {
         }))
         .plugin(
             tauri_plugin_autostart::Builder::new()
+                .arg(AUTO_START_LAUNCH_ARG)
                 .app_name("Codex Switch")
                 .build(),
         )
@@ -57,6 +59,8 @@ fn main() {
         .setup(|app| {
             restore_main_window_state(app.handle()).map_err(setup_error)?;
             setup_tray(app.handle()).map_err(setup_error)?;
+            let launch_args: Vec<String> = std::env::args().collect();
+            apply_main_window_startup_behavior(app.handle(), &launch_args).map_err(setup_error)?;
             if let Err(err) = sync_system_auto_start_from_settings(app.handle()) {
                 eprintln!("同步开机自启状态失败: {err}");
             }

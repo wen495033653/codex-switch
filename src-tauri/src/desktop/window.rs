@@ -1,6 +1,6 @@
-use super::{AppRuntime, MAIN_WINDOW_LABEL};
+use super::{AppRuntime, AUTO_START_LAUNCH_ARG, MAIN_WINDOW_LABEL};
 use crate::{
-    json_util::bool_field,
+    json_util::{bool_field, string_field},
     settings::{read_settings_value, update_settings_value},
 };
 use serde_json::{json, Value};
@@ -42,6 +42,30 @@ pub(crate) fn restore_main_window_state(app: &AppHandle) -> Result<(), String> {
             .maximize()
             .map_err(|err| format!("恢复窗口最大化状态失败: {err}"))?;
     }
+    Ok(())
+}
+
+fn should_start_hidden(args: &[String]) -> Result<bool, String> {
+    if !args.iter().any(|arg| arg == AUTO_START_LAUNCH_ARG) {
+        return Ok(false);
+    }
+    let settings = read_settings_value()?;
+    Ok(string_field(&settings, "auto_start_launch_mode") == "tray")
+}
+
+pub(crate) fn apply_main_window_startup_behavior(
+    app: &AppHandle,
+    args: &[String],
+) -> Result<(), String> {
+    if !should_start_hidden(args)? {
+        return Ok(());
+    }
+    let Some(window) = main_window(app) else {
+        return Ok(());
+    };
+    window
+        .hide()
+        .map_err(|err| format!("收起启动窗口失败: {err}"))?;
     Ok(())
 }
 

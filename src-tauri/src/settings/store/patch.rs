@@ -45,6 +45,16 @@ pub(super) fn apply_settings_patch(
             Value::Bool(bool_field(patch, "auto_start")),
         );
     }
+    if has_key(patch, "auto_start_launch_mode") {
+        let value = match string_field(patch, "auto_start_launch_mode").as_str() {
+            "window" => "window",
+            _ => "tray",
+        };
+        object.insert(
+            "auto_start_launch_mode".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
     if has_key(patch, "auto_check_updates") {
         object.insert(
             "auto_check_updates".to_string(),
@@ -202,6 +212,42 @@ mod tests {
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_auto_start_launch_mode() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "auto_start_launch_mode": "tray"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object.get("auto_start_launch_mode").and_then(Value::as_str),
+            Some("tray")
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_normalizes_unknown_auto_start_launch_mode_to_tray() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "auto_start_launch_mode": "hidden"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object.get("auto_start_launch_mode").and_then(Value::as_str),
+            Some("tray")
         );
     }
 

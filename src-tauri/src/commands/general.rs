@@ -9,9 +9,13 @@ pub(crate) fn get_store() -> Result<Value, String> {
 
 #[tauri::command]
 pub(crate) fn get_app_version() -> Value {
+    let mut version = env!("CARGO_PKG_VERSION").to_string();
+    if cfg!(debug_assertions) {
+        version.push_str("-dev");
+    }
     json!({
         "ok": true,
-        "version": env!("CARGO_PKG_VERSION")
+        "version": version
     })
 }
 
@@ -44,7 +48,8 @@ pub(crate) fn get_settings() -> Result<Value, String> {
 
 #[tauri::command]
 pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
-    let should_sync_auto_start = has_key(&patch, "auto_start");
+    let should_sync_auto_start =
+        has_key(&patch, "auto_start") || has_key(&patch, "auto_start_launch_mode");
     let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
     if should_sync_auto_start {
         sync_system_auto_start(&app, bool_field(&settings, "auto_start"))?;

@@ -7,6 +7,16 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-option-list-compact .settings-option {
+  min-height: 44px;
+  padding: 11px 13px;
+  align-items: center;
+}
+
+.settings-option-list-compact .settings-option-radio {
+  margin-top: 0;
+}
+
 .settings-option {
   width: 100%;
   padding: 14px 15px;
@@ -80,8 +90,39 @@
   line-height: 1.55;
 }
 
+.settings-suboption-panel {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding-left: 26px;
+}
+
+.settings-suboption-panel::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 2px;
+  bottom: 4px;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.22);
+}
+
+.settings-suboption-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 @media (max-width: 720px) {
   .settings-option-list-inline {
     grid-template-columns: 1fr;
+  }
+
+  .settings-suboption-panel {
+    padding-left: 0;
+  }
+
+  .settings-suboption-panel::before {
+    display: none;
   }
 }

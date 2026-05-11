@@ -28,6 +28,7 @@ pub(crate) fn default_settings() -> Value {
         "dismissed_update_version": "",
         "close_window_behavior": "tray",
         "auto_start": true,
+        "auto_start_launch_mode": "tray",
         "auto_check_updates": true,
         "background_refresh_enabled": true,
         "background_refresh_interval_minutes": BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES,

@@ -25,6 +25,19 @@ export const AUTO_START_OPTIONS = [
     }
 ];
 
+export const DEFAULT_AUTO_START_LAUNCH_MODE = 'tray';
+
+export const AUTO_START_LAUNCH_OPTIONS = [
+    {
+        value: 'window',
+        title: '打开主窗口'
+    },
+    {
+        value: 'tray',
+        title: '收起到托盘'
+    }
+];
+
 export const UI_THEME_OPTIONS = [
     {
         value: 'dark',

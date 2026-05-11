@@ -30,6 +30,13 @@ fn normalize_codex_active_mode(data: &Value) -> String {
     }
 }
 
+fn normalize_auto_start_launch_mode(data: &Value) -> String {
+    match string_field(data, "auto_start_launch_mode").as_str() {
+        "window" => "window".to_string(),
+        _ => "tray".to_string(),
+    }
+}
+
 pub(crate) fn normalize_settings(data: &Value) -> Value {
     let ui_theme = match string_field(data, "ui_theme").as_str() {
         "dark" => "dark",
@@ -66,6 +73,7 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
             .get("auto_start")
             .and_then(Value::as_bool)
             .unwrap_or(true),
+        "auto_start_launch_mode": normalize_auto_start_launch_mode(data),
         "auto_check_updates": data
             .get("auto_check_updates")
             .and_then(Value::as_bool)
@@ -171,6 +179,32 @@ mod tests {
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_uses_tray_auto_start_launch_mode_by_default() {
+        let settings = normalize_settings(&json!({}));
+
+        assert_eq!(
+            settings
+                .get("auto_start_launch_mode")
+                .and_then(Value::as_str),
+            Some("tray")
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_tray_auto_start_launch_mode() {
+        let settings = normalize_settings(&json!({
+            "auto_start_launch_mode": "tray"
+        }));
+
+        assert_eq!(
+            settings
+                .get("auto_start_launch_mode")
+                .and_then(Value::as_str),
+            Some("tray")
         );
     }
 

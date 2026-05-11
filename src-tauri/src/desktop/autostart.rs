@@ -2,6 +2,8 @@ use crate::{json_util::bool_field, settings::read_settings_value};
 use tauri::AppHandle;
 use tauri_plugin_autostart::ManagerExt as AutoStartManagerExt;
 
+pub(crate) const AUTO_START_LAUNCH_ARG: &str = "--codex-switch-autostart";
+
 pub(crate) fn sync_system_auto_start(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let autolaunch = app.autolaunch();
     if enabled {

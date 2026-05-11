@@ -1,4 +1,5 @@
 use super::*;
+use crate::codex_sessions::sync_codex_session_index_then_queue_rollouts;
 
 mod detect;
 mod pending;
@@ -48,11 +49,22 @@ pub(crate) fn restart_open_ides(
         .ok_or_else(|| "编辑器快照不存在或已过期".to_string())?;
 
     apply_pending_ide_auth(&pending)?;
-    let result = restart_from_ide_snapshot(&pending.snapshot)?;
+    let target_provider = if pending.api_mode { "api" } else { "openai" };
+    let mut session_sync_warning = None;
+    let result = restart_from_ide_snapshot(&pending.snapshot, || {
+        if let Err(err) = sync_codex_session_index_then_queue_rollouts(target_provider) {
+            session_sync_warning = Some(err);
+        }
+    })?;
     let message = if bool_field(&result, "restarted") {
-        "Codex app 重启成功".to_string()
+        "Codex app 重启成功"
     } else {
-        "未能重启 Codex app".to_string()
+        "未能重启 Codex app"
+    };
+    let message = if let Some(err) = session_sync_warning {
+        format!("{message}；会话同步失败：{err}")
+    } else {
+        message.to_string()
     };
     store_payload(Some(&message))
 }
