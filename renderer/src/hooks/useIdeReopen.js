@@ -4,7 +4,8 @@ const emptyIdeReopenModal = {
   visible: false,
   loading: false,
   snapshotId: '',
-  summary: []
+  summary: [],
+  sessionSync: false
 };
 
 export function useIdeReopen({
@@ -22,7 +23,8 @@ export function useIdeReopen({
       visible: true,
       loading: false,
       snapshotId: reopenInfo.snapshot_id,
-      summary: Array.isArray(reopenInfo.summary) ? reopenInfo.summary : []
+      summary: Array.isArray(reopenInfo.summary) ? reopenInfo.summary : [],
+      sessionSync: Boolean(reopenInfo.session_sync)
     });
   };
 
@@ -33,7 +35,7 @@ export function useIdeReopen({
       try {
         const res = await window.api.discardIdeSnapshot(snapshotId);
         if (res && res.store) setStore(requireStore(res));
-        toast('账号已切换，稍后重启 Codex 或 VS Code 后生效');
+        toast('账号已切换，稍后重新打开 Codex app 或 VS Code 后生效');
       } catch {
         return;
       }
@@ -48,14 +50,14 @@ export function useIdeReopen({
       handleRes(res);
       setIdeReopenModal(emptyIdeReopenModal);
     } catch (err) {
-      toastError(err, '重启编辑器失败');
+      toastError(err, '重新打开失败');
       setIdeReopenModal(prev => ({ ...prev, loading: false }));
     }
   };
 
   const ideSummaryText = ideReopenModal.summary.length > 0
     ? ideReopenModal.summary.map(item => (item.count > 1 ? `${item.displayName} x${item.count}` : item.displayName)).join('、')
-    : '当前已打开的 Codex 或 VS Code';
+    : '当前已打开的 Codex app 或 VS Code';
 
   return {
     cancelIdeReopen,

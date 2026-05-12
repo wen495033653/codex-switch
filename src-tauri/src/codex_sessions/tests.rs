@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::{Duration as StdDuration, SystemTime},
 };
 
 fn unique_sessions_dir(name: &str) -> PathBuf {
@@ -159,10 +160,47 @@ fn sync_rollout_provider_preserves_final_line_without_newline() {
 }
 
 #[test]
+fn sync_rollout_provider_preserves_modified_time() {
+    let sessions_dir = unique_sessions_dir("mtime");
+    let path = sessions_dir.join("rollout-mtime.jsonl");
+    write_rollout_file(&path, "api", "E:\\Project\\ai");
+    let original_modified = SystemTime::UNIX_EPOCH + StdDuration::from_secs(1_700_000_000);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(original_modified)
+        .unwrap();
+
+    let updated = sync_codex_session_rollouts_to_provider(&sessions_dir, "openai").unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let line = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let meta: Value = serde_json::from_str(&line).unwrap();
+
+    fs::remove_dir_all(&sessions_dir).unwrap();
+
+    let modified_delta = modified
+        .duration_since(original_modified)
+        .or_else(|_| original_modified.duration_since(modified))
+        .unwrap();
+    assert_eq!(updated, 1);
+    assert_eq!(meta["payload"]["model_provider"], "openai");
+    assert!(
+        modified_delta < StdDuration::from_secs(1),
+        "modified time should be preserved, delta was {modified_delta:?}"
+    );
+}
+
+#[test]
 fn sync_rollout_provider_only_updates_latest_activity_files() {
     let sessions_dir = unique_sessions_dir("latest-limit");
     let mut paths = Vec::new();
-    for index in 0..102 {
+    for index in 0..(SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 2) {
         let path = sessions_dir.join(format!("rollout-{index:03}.jsonl"));
         let timestamp = format!("2026-05-07T00:{:02}:{:02}.000Z", index / 60, index % 60);
         write_rollout_file_with_timestamp(&path, "openai", "E:\\Project\\ai", &timestamp);
@@ -171,7 +209,7 @@ fn sync_rollout_provider_only_updates_latest_activity_files() {
 
     let updated = sync_codex_session_rollouts_to_provider(&sessions_dir, "api").unwrap();
 
-    assert_eq!(updated, 100);
+    assert_eq!(updated, SESSION_SYNC_RECENT_ROLLOUT_LIMIT);
     for (index, path) in paths.iter().enumerate() {
         let line = fs::read_to_string(path)
             .unwrap()

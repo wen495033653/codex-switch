@@ -28,7 +28,7 @@ pub(crate) fn detect_ide_app(
         && normalized_path.contains("\\app\\codex.exe")
         && !normalized_path.contains("\\app\\resources\\codex.exe")
     {
-        return Some(("codex", "Codex"));
+        return Some(("codex", "Codex app"));
     }
 
     if normalized_name == "code.exe"
@@ -116,7 +116,7 @@ pub(crate) fn build_ide_summary(entries: &[Value]) -> Value {
     if !codex_paths.is_empty() {
         summary.push(json!({
             "key": "codex",
-            "displayName": "Codex",
+            "displayName": "Codex app",
             "count": codex_paths.len()
         }));
     }

@@ -91,10 +91,14 @@ export default function AppDialogs({
 
       {ideReopen.modal.visible && (
         <ConfirmDialog
-          message="切换已完成。是否重启 Codex app？"
+          message={
+            ideReopen.modal.sessionSync
+              ? `切换已完成。是否关闭 ${ideReopen.summaryText || 'Codex app 或 VS Code'}，同步会话后重新打开？`
+              : `切换已完成。是否重新打开 ${ideReopen.summaryText || 'Codex app 或 VS Code'}？`
+          }
           isLoading={ideReopen.modal.loading}
           confirmText="重新打开"
-          loadingText="重启中..."
+          loadingText={ideReopen.modal.sessionSync ? '同步并重新打开中...' : '重新打开中...'}
           cancelText="稍后"
           onConfirm={ideReopen.onConfirm}
           onCancel={() => !ideReopen.modal.loading && ideReopen.onCancel()}

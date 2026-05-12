@@ -1,5 +1,5 @@
 use super::*;
-use crate::codex_sessions::sync_codex_session_index_then_queue_rollouts;
+use crate::codex_sessions::sync_codex_sessions_to_provider_now;
 
 mod detect;
 mod pending;
@@ -10,6 +10,32 @@ pub(crate) use pending::{attach_ide_reopen, build_ide_reopen_payload};
 use detect::{build_ide_summary, normalize_ide_entries};
 use pending::apply_pending_ide_auth;
 use restart::restart_from_ide_snapshot;
+
+fn ide_summary_text(value: &Value) -> String {
+    let names = value
+        .get("summary")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| {
+            let display_name = string_field(&item, "displayName");
+            let count = value_u64_field(&item, "count").unwrap_or(0);
+            if count > 1 {
+                format!("{display_name} x{count}")
+            } else {
+                display_name
+            }
+        })
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+
+    if names.is_empty() {
+        "Codex app 或 VS Code".to_string()
+    } else {
+        names.join("、")
+    }
+}
 
 pub(crate) fn capture_open_ide_snapshot() -> Result<Value, String> {
     if !cfg!(windows) {
@@ -49,22 +75,25 @@ pub(crate) fn restart_open_ides(
         .ok_or_else(|| "编辑器快照不存在或已过期".to_string())?;
 
     apply_pending_ide_auth(&pending)?;
-    let target_provider = if pending.api_mode { "api" } else { "openai" };
+    let session_sync_provider = pending.session_sync_provider.clone();
     let mut session_sync_warning = None;
     let result = restart_from_ide_snapshot(&pending.snapshot, || {
-        if let Err(err) = sync_codex_session_index_then_queue_rollouts(target_provider) {
-            session_sync_warning = Some(err);
+        if let Some(target_provider) = session_sync_provider.as_deref() {
+            if let Err(err) = sync_codex_sessions_to_provider_now(target_provider) {
+                session_sync_warning = Some(err);
+            }
         }
     })?;
+    let target_text = ide_summary_text(&result);
     let message = if bool_field(&result, "restarted") {
-        "Codex app 重启成功"
+        format!("{target_text} 已重新打开")
     } else {
-        "未能重启 Codex app"
+        format!("未能重新打开 {target_text}")
     };
     let message = if let Some(err) = session_sync_warning {
         format!("{message}；会话同步失败：{err}")
     } else {
-        message.to_string()
+        message
     };
     store_payload(Some(&message))
 }

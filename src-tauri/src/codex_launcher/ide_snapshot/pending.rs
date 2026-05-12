@@ -12,6 +12,7 @@ pub(crate) fn build_ide_reopen_payload(
     runtime: &IdeRuntime,
     account_id: String,
     api_mode: bool,
+    session_sync_provider: Option<String>,
 ) -> Option<Value> {
     let snapshot = capture_open_ide_snapshot().ok()?;
     let entries = snapshot
@@ -31,6 +32,7 @@ pub(crate) fn build_ide_reopen_payload(
                 snapshot: snapshot.clone(),
                 account_id,
                 api_mode,
+                session_sync_provider: session_sync_provider.clone(),
             },
         );
         if snapshots.len() > 20 {
@@ -44,7 +46,8 @@ pub(crate) fn build_ide_reopen_payload(
 
     Some(json!({
         "snapshot_id": snapshot_id,
-        "summary": snapshot.get("summary").cloned().unwrap_or_else(|| json!([]))
+        "summary": snapshot.get("summary").cloned().unwrap_or_else(|| json!([])),
+        "session_sync": session_sync_provider.is_some()
     }))
 }
 

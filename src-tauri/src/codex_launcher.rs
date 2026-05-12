@@ -26,6 +26,7 @@ pub(crate) struct IdePending {
     snapshot: Value,
     account_id: String,
     api_mode: bool,
+    session_sync_provider: Option<String>,
 }
 
 #[derive(Default)]

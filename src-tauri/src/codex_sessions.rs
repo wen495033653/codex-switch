@@ -17,7 +17,7 @@ use std::{
 };
 
 const SESSION_SYNC_WATCH_INTERVAL_SECONDS: u64 = 60;
-const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 100;
+const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 50;
 const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
 
 struct SessionSyncState {
@@ -107,7 +107,7 @@ fn normalize_target_provider(target_provider: &str) -> Result<String, String> {
     Ok(target_provider.to_string())
 }
 
-fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
+pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
     let target_provider = normalize_target_provider(target_provider)?;
     let _guard = SESSION_SYNC_IO_LOCK
         .lock()
@@ -360,6 +360,9 @@ fn rollout_path_date(path: &Path) -> Option<String> {
 }
 
 fn sync_rollout_file_provider(path: &Path, target_provider: &str) -> Result<bool, String> {
+    let original_modified = fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|err| format!("读取 Codex session 修改时间失败 {}: {err}", path.display()))?;
     let content = fs::read_to_string(path)
         .map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
     let mut updated_content = String::with_capacity(content.len());
@@ -380,6 +383,11 @@ fn sync_rollout_file_provider(path: &Path, target_provider: &str) -> Result<bool
     if changed {
         fs::write(path, updated_content)
             .map_err(|err| format!("写入 Codex session 文件失败 {}: {err}", path.display()))?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(original_modified))
+            .map_err(|err| format!("恢复 Codex session 修改时间失败 {}: {err}", path.display()))?;
     }
     Ok(changed)
 }
