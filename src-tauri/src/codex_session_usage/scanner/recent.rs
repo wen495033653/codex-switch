@@ -5,7 +5,7 @@ use std::{
     time::SystemTime,
 };
 
-pub(super) const SESSION_FILE_LIMIT: usize = 3;
+pub(super) const SESSION_FILE_LIMIT: usize = 24;
 
 pub(super) struct RecentRolloutFiles {
     files: Vec<(SystemTime, PathBuf)>,

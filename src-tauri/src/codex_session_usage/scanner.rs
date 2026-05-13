@@ -55,7 +55,7 @@ mod tests {
         let includes_older_date_dir = files.iter().any(|(_, path)| path.starts_with(&older_dir));
         fs::remove_dir_all(&sessions_dir).unwrap();
 
-        assert_eq!(file_count, recent::SESSION_FILE_LIMIT);
+        assert_eq!(file_count, 4);
         assert!(includes_older_date_dir);
     }
 

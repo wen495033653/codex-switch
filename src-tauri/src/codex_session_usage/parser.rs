@@ -18,7 +18,7 @@ mod tests {
     use serde_json::json;
     use std::{env, fs, path::PathBuf};
 
-    fn token_count_line(timestamp: &str, used_percent: f64) -> String {
+    fn token_count_line_with_reset_at(timestamp: &str, used_percent: f64, reset_at: i64) -> String {
         json!({
             "timestamp": timestamp,
             "type": "event_msg",
@@ -28,7 +28,7 @@ mod tests {
                     "primary": {
                         "used_percent": used_percent,
                         "limit_window_seconds": 18_000,
-                        "reset_at": 1_799_999_999
+                        "reset_at": reset_at
                     },
                     "secondary": {
                         "used_percent": 1.0,
@@ -39,6 +39,10 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    fn token_count_line(timestamp: &str, used_percent: f64) -> String {
+        token_count_line_with_reset_at(timestamp, used_percent, 1_799_999_999)
     }
 
     fn primary_used_percent(usage_info: &Value) -> f64 {
@@ -75,5 +79,47 @@ mod tests {
     fn session_usage_requires_valid_timestamp() {
         assert!(normalize::usage_info_from_line(&token_count_line("", 42.0)).is_none());
         assert!(normalize::usage_info_from_line(&token_count_line("not-a-date", 42.0)).is_none());
+    }
+
+    #[test]
+    fn session_usage_keeps_highest_primary_usage_for_same_reset_window() {
+        let current =
+            normalize::usage_info_from_line(&token_count_line("2026-05-05T01:00:00Z", 44.0))
+                .unwrap();
+        let candidate = normalize::usage_info_from_line(&token_count_line_with_reset_at(
+            "2026-05-05T01:06:00Z",
+            1.0,
+            1_800_000_033,
+        ))
+        .unwrap();
+
+        let usage_info = newer_usage_info(Some(current), candidate).unwrap();
+
+        assert_eq!(
+            string_field(&usage_info, "fetched_at"),
+            "2026-05-05T01:06:00Z"
+        );
+        assert_eq!(primary_used_percent(&usage_info), 44.0);
+    }
+
+    #[test]
+    fn session_usage_allows_lower_primary_usage_for_new_reset_window() {
+        let current =
+            normalize::usage_info_from_line(&token_count_line("2026-05-05T01:00:00Z", 44.0))
+                .unwrap();
+        let candidate = normalize::usage_info_from_line(&token_count_line_with_reset_at(
+            "2026-05-05T06:01:00Z",
+            1.0,
+            1_800_018_000,
+        ))
+        .unwrap();
+
+        let usage_info = newer_usage_info(Some(current), candidate).unwrap();
+
+        assert_eq!(
+            string_field(&usage_info, "fetched_at"),
+            "2026-05-05T06:01:00Z"
+        );
+        assert_eq!(primary_used_percent(&usage_info), 1.0);
     }
 }
