@@ -76,7 +76,7 @@ where
 
     let mut restarted_paths = HashSet::new();
     for executable in executables {
-        if relaunch_executable_with_retry(&executable) {
+        if relaunch_executable_with_retry(&executable)? {
             restarted_paths.insert(normalize_executable_path(&executable));
         }
         thread::sleep(StdDuration::from_millis(120));

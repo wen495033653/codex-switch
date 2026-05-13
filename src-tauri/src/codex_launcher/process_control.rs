@@ -47,10 +47,14 @@ pub(crate) fn wait_for_pids_exit(pids: &[u64], timeout_ms: u64) -> Vec<u64> {
     alive
 }
 
-pub(crate) fn relaunch_executable(executable_path: &str) -> bool {
+pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String> {
     let path = PathBuf::from(executable_path);
     if !path.exists() {
-        return false;
+        return Ok(false);
+    }
+    if should_launch_codex_with_plugins(&path)? {
+        launch_codex_with_plugins(&path)?;
+        return Ok(true);
     }
 
     let mut command = Command::new(&path);
@@ -63,15 +67,25 @@ pub(crate) fn relaunch_executable(executable_path: &str) -> bool {
     }
     hide_command_window(&mut command);
 
-    command.spawn().is_ok()
+    command
+        .spawn()
+        .map(|_| true)
+        .map_err(|err| format!("重新打开应用失败 {}: {err}", path.display()))
 }
 
-pub(crate) fn relaunch_executable_with_retry(executable_path: &str) -> bool {
+pub(crate) fn relaunch_executable_with_retry(executable_path: &str) -> Result<bool, String> {
+    let mut last_error = None;
     for _ in 0..2 {
-        if relaunch_executable(executable_path) {
-            return true;
+        match relaunch_executable(executable_path) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(err) => last_error = Some(err),
         }
         thread::sleep(StdDuration::from_millis(300));
     }
-    false
+    if let Some(err) = last_error {
+        Err(err)
+    } else {
+        Ok(false)
+    }
 }

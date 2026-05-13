@@ -89,6 +89,12 @@ pub(super) fn apply_settings_patch(
             Value::Bool(bool_field(patch, "codex_proxy_env_enabled")),
         );
     }
+    if has_key(patch, "codex_plugins_enabled") {
+        object.insert(
+            "codex_plugins_enabled".to_string(),
+            Value::Bool(bool_field(patch, "codex_plugins_enabled")),
+        );
+    }
     if has_key(patch, "codex_session_sync_enabled") {
         object.insert(
             "codex_session_sync_enabled".to_string(),
@@ -218,6 +224,24 @@ mod tests {
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_codex_plugins_enabled() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_plugins_enabled": true
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object.get("codex_plugins_enabled").and_then(Value::as_bool),
+            Some(true)
         );
     }
 

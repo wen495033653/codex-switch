@@ -40,6 +40,7 @@ const COMMAND_BINDINGS = {
     enabled: Boolean(payload && payload.enabled),
     proxyUrl: payload && payload.proxyUrl ? payload.proxyUrl : ''
   })],
+  restartCodexAppWithPlugins: ['restart_codex_app_with_plugins'],
   restartOpenIdes: ['restart_open_ides', snapshotId => ({ snapshotId })],
   discardIdeSnapshot: ['discard_ide_snapshot', snapshotId => ({ snapshotId })],
   importAccounts: ['import_accounts'],

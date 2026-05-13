@@ -14,6 +14,7 @@ export function useSettingsActions({
 }) {
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
+  const [savingCodexPlugins, setSavingCodexPlugins] = useState(false);
 
   const openSettingsPage = async () => {
     try {
@@ -90,6 +91,19 @@ export function useSettingsActions({
     }
   };
 
+  const restartCodexAppWithPlugins = async () => {
+    if (savingCodexPlugins) return;
+    setSavingCodexPlugins(true);
+    try {
+      const res = await window.api.restartCodexAppWithPlugins();
+      toast((res && res.message) || 'Codex app 插件模式已重启');
+    } catch (err) {
+      toastError(err, '重启 Codex app 插件模式失败', 9000);
+    } finally {
+      setSavingCodexPlugins(false);
+    }
+  };
+
   const openDataDir = async () => {
     try {
       await window.api.openDataDir();
@@ -110,7 +124,9 @@ export function useSettingsActions({
     openCodexConfigToml,
     openDataDir,
     openRepository,
+    restartCodexAppWithPlugins,
     openSettingsPage,
+    savingCodexPlugins,
     savingCodexProxyEnv,
     savingProxySettings,
     setCodexProxyEnvEnabled,

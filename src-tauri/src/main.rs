@@ -93,6 +93,7 @@ fn main() {
             commands::switch_account,
             commands::switch_api_mode,
             codex_launcher::set_codex_proxy_env_enabled,
+            codex_launcher::restart_codex_app_with_plugins,
             codex_launcher::restart_open_ides,
             codex_launcher::discard_ide_snapshot,
             codex_sessions::sync_codex_sessions,
