@@ -58,6 +58,40 @@ const COMMAND_BINDINGS = {
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
+  scanSessions: ['session_manager_scan', root => ({ root })],
+  previewSession: ['session_manager_preview', payload => ({
+    root: payload.root,
+    relativePath: payload.relativePath
+  })],
+  selectSessionRoot: ['session_manager_select_root'],
+  selectSessionWorkdir: ['session_manager_select_workdir'],
+  exportSessions: ['session_manager_export', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths
+  })],
+  importSessions: ['session_manager_import', root => ({ root })],
+  deleteSessions: ['session_manager_delete', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths
+  })],
+  listDeletedSessions: ['session_manager_list_deleted'],
+  restoreDeletedSessions: ['session_manager_restore_deleted', payload => ({
+    root: payload.root,
+    deleteIds: payload.deleteIds,
+    conflictStrategy: payload.conflictStrategy
+  })],
+  purgeDeletedSessions: ['session_manager_purge_deleted', deleteIds => ({ deleteIds })],
+  setSessionStatus: ['session_manager_set_status', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths,
+    status: payload.status,
+    conflictStrategy: payload.conflictStrategy
+  })],
+  updateSessionCwd: ['session_manager_update_cwd', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths,
+    cwd: payload.cwd
+  })],
   startOauth: ['oauth_start', payload => ({ payload })],
   cancelOauth: ['oauth_cancel'],
   submitOauthCallback: ['oauth_submit_callback', callbackUrl => ({ callbackUrl })]

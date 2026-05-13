@@ -1,10 +1,12 @@
 import AccountsPage from './AccountsPage';
 import ApiModePage from './ApiModePage';
+import SessionManagerPage from './SessionManagerPage';
 import SettingsPage from './SettingsPage';
 
 export default function AppMainView({
   accountsPageProps,
   apiModePageProps,
+  sessionManagerPageProps,
   settingsPageProps,
   viewMode
 }) {
@@ -14,6 +16,10 @@ export default function AppMainView({
 
   if (viewMode === 'api') {
     return <ApiModePage {...apiModePageProps} />;
+  }
+
+  if (viewMode === 'sessions') {
+    return <SessionManagerPage {...sessionManagerPageProps} />;
   }
 
   return <AccountsPage {...accountsPageProps} />;

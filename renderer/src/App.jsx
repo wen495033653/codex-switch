@@ -348,6 +348,7 @@ export default function App() {
         currentModeLabel={currentModeLabel}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
+        onSessionsClick={() => setViewMode('sessions')}
         onSettingsClick={openSettingsPage}
         subscriptionModeActive={subscriptionModeActive}
         viewMode={viewMode}
@@ -393,6 +394,10 @@ export default function App() {
             onUpdateApiDraft: updateApiPageDraft,
             savingApiMode,
             switching
+          }}
+          sessionManagerPageProps={{
+            toast,
+            toastError
           }}
           accountsPageProps={{
             accountGridRef,
