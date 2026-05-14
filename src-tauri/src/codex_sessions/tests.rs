@@ -116,6 +116,99 @@ fn sync_session_provider_updates_rollout_meta_without_touching_cwd() {
 }
 
 #[test]
+fn sync_session_provider_updates_sessions_and_archived_sessions() {
+    let root = unique_sessions_dir("sessions-and-archived");
+    let sessions_dir = root.join("sessions");
+    let archived_dir = root.join("archived_sessions");
+    let sessions_file = sessions_dir.join("rollout-active.jsonl");
+    let archived_file = archived_dir.join("rollout-archived.jsonl");
+    write_rollout_file(&sessions_file, "openai", "E:\\Project\\active");
+    write_rollout_file(&archived_file, "openai", "E:\\Project\\archived");
+
+    let updated = sync_codex_session_rollout_dirs_to_provider(
+        &[sessions_dir, archived_dir, root.join("missing_sessions")],
+        "api",
+    )
+    .unwrap();
+
+    let sessions_line = fs::read_to_string(&sessions_file)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let archived_line = fs::read_to_string(&archived_file)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let sessions_meta: Value = serde_json::from_str(&sessions_line).unwrap();
+    let archived_meta: Value = serde_json::from_str(&archived_line).unwrap();
+
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(updated, 2);
+    assert_eq!(sessions_meta["payload"]["model_provider"], "api");
+    assert_eq!(sessions_meta["payload"]["cwd"], "E:\\Project\\active");
+    assert_eq!(archived_meta["payload"]["model_provider"], "api");
+    assert_eq!(archived_meta["payload"]["cwd"], "E:\\Project\\archived");
+}
+
+#[test]
+fn recent_sync_uses_combined_modified_time_limit() {
+    let root = unique_sessions_dir("combined-mtime-limit");
+    let sessions_dir = root.join("sessions");
+    let archived_dir = root.join("archived_sessions");
+    let mut paths = Vec::new();
+    let count = SESSION_SYNC_RESTART_ROLLOUT_LIMIT + 4;
+    let base_time = 1_700_000_000u64;
+
+    for index in 0..count {
+        let dir = if index % 2 == 0 {
+            &sessions_dir
+        } else {
+            &archived_dir
+        };
+        let path = dir.join(format!("rollout-{index:03}.jsonl"));
+        write_rollout_file(&path, "openai", "E:\\Project\\ai");
+        let modified = SystemTime::UNIX_EPOCH + StdDuration::from_secs(base_time + index as u64);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        paths.push((index, path));
+    }
+
+    let updated = sync_recent_codex_session_rollout_dirs_to_provider_by_modified_time(
+        &[sessions_dir, archived_dir],
+        "api",
+        SESSION_SYNC_RESTART_ROLLOUT_LIMIT,
+    )
+    .unwrap();
+
+    assert_eq!(updated, SESSION_SYNC_RESTART_ROLLOUT_LIMIT);
+    for (index, path) in paths {
+        let line = fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let meta: Value = serde_json::from_str(&line).unwrap();
+        if index < 4 {
+            assert_eq!(meta["payload"]["model_provider"], "openai");
+        } else {
+            assert_eq!(meta["payload"]["model_provider"], "api");
+        }
+    }
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn sync_session_provider_adds_missing_rollout_provider() {
     let sessions_dir = unique_sessions_dir("missing");
     let path = sessions_dir.join("rollout-missing-provider.jsonl");

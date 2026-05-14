@@ -13,11 +13,12 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 const SESSION_SYNC_WATCH_INTERVAL_SECONDS: u64 = 60;
 const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 50;
+const SESSION_SYNC_RESTART_ROLLOUT_LIMIT: usize = 50;
 const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
 
 struct SessionSyncState {
@@ -46,8 +47,12 @@ fn current_session_provider() -> Result<String, String> {
     }
 }
 
-fn sessions_dir_path() -> Result<PathBuf, String> {
-    Ok(codex_dir()?.join("sessions"))
+fn session_rollout_dir_paths() -> Result<Vec<PathBuf>, String> {
+    let codex_dir = codex_dir()?;
+    Ok(vec![
+        codex_dir.join("sessions"),
+        codex_dir.join("archived_sessions"),
+    ])
 }
 
 fn state_db_path() -> Result<PathBuf, String> {
@@ -134,14 +139,56 @@ pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Resu
     }
 }
 
+pub(crate) fn sync_recent_codex_sessions_to_current_mode_now_if_enabled(
+) -> Result<Option<usize>, String> {
+    if !codex_session_sync_enabled() {
+        return Ok(None);
+    }
+    let target_provider = current_session_provider()?;
+    sync_recent_codex_sessions_to_provider_now(&target_provider).map(Some)
+}
+
+fn sync_recent_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
+    let target_provider = normalize_target_provider(target_provider)?;
+    let _guard = SESSION_SYNC_IO_LOCK
+        .lock()
+        .map_err(|_| "Codex 会话同步 I/O 状态已损坏".to_string())?;
+    let mut updated = 0;
+    let mut errors = Vec::new();
+
+    match sync_codex_state_threads_to_provider_if_exists(&target_provider) {
+        Ok(count) => updated += count,
+        Err(err) => errors.push(err),
+    }
+    match sync_recent_codex_session_rollouts_to_provider_if_exists(&target_provider) {
+        Ok(count) => updated += count,
+        Err(err) => errors.push(err),
+    }
+
+    if errors.is_empty() {
+        Ok(updated)
+    } else {
+        Err(format!(
+            "同步 Codex 会话失败，已更新 {updated} 项：{}",
+            errors.join("；")
+        ))
+    }
+}
+
 fn sync_codex_session_rollouts_to_provider_if_exists(
     target_provider: &str,
 ) -> Result<usize, String> {
-    let sessions_dir = sessions_dir_path()?;
-    if !sessions_dir.exists() {
-        return Ok(0);
-    }
-    sync_codex_session_rollouts_to_provider(&sessions_dir, target_provider)
+    sync_codex_session_rollout_dirs_to_provider(&session_rollout_dir_paths()?, target_provider)
+}
+
+fn sync_recent_codex_session_rollouts_to_provider_if_exists(
+    target_provider: &str,
+) -> Result<usize, String> {
+    sync_recent_codex_session_rollout_dirs_to_provider_by_modified_time(
+        &session_rollout_dir_paths()?,
+        target_provider,
+        SESSION_SYNC_RESTART_ROLLOUT_LIMIT,
+    )
 }
 
 fn sync_codex_state_threads_to_provider_if_exists(target_provider: &str) -> Result<usize, String> {
@@ -210,10 +257,71 @@ fn sync_codex_session_rollouts_to_provider(
     }
 }
 
+fn sync_codex_session_rollout_dirs_to_provider(
+    rollout_dirs: &[PathBuf],
+    target_provider: &str,
+) -> Result<usize, String> {
+    let mut updated = 0;
+    let mut errors = Vec::new();
+
+    for dir in rollout_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        match sync_codex_session_rollouts_to_provider(dir, target_provider) {
+            Ok(count) => updated += count,
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(updated)
+    } else {
+        Err(format!(
+            "同步 Codex 会话失败，已更新 {updated} 项：{}",
+            errors.join("；")
+        ))
+    }
+}
+
+fn sync_recent_codex_session_rollout_dirs_to_provider_by_modified_time(
+    rollout_dirs: &[PathBuf],
+    target_provider: &str,
+    limit: usize,
+) -> Result<usize, String> {
+    let rollout_files = collect_recent_modified_rollout_files(rollout_dirs, limit)?;
+    let mut updated = 0;
+    let mut errors = Vec::new();
+
+    for path in rollout_files {
+        match sync_rollout_file_provider(&path, target_provider) {
+            Ok(true) => updated += 1,
+            Ok(false) => {}
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(updated)
+    } else {
+        Err(format!(
+            "同步 Codex 会话失败，已更新 {updated} 个文件，{} 个文件失败：{}",
+            errors.len(),
+            errors.join("；")
+        ))
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct RolloutFileCandidate {
     path: PathBuf,
     sort_key: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RolloutFileModifiedCandidate {
+    path: PathBuf,
+    modified: SystemTime,
 }
 
 fn collect_recent_rollout_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
@@ -222,6 +330,28 @@ fn collect_recent_rollout_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>
     files.sort_by(|a, b| {
         b.sort_key
             .cmp(&a.sort_key)
+            .then_with(|| b.path.cmp(&a.path))
+    });
+    Ok(files
+        .into_iter()
+        .take(limit)
+        .map(|candidate| candidate.path)
+        .collect())
+}
+
+fn collect_recent_modified_rollout_files(
+    dirs: &[PathBuf],
+    limit: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    for dir in dirs {
+        if dir.exists() {
+            collect_modified_rollout_file_candidates(dir, &mut files)?;
+        }
+    }
+    files.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
             .then_with(|| b.path.cmp(&a.path))
     });
     Ok(files
@@ -248,6 +378,32 @@ fn collect_rollout_file_candidates(
         } else if file_type.is_file() && is_rollout_jsonl(&path) {
             let sort_key = rollout_activity_sort_key(&path);
             files.push(RolloutFileCandidate { path, sort_key });
+        }
+    }
+    Ok(())
+}
+
+fn collect_modified_rollout_file_candidates(
+    dir: &Path,
+    files: &mut Vec<RolloutFileModifiedCandidate>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(dir)
+        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("读取 Codex session 目录条目失败: {err}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("读取 Codex session 文件类型失败 {}: {err}", path.display()))?;
+        if file_type.is_dir() {
+            collect_modified_rollout_file_candidates(&path, files)?;
+        } else if file_type.is_file() && is_rollout_jsonl(&path) {
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|err| {
+                    format!("读取 Codex session 修改时间失败 {}: {err}", path.display())
+                })?;
+            files.push(RolloutFileModifiedCandidate { path, modified });
         }
     }
     Ok(())

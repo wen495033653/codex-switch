@@ -1,4 +1,5 @@
 use super::*;
+use crate::codex_sessions::sync_recent_codex_sessions_to_current_mode_now_if_enabled;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
     io::{Read, Write},
@@ -232,6 +233,8 @@ pub(crate) fn restart_codex_app_with_plugins() -> Result<Value, String> {
         return Err("Codex app 进程未能退出，请手动关闭后重试".to_string());
     }
 
+    let session_sync_warning = sync_recent_codex_sessions_to_current_mode_now_if_enabled().err();
+
     let mut restarted = 0usize;
     for executable in executables {
         launch_codex_with_plugins(Path::new(&executable))?;
@@ -239,15 +242,22 @@ pub(crate) fn restart_codex_app_with_plugins() -> Result<Value, String> {
         thread::sleep(StdDuration::from_millis(120));
     }
 
+    let message = if restarted > 0 {
+        "Codex app 插件模式已重启".to_string()
+    } else {
+        "未能重启 Codex app 插件模式".to_string()
+    };
+    let message = if let Some(err) = session_sync_warning {
+        format!("{message}；会话同步失败：{err}")
+    } else {
+        message
+    };
+
     Ok(json!({
         "ok": true,
         "restarted": restarted > 0,
         "restartedCount": restarted,
-        "message": if restarted > 0 {
-            "Codex app 插件模式已重启"
-        } else {
-            "未能重启 Codex app 插件模式"
-        }
+        "message": message
     }))
 }
 
