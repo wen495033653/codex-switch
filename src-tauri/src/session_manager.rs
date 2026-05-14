@@ -1,4 +1,5 @@
 use crate::{
+    codex_sessions::lock_codex_session_io,
     json_util::raw_string_field,
     paths::{app_data_dir, codex_dir},
     time_util::{now_string, parse_rfc3339_seconds},
@@ -233,6 +234,13 @@ pub(crate) async fn session_manager_preview(
 }
 
 #[tauri::command]
+pub(crate) async fn session_manager_preview_deleted(delete_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || preview_deleted_conversation_impl(delete_id))
+        .await
+        .map_err(|err| blocking_task_error("读取已删除预览", err))?
+}
+
+#[tauri::command]
 pub(crate) fn session_manager_select_root(app: AppHandle) -> Result<Value, String> {
     let selected = app
         .dialog()
@@ -378,6 +386,10 @@ fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
         }
     }
     append_missing_state_thread_conversations(&root, &mut conversations, &mut warnings);
+    match lock_codex_session_io("扫描会话修复索引") {
+        Ok(_guard) => repair_archived_session_index_entries(&root, &conversations, &mut warnings),
+        Err(err) => warnings.push(err),
+    }
 
     conversations.sort_by(|a, b| {
         conversation_sort_key(b)
@@ -416,6 +428,49 @@ fn preview_conversation_impl(root: String, relative_path: String) -> Result<Valu
         "conversation": item,
         "messages": summary.messages,
         "warnings": warnings,
+        "parse_error": summary.parse_error
+    }))
+}
+
+fn preview_deleted_conversation_impl(delete_id: String) -> Result<Value, String> {
+    let record_dir = deleted_session_record_dir(&delete_id)?;
+    preview_deleted_conversation_from_record_dir(&record_dir)
+}
+
+fn preview_deleted_conversation_from_record_dir(record_dir: &Path) -> Result<Value, String> {
+    let record = read_deleted_session_record(&record_dir)?;
+    let session_file = record_dir.join(&record.session_file);
+    if !session_file.exists() {
+        return Err(format!("已删除会话备份文件缺失: {}", record.title));
+    }
+    let summary = parse_session_file(&session_file, true)?;
+    let size_bytes = session_file
+        .metadata()
+        .map(|item| item.len())
+        .unwrap_or(record.size_bytes);
+    let title = if should_rebuild_deleted_title(&record.title) {
+        deleted_title_from_summary(&summary)
+    } else {
+        record.title.clone()
+    };
+    let conversation = ConversationItem {
+        id: record.id,
+        title,
+        updated_at: Some(record.deleted_at),
+        status: "deleted".to_string(),
+        source_path: session_file.to_string_lossy().to_string(),
+        relative_path: record.original_relative_path,
+        size_bytes,
+        cwd: summary.cwd.clone().or(record.cwd),
+        preview: summary.preview.clone(),
+        sha256: None,
+        parse_error: summary.parse_error.clone(),
+    };
+
+    Ok(json!({
+        "ok": true,
+        "conversation": conversation,
+        "messages": summary.messages,
         "parse_error": summary.parse_error
     }))
 }
@@ -625,6 +680,7 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
         _ => return Err("导入已取消".to_string()),
     }
 
+    let _io_guard = lock_codex_session_io("导入会话")?;
     let index_backup_path = if candidates.iter().any(|candidate| {
         matches!(
             candidate.action,
@@ -721,6 +777,7 @@ fn delete_conversations_impl(root: String, relative_paths: Vec<String>) -> Resul
         return Err("请先选择要删除的会话".to_string());
     }
 
+    let _io_guard = lock_codex_session_io("删除会话")?;
     let deleted_at = now_string();
     let mut errors = Vec::new();
     let mut candidates = Vec::new();
@@ -914,6 +971,7 @@ fn restore_deleted_sessions_impl(
     }
     let conflict_strategy = parse_conflict_strategy(conflict_strategy)?;
 
+    let _io_guard = lock_codex_session_io("恢复会话")?;
     let mut restored = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
@@ -1211,11 +1269,13 @@ fn set_conversation_status_impl(
         return Err("请先选择要切换状态的会话".to_string());
     }
 
+    let _io_guard = lock_codex_session_io("切换会话状态")?;
     let mut changed = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
     let mut conflicts = Vec::new();
     let mut moves = Vec::new();
+    let mut status_index_updates = Vec::new();
 
     for relative_path in relative_paths {
         let relative = match normalize_relative_path(&relative_path).and_then(|relative| {
@@ -1235,10 +1295,6 @@ fn set_conversation_status_impl(
                 continue;
             }
         };
-        if current_status == target_status {
-            skipped += 1;
-            continue;
-        }
         let source_path = root.join(&relative);
         if !source_path.exists() {
             errors.push(format!("会话文件不存在: {}", relative.display()));
@@ -1258,6 +1314,19 @@ fn set_conversation_status_impl(
             errors.push(format!("会话文件名无效: {}", relative.display()));
             continue;
         };
+        if current_status == target_status {
+            status_index_updates.push(ManifestSession {
+                id,
+                title: deleted_title_from_summary(&summary),
+                updated_at: summary.updated_at.clone(),
+                status: target_status.clone(),
+                relative_path: path_to_slash(&relative),
+                size_bytes: source_path.metadata().map(|item| item.len()).unwrap_or(0),
+                sha256: String::new(),
+            });
+            skipped += 1;
+            continue;
+        }
         let target_relative = if target_status == "archived" {
             PathBuf::from("archived_sessions").join(file_name)
         } else {
@@ -1419,27 +1488,42 @@ fn set_conversation_status_impl(
             .map(|status_move| status_move.id.clone())
             .collect::<Vec<_>>();
         let _ = remove_session_index_ids(&root, &old_ids);
-        let manifests = reassign_moves
-            .iter()
-            .map(|status_move| ManifestSession {
-                id: status_move.target_id.clone(),
-                title: status_move.title.clone(),
-                updated_at: status_move.updated_at.clone(),
-                status: target_status.clone(),
-                relative_path: status_move
-                    .target_path
-                    .strip_prefix(&root)
-                    .map(path_to_slash)
-                    .unwrap_or_else(|_| status_move.target_path.to_string_lossy().to_string()),
-                size_bytes: status_move
-                    .target_path
-                    .metadata()
-                    .map(|item| item.len())
-                    .unwrap_or(0),
-                sha256: String::new(),
-            })
-            .collect::<Vec<_>>();
-        let _ = update_session_index_from_manifest(&root, &manifests);
+    }
+
+    status_index_updates.extend(completed_moves.iter().map(|status_move| {
+        ManifestSession {
+            id: status_move.target_id.clone(),
+            title: status_move.title.clone(),
+            updated_at: status_move.updated_at.clone(),
+            status: target_status.clone(),
+            relative_path: status_move
+                .target_path
+                .strip_prefix(&root)
+                .map(path_to_slash)
+                .unwrap_or_else(|_| status_move.target_path.to_string_lossy().to_string()),
+            size_bytes: status_move
+                .target_path
+                .metadata()
+                .map(|item| item.len())
+                .unwrap_or(0),
+            sha256: String::new(),
+        }
+    }));
+    let (index_backup_path, index_error) = if status_index_updates.is_empty() {
+        (None, None)
+    } else {
+        let backup_path = match backup_session_index(&root) {
+            Ok(path) => path,
+            Err(err) => {
+                errors.push(err.clone());
+                None
+            }
+        };
+        let error = update_session_index_from_manifest(&root, &status_index_updates).err();
+        (backup_path, error)
+    };
+    if let Some(err) = &index_error {
+        errors.push(err.clone());
     }
 
     let (state_backup_path, desktop_error) =
@@ -1454,6 +1538,8 @@ fn set_conversation_status_impl(
         "report": {
             "changed": changed,
             "skipped": skipped,
+            "index_backup_path": index_backup_path.map(|path| path.to_string_lossy().to_string()),
+            "index_error": index_error,
             "state_backup_path": state_backup_path.map(|path| path.to_string_lossy().to_string()),
             "desktop_error": desktop_error,
             "conflicts": conflicts,
@@ -1478,6 +1564,7 @@ fn update_conversation_cwd_impl(
         return Err("请先选择要修改工作目录的会话".to_string());
     }
 
+    let _io_guard = lock_codex_session_io("修改工作目录")?;
     let mut updated = 0usize;
     let mut errors = Vec::new();
     let mut cwd_updates = Vec::new();
@@ -1805,6 +1892,28 @@ fn append_missing_state_thread_conversations(
         warnings.push(format!(
             "发现 {missing_count} 条 Codex Desktop 残留索引，可选中后删除清理"
         ));
+    }
+}
+
+fn repair_archived_session_index_entries(
+    root: &Path,
+    conversations: &[ConversationItem],
+    warnings: &mut Vec<String>,
+) {
+    let archived_ids = conversations
+        .iter()
+        .filter(|item| item.status == "archived")
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    if archived_ids.is_empty() {
+        return;
+    }
+    match remove_session_index_ids_with_reason(root, &archived_ids, "status") {
+        Ok(removed) if removed > 0 => {
+            warnings.push(format!("已清理 {removed} 条已归档会话的 Codex 索引残留"))
+        }
+        Ok(_) => {}
+        Err(err) => warnings.push(format!("清理已归档会话索引残留失败: {err}")),
     }
 }
 
@@ -2140,6 +2249,9 @@ fn update_session_index_from_manifest(
         }
     }
     for session in sessions {
+        if session.status != "active" {
+            continue;
+        }
         lines.push(
             json!({
                 "id": session.id,
@@ -2154,11 +2266,18 @@ fn update_session_index_from_manifest(
 }
 
 fn remove_session_index_ids(root: &Path, ids: &[String]) -> Result<usize, String> {
+    remove_session_index_ids_with_reason(root, ids, "delete")
+}
+
+fn remove_session_index_ids_with_reason(
+    root: &Path,
+    ids: &[String],
+    reason: &str,
+) -> Result<usize, String> {
     let path = root.join("session_index.jsonl");
     if ids.is_empty() || !path.exists() {
         return Ok(0);
     }
-    let _backup_path = backup_file_with_reason(&path, "delete")?;
     let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
     let content =
         fs::read_to_string(&path).map_err(|err| format!("读取 session_index.jsonl 失败: {err}"))?;
@@ -2175,6 +2294,10 @@ fn remove_session_index_ids(root: &Path, ids: &[String]) -> Result<usize, String
             removed += 1;
         }
     }
+    if removed == 0 {
+        return Ok(0);
+    }
+    let _backup_path = backup_file_with_reason(&path, reason)?;
     fs::write(
         &path,
         if lines.is_empty() {
@@ -2682,12 +2805,7 @@ fn update_state_thread_status(
         .transaction()
         .map_err(|err| format!("开始 Codex state 状态更新事务失败: {err}"))?;
     for status_move in moves {
-        let rollout_path = status_move
-            .target_path
-            .canonicalize()
-            .unwrap_or_else(|_| status_move.target_path.clone())
-            .to_string_lossy()
-            .to_string();
+        let rollout_path = status_move.target_path.to_string_lossy().to_string();
         transaction
             .execute(
                 "UPDATE threads SET id = ?1, archived = ?2, archived_at = ?3, rollout_path = ?4 WHERE id = ?5",
@@ -3552,6 +3670,53 @@ mod tests {
     }
 
     #[test]
+    fn preview_deleted_session_reads_backup_messages() {
+        let record_dir = temp_path("deleted-preview");
+        fs::create_dir_all(&record_dir).unwrap();
+        let record = DeletedSessionRecord {
+            delete_id: "delete-id".to_string(),
+            id: "019e20f9-34b7-7a82-a95b-fe461de8983a".to_string(),
+            title: "已删除预览".to_string(),
+            deleted_at: "2026-05-13T10:55:00Z".to_string(),
+            updated_at: Some("2026-05-13T10:54:00Z".to_string()),
+            original_status: "active".to_string(),
+            original_relative_path: "sessions/2026/05/13/rollout-2026-05-13T10-54-00-test.jsonl"
+                .to_string(),
+            deleted_relative_path: "sessions/2026/05/13/rollout-2026-05-13T10-54-00-test.jsonl"
+                .to_string(),
+            root_path: "C:\\Users\\yuhon\\.codex".to_string(),
+            size_bytes: 0,
+            cwd: Some("C:\\work".to_string()),
+            session_file: "session.jsonl".to_string(),
+        };
+        write_deleted_session_record(&record_dir, &record).unwrap();
+        fs::write(
+            record_dir.join("session.jsonl"),
+            concat!(
+                "{\"timestamp\":\"2026-05-13T10:54:01Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"019e20f9-34b7-7a82-a95b-fe461de8983a\",\"cwd\":\"C:\\\\work\"}}\n",
+                "{\"timestamp\":\"2026-05-13T10:54:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"hi\"}}\n",
+                "{\"timestamp\":\"2026-05-13T10:54:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let preview = preview_deleted_conversation_from_record_dir(&record_dir).unwrap();
+        let messages = preview
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        fs::remove_dir_all(&record_dir).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["text"], "hi");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["text"], "hello");
+    }
+
+    #[test]
     fn zip_store_round_trip_reads_entries() {
         let path = temp_path("archive.zip");
         write_zip_store(
@@ -3575,5 +3740,160 @@ mod tests {
 
         assert_eq!(manifest, br#"{"ok":true}"#);
         assert_eq!(session, b"{}\n");
+    }
+
+    #[test]
+    fn status_change_syncs_session_index_for_codex_sidebar() {
+        let root = temp_path("status-index");
+        let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
+        let file_name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de8983a.jsonl";
+        let active_relative = PathBuf::from("sessions")
+            .join("2026")
+            .join("05")
+            .join("13")
+            .join(file_name);
+        let active_path = root.join(&active_relative);
+        fs::create_dir_all(active_path.parent().unwrap()).unwrap();
+        fs::write(
+            &active_path,
+            format!(
+                "{}\n{}\n",
+                json!({
+                    "timestamp": "2026-05-13T10:54:26.757Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": session_id,
+                        "cwd": "C:\\Users\\yuhon\\Documents\\Codex\\hello"
+                    }
+                }),
+                json!({
+                    "timestamp": "2026-05-13T10:54:27.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_name_updated",
+                        "thread_name": "测试归档索引"
+                    }
+                })
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            format!(
+                "{}\n",
+                json!({
+                    "id": session_id,
+                    "thread_name": "测试归档索引",
+                    "updated_at": "2026-05-13T10:54:27.000Z"
+                })
+            ),
+        )
+        .unwrap();
+
+        set_conversation_status_impl(
+            root.to_string_lossy().to_string(),
+            vec![path_to_slash(&active_relative)],
+            "archived".to_string(),
+            None,
+        )
+        .unwrap();
+        let archived_relative = PathBuf::from("archived_sessions").join(file_name);
+        let archived_path = root.join(&archived_relative);
+        let archived_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
+        assert!(archived_path.exists());
+        assert!(!archived_index.contains(session_id));
+
+        fs::write(
+            root.join("session_index.jsonl"),
+            format!(
+                "{}\n",
+                json!({
+                    "id": session_id,
+                    "thread_name": "旧版残留索引",
+                    "updated_at": "2026-05-13T10:54:27.000Z"
+                })
+            ),
+        )
+        .unwrap();
+        set_conversation_status_impl(
+            root.to_string_lossy().to_string(),
+            vec![path_to_slash(&archived_relative)],
+            "archived".to_string(),
+            None,
+        )
+        .unwrap();
+        let repaired_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
+        assert!(!repaired_index.contains(session_id));
+
+        set_conversation_status_impl(
+            root.to_string_lossy().to_string(),
+            vec![path_to_slash(&archived_relative)],
+            "active".to_string(),
+            None,
+        )
+        .unwrap();
+        let active_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
+
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(active_index.contains(session_id));
+        assert!(active_index.contains("测试归档索引"));
+    }
+
+    #[test]
+    fn scan_repairs_archived_session_index_residue() {
+        let root = temp_path("scan-repair-index");
+        let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
+        let file_name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de8983a.jsonl";
+        let archived_path = root.join("archived_sessions").join(file_name);
+        fs::create_dir_all(archived_path.parent().unwrap()).unwrap();
+        fs::write(
+            &archived_path,
+            format!(
+                "{}\n",
+                json!({
+                    "timestamp": "2026-05-13T10:54:26.757Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": session_id,
+                        "cwd": "C:\\Users\\yuhon\\Documents\\Codex\\hello"
+                    }
+                })
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({
+                    "id": session_id,
+                    "thread_name": "旧版残留索引",
+                    "updated_at": "2026-05-13T10:54:27.000Z"
+                }),
+                json!({
+                    "id": "active-session",
+                    "thread_name": "进行中会话",
+                    "updated_at": "2026-05-13T10:55:27.000Z"
+                })
+            ),
+        )
+        .unwrap();
+
+        let result = scan_conversations_impl(Some(root.to_string_lossy().to_string())).unwrap();
+        let repaired_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
+        let warnings = result
+            .get("warnings")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(!repaired_index.contains(session_id));
+        assert!(repaired_index.contains("active-session"));
+        assert!(warnings.iter().any(|warning| warning
+            .as_str()
+            .is_some_and(|text| text.contains("已清理 1 条已归档会话"))));
     }
 }

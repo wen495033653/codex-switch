@@ -115,6 +115,7 @@ fn main() {
             commands::list_brand_voice_files,
             session_manager::session_manager_scan,
             session_manager::session_manager_preview,
+            session_manager::session_manager_preview_deleted,
             session_manager::session_manager_select_root,
             session_manager::session_manager_select_workdir,
             session_manager::session_manager_export,

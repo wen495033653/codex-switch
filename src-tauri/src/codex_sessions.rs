@@ -9,9 +9,9 @@ use serde_json::Value;
 use std::{
     collections::HashSet,
     fs,
-    io::{Read, Seek, SeekFrom},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -20,7 +20,13 @@ const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
 const GLOBAL_STATE_FILE_NAME: &str = ".codex-global-state.json";
 const OPENAI_PROVIDER_ID: &str = "openai";
 
-static SESSION_SYNC_IO_LOCK: Mutex<()> = Mutex::new(());
+static CODEX_SESSION_IO_LOCK: Mutex<()> = Mutex::new(());
+
+pub(crate) fn lock_codex_session_io(action: &str) -> Result<MutexGuard<'static, ()>, String> {
+    CODEX_SESSION_IO_LOCK
+        .lock()
+        .map_err(|_| format!("{action} I/O 状态已损坏"))
+}
 
 fn session_rollout_dir_paths() -> Result<Vec<PathBuf>, String> {
     let codex_dir = codex_dir()?;
@@ -68,9 +74,7 @@ pub(crate) fn sync_codex_sessions_to_current_mode_now() -> Result<usize, String>
 
 pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
     let target_provider = normalize_target_provider(target_provider)?;
-    let _guard = SESSION_SYNC_IO_LOCK
-        .lock()
-        .map_err(|_| "Codex 会话同步 I/O 状态已损坏".to_string())?;
+    let _guard = lock_codex_session_io("Codex 会话同步")?;
     let mut updated = 0;
     let mut errors = Vec::new();
 
@@ -352,15 +356,30 @@ fn sync_rollout_file_provider(path: &Path, target_provider: &str) -> Result<bool
     }
 
     if changed {
-        fs::write(path, updated_content)
-            .map_err(|err| format!("写入 Codex session 文件失败 {}: {err}", path.display()))?;
-        fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .and_then(|file| file.set_modified(original_modified))
-            .map_err(|err| format!("恢复 Codex session 修改时间失败 {}: {err}", path.display()))?;
+        let wrote = write_existing_file(path, &updated_content, "写入 Codex session 文件")?;
+        if wrote {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .and_then(|file| file.set_modified(original_modified))
+                .map_err(|err| {
+                    format!("恢复 Codex session 修改时间失败 {}: {err}", path.display())
+                })?;
+        }
+        return Ok(wrote);
     }
     Ok(changed)
+}
+
+fn write_existing_file(path: &Path, content: &str, action: &str) -> Result<bool, String> {
+    let mut file = match fs::OpenOptions::new().write(true).truncate(true).open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(format!("{action}失败 {}: {err}", path.display())),
+    };
+    file.write_all(content.as_bytes())
+        .map_err(|err| format!("{action}失败 {}: {err}", path.display()))?;
+    Ok(true)
 }
 
 fn split_line_ending(segment: &str) -> (&str, &str) {

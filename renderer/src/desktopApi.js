@@ -63,6 +63,7 @@ const COMMAND_BINDINGS = {
     root: payload.root,
     relativePath: payload.relativePath
   })],
+  previewDeletedSession: ['session_manager_preview_deleted', deleteId => ({ deleteId })],
   selectSessionRoot: ['session_manager_select_root'],
   selectSessionWorkdir: ['session_manager_select_workdir'],
   exportSessions: ['session_manager_export', payload => ({

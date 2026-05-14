@@ -47,8 +47,7 @@ function deletedPreviewConversation(item) {
     size_bytes: item.size_bytes,
     cwd: item.cwd,
     source_path: item.root_path,
-    relative_path: item.original_relative_path,
-    parse_error: '已删除会话保存在 Codex Switch 数据目录，可恢复或彻底删除。'
+    relative_path: item.original_relative_path
   };
 }
 
@@ -151,13 +150,25 @@ export default function SessionManagerPage({ toast, toastError }) {
   const loadPreview = async (item) => {
     if (!item) return;
     if (item.status === 'deleted') {
-      setPreviewLoading(false);
+      const requestId = previewRequestRef.current + 1;
+      previewRequestRef.current = requestId;
       setActivePath(deletedActiveKey(item));
-      setPreview({
-        conversation: deletedPreviewConversation(item),
-        messages: [],
-        parse_error: '已删除会话保存在 Codex Switch 数据目录，可恢复或彻底删除。'
-      });
+      setPreviewLoading(true);
+      try {
+        const res = await window.api.previewDeletedSession(item.delete_id);
+        if (previewRequestRef.current !== requestId) return;
+        setPreview(res);
+      } catch (err) {
+        if (previewRequestRef.current !== requestId) return;
+        setPreview({
+          conversation: deletedPreviewConversation(item),
+          messages: [],
+          parse_error: err && err.message ? err.message : String(err || '读取已删除会话预览失败')
+        });
+        toastError(err, '读取已删除会话预览失败', 6000);
+      } finally {
+        if (previewRequestRef.current === requestId) setPreviewLoading(false);
+      }
       return;
     }
     if (!rootPath) return;
@@ -820,7 +831,6 @@ export default function SessionManagerPage({ toast, toastError }) {
           onConfirm={confirmDelete}
           content={(
             <div className="session-delete-confirm">
-              <p>将先把选中的会话备份到 Codex Switch 数据目录，再清理 Codex 索引并删除原会话文件。</p>
               <p>删除后的备份会保存在 Codex Switch 数据目录，可在“已删除”列表恢复或彻底删除。</p>
               <div className="session-delete-summary">
                 <span>数量：{deleteConfirm.paths.length}</span>

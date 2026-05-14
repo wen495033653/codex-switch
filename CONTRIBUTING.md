@@ -57,6 +57,12 @@ npm run dist
 
 如果本地环境不具备完整验证条件，请在 PR 描述中说明已运行的命令和未运行的原因。当前仓库没有单独的 unit test script。不要把单独的 `npm run build:renderer` 当作完整验证；它只覆盖 renderer 构建。
 
+## 本机文件与会话数据
+
+- 修改 Codex 会话文件、`session_index.jsonl`、`state_5.sqlite` 或 `.codex-global-state.json` 的代码必须先拿到 `codex_sessions::lock_codex_session_io(...)`，避免和后台会话同步互相覆盖。
+- 删除、导入、恢复、归档、移回进行中、修改工作目录这类会改变会话状态或路径的操作，都属于需要加锁的范围。
+- 后台会话同步写回 rollout 文件时，应只写已存在的文件；不要用会重新创建目标路径的写法复活刚被删除或移动的会话。
+
 ## 分支与 PR
 
 - 外部贡献流程：fork 本仓库 -> 在 fork 内创建 `feature/fix/chore` 分支 -> 提交 PR。
