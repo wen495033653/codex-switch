@@ -7,14 +7,6 @@ fn codex_session_sync_enabled(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-fn sync_codex_sessions_if_enabled(settings: &Value, target_provider: &str) -> Result<bool, String> {
-    if codex_session_sync_enabled(settings) {
-        sync_codex_session_index_then_queue_rollouts(target_provider)
-    } else {
-        Ok(false)
-    }
-}
-
 pub(super) fn capture_current_impl() -> Result<Value, String> {
     let auth = read_auth_value()?;
     let codex_state = get_codex_state_value();
@@ -91,23 +83,13 @@ pub(super) fn switch_account_impl(
         false,
         session_sync_enabled.then(|| "openai".to_string()),
     );
-    let session_sync_deferred = session_sync_enabled && ide_reopen.is_some();
-    let session_sync_result = if session_sync_deferred {
-        Ok(false)
+    let message = if session_sync_enabled && ide_reopen.is_some() {
+        "已切换到订阅模式；重新打开 IDE 前会同步会话".to_string()
     } else {
-        sync_codex_sessions_if_enabled(&settings, "openai")
+        "已切换到订阅模式".to_string()
     };
     let store = mark_store_account_used(account_id)?;
     refresh_active_account_usage_in_background(app);
-    let message = if session_sync_deferred {
-        "已切换到订阅模式；会话将在重新打开前同步".to_string()
-    } else {
-        match session_sync_result {
-            Ok(true) => "已切换到订阅模式；会话正在后台同步".to_string(),
-            Ok(false) => "已切换到订阅模式".to_string(),
-            Err(err) => format!("已切换到订阅模式；会话同步失败：{err}"),
-        }
-    };
     Ok(attach_ide_reopen(
         store_payload_from_store(store, Some(&message)),
         ide_reopen,
@@ -133,20 +115,10 @@ pub(super) fn switch_api_mode_impl(runtime: State<'_, Arc<IdeRuntime>>) -> Resul
         true,
         session_sync_enabled.then(|| "api".to_string()),
     );
-    let session_sync_deferred = session_sync_enabled && ide_reopen.is_some();
-    let session_sync_result = if session_sync_deferred {
-        Ok(false)
+    let message = if session_sync_enabled && ide_reopen.is_some() {
+        "已切换到 API 模式；重新打开 IDE 前会同步会话".to_string()
     } else {
-        sync_codex_sessions_if_enabled(&settings, "api")
-    };
-    let message = if session_sync_deferred {
-        "已切换到 API 模式；会话将在重新打开前同步".to_string()
-    } else {
-        match session_sync_result {
-            Ok(true) => "已切换到 API 模式；会话正在后台同步".to_string(),
-            Ok(false) => "已切换到 API 模式".to_string(),
-            Err(err) => format!("已切换到 API 模式；会话同步失败：{err}"),
-        }
+        "已切换到 API 模式".to_string()
     };
     Ok(attach_ide_reopen(
         store_payload(Some(&message))?,

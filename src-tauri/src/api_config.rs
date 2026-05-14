@@ -1,7 +1,6 @@
 use url::Url;
 
 pub(crate) const DEFAULT_API_NAME: &str = "api";
-pub(crate) const OPENAI_PROVIDER_ID: &str = "openai";
 pub(crate) const API_PROVIDER_ID: &str = "api";
 
 pub(crate) fn api_provider_name(name: &str) -> String {

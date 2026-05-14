@@ -31,7 +31,7 @@ fn watch_codex_plugin_takeover() {
     loop {
         let now = Instant::now();
 
-        if !plugin_takeover_enabled() {
+        if !codex_plugin_takeover_enabled().unwrap_or(false) {
             reset_candidate(&mut candidate_pids, &mut candidate_since);
             sleep_interval();
             continue;
@@ -123,12 +123,6 @@ fn sleep_interval() {
 
 fn until_active(until: Option<Instant>, now: Instant) -> bool {
     until.is_some_and(|deadline| now < deadline)
-}
-
-fn plugin_takeover_enabled() -> bool {
-    read_settings_value()
-        .map(|settings| bool_field(&settings, "codex_plugins_enabled"))
-        .unwrap_or(false)
 }
 
 fn plugin_cdp_port_listening() -> bool {

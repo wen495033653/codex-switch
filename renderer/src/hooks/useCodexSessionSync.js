@@ -24,17 +24,6 @@ export function useCodexSessionSync({
       return;
     }
 
-    if (enabled) {
-      try {
-        const res = await window.api.syncCodexSessions();
-        if (res && res.ok !== true) {
-          throw new Error(res.message || '订阅/API 会话同步失败');
-        }
-      } catch (err) {
-        toastError(err, '会话同步已开启，但当前同步失败', 7000);
-      }
-    }
-
     setSavingCodexSessionSync(false);
   };
 

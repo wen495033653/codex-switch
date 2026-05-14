@@ -73,7 +73,6 @@ fn main() {
                 app.handle().clone(),
                 Arc::clone(app.state::<Arc<RefreshAllRuntime>>().inner()),
             );
-            codex_sessions::start_codex_session_sync_watcher();
             codex_launcher::start_codex_plugin_takeover_watcher();
             Ok(())
         })
@@ -97,7 +96,6 @@ fn main() {
             codex_launcher::restart_codex_app_with_plugins,
             codex_launcher::restart_open_ides,
             codex_launcher::discard_ide_snapshot,
-            codex_sessions::sync_codex_sessions,
             commands::import_accounts,
             commands::export_accounts,
             commands::refresh_all_quotas,

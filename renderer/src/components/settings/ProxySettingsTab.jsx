@@ -17,7 +17,7 @@ export default function ProxySettingsTab({
     const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const pluginSaving = savingCodexPlugins || switching;
-    const sessionSyncHelp = 'Codex 订阅和 API 模式默认使用独立 workspace，会话列表不同步；开启后会同步两种模式的会话列表。';
+    const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex app 或 VS Code 前同步会话列表。';
 
     return (
         <>
@@ -90,7 +90,7 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-session-sync-section">
                 <div className="settings-section-head">
                     <div className="settings-section-title">会话同步</div>
-                    <div className="settings-section-desc">订阅/API 模式使用同一份会话列表</div>
+                    <div className="settings-section-desc">重新打开 IDE 前同步会话列表</div>
                 </div>
                 <button
                     type="button"

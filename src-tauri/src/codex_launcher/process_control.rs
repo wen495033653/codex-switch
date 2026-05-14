@@ -52,10 +52,6 @@ pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String>
     if !path.exists() {
         return Ok(false);
     }
-    if should_launch_codex_with_plugins(&path)? {
-        launch_codex_with_plugins(&path)?;
-        return Ok(true);
-    }
 
     let mut command = Command::new(&path);
     command

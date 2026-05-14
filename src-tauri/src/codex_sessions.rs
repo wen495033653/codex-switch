@@ -1,51 +1,20 @@
-use crate::{
-    accounts::{get_codex_state_value, restore_api_mode_if_selected},
-    api_config::{API_PROVIDER_ID, OPENAI_PROVIDER_ID},
-    json_util::raw_string_field,
-    paths::codex_dir,
-    settings::read_settings_value,
-};
+use crate::{json_util::raw_string_field, paths::codex_dir};
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Mutex,
-    thread,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
-const SESSION_SYNC_WATCH_INTERVAL_SECONDS: u64 = 60;
 const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 50;
-const SESSION_SYNC_RESTART_ROLLOUT_LIMIT: usize = 50;
 const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
+const GLOBAL_STATE_FILE_NAME: &str = ".codex-global-state.json";
 
-struct SessionSyncState {
-    running: bool,
-    pending_provider: Option<String>,
-}
-
-static SESSION_SYNC_STATE: Mutex<SessionSyncState> = Mutex::new(SessionSyncState {
-    running: false,
-    pending_provider: None,
-});
 static SESSION_SYNC_IO_LOCK: Mutex<()> = Mutex::new(());
-
-fn current_session_provider() -> Result<String, String> {
-    restore_api_mode_if_selected()?;
-    let state = get_codex_state_value();
-    let model_provider = raw_string_field(&state, "model_provider");
-    if !model_provider.is_empty() {
-        return Ok(model_provider);
-    }
-
-    match raw_string_field(&state, "mode").as_str() {
-        "api" => Ok(API_PROVIDER_ID.to_string()),
-        "chatgpt" => Ok(OPENAI_PROVIDER_ID.to_string()),
-        _ => Err("当前 Codex 模式未知，无法同步会话".to_string()),
-    }
-}
 
 fn session_rollout_dir_paths() -> Result<Vec<PathBuf>, String> {
     let codex_dir = codex_dir()?;
@@ -59,49 +28,8 @@ fn state_db_path() -> Result<PathBuf, String> {
     Ok(codex_dir()?.join("state_5.sqlite"))
 }
 
-pub(crate) fn queue_codex_sessions_to_current_mode() -> Result<bool, String> {
-    let target_provider = current_session_provider()?;
-    queue_codex_sessions_to_provider(&target_provider)
-}
-
-pub(crate) fn queue_codex_sessions_to_provider(target_provider: &str) -> Result<bool, String> {
-    queue_codex_sessions_to_provider_impl(target_provider, true)
-}
-
-pub(crate) fn sync_codex_session_index_then_queue_rollouts(
-    target_provider: &str,
-) -> Result<bool, String> {
-    let target_provider = normalize_target_provider(target_provider)?;
-    sync_codex_state_threads_to_provider_if_exists(&target_provider)?;
-    queue_codex_sessions_to_provider_impl(&target_provider, true)
-}
-
-fn queue_codex_sessions_to_current_mode_if_idle() -> Result<bool, String> {
-    let target_provider = current_session_provider()?;
-    queue_codex_sessions_to_provider_impl(&target_provider, false)
-}
-
-fn queue_codex_sessions_to_provider_impl(
-    target_provider: &str,
-    replace_pending: bool,
-) -> Result<bool, String> {
-    let target_provider = normalize_target_provider(target_provider)?;
-    let mut state = SESSION_SYNC_STATE
-        .lock()
-        .map_err(|_| "Codex 会话同步状态已损坏".to_string())?;
-
-    if state.running {
-        if replace_pending {
-            state.pending_provider = Some(target_provider);
-            return Ok(true);
-        }
-        return Ok(false);
-    }
-
-    state.running = true;
-    state.pending_provider = Some(target_provider);
-    thread::spawn(run_queued_session_sync_worker);
-    Ok(true)
+fn global_state_path() -> Result<PathBuf, String> {
+    Ok(codex_dir()?.join(GLOBAL_STATE_FILE_NAME))
 }
 
 fn normalize_target_provider(target_provider: &str) -> Result<String, String> {
@@ -139,55 +67,13 @@ pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Resu
     }
 }
 
-pub(crate) fn sync_recent_codex_sessions_to_current_mode_now_if_enabled(
-) -> Result<Option<usize>, String> {
-    if !codex_session_sync_enabled() {
-        return Ok(None);
-    }
-    let target_provider = current_session_provider()?;
-    sync_recent_codex_sessions_to_provider_now(&target_provider).map(Some)
-}
-
-fn sync_recent_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
-    let target_provider = normalize_target_provider(target_provider)?;
-    let _guard = SESSION_SYNC_IO_LOCK
-        .lock()
-        .map_err(|_| "Codex 会话同步 I/O 状态已损坏".to_string())?;
-    let mut updated = 0;
-    let mut errors = Vec::new();
-
-    match sync_codex_state_threads_to_provider_if_exists(&target_provider) {
-        Ok(count) => updated += count,
-        Err(err) => errors.push(err),
-    }
-    match sync_recent_codex_session_rollouts_to_provider_if_exists(&target_provider) {
-        Ok(count) => updated += count,
-        Err(err) => errors.push(err),
-    }
-
-    if errors.is_empty() {
-        Ok(updated)
-    } else {
-        Err(format!(
-            "同步 Codex 会话失败，已更新 {updated} 项：{}",
-            errors.join("；")
-        ))
-    }
-}
-
 fn sync_codex_session_rollouts_to_provider_if_exists(
     target_provider: &str,
 ) -> Result<usize, String> {
-    sync_codex_session_rollout_dirs_to_provider(&session_rollout_dir_paths()?, target_provider)
-}
-
-fn sync_recent_codex_session_rollouts_to_provider_if_exists(
-    target_provider: &str,
-) -> Result<usize, String> {
-    sync_recent_codex_session_rollout_dirs_to_provider_by_modified_time(
+    sync_codex_session_rollout_dirs_to_provider(
         &session_rollout_dir_paths()?,
         target_provider,
-        SESSION_SYNC_RESTART_ROLLOUT_LIMIT,
+        &pinned_thread_rollout_paths_if_exists()?,
     )
 }
 
@@ -196,100 +82,33 @@ fn sync_codex_state_threads_to_provider_if_exists(target_provider: &str) -> Resu
     sync_codex_state_threads_to_provider(&state_db, target_provider)
 }
 
-fn run_queued_session_sync_worker() {
-    let mut last_error = String::new();
-    loop {
-        let target_provider = match take_pending_session_sync_provider() {
-            Ok(Some(target_provider)) => target_provider,
-            Ok(None) => break,
-            Err(err) => {
-                eprintln!("Codex 会话同步失败: {err}");
-                break;
-            }
-        };
-
-        match sync_codex_sessions_to_provider_now(&target_provider) {
-            Ok(_) => last_error.clear(),
-            Err(err) if err != last_error => {
-                eprintln!("Codex 会话同步失败: {err}");
-                last_error = err;
-            }
-            Err(_) => {}
-        }
-    }
-}
-
-fn take_pending_session_sync_provider() -> Result<Option<String>, String> {
-    let mut state = SESSION_SYNC_STATE
-        .lock()
-        .map_err(|_| "Codex 会话同步状态已损坏".to_string())?;
-    if let Some(target_provider) = state.pending_provider.take() {
-        return Ok(Some(target_provider));
-    }
-    state.running = false;
-    Ok(None)
-}
-
+#[cfg(test)]
 fn sync_codex_session_rollouts_to_provider(
     sessions_dir: &Path,
     target_provider: &str,
 ) -> Result<usize, String> {
-    let mut updated = 0;
-    let mut errors = Vec::new();
     let rollout_files =
         collect_recent_rollout_files(sessions_dir, SESSION_SYNC_RECENT_ROLLOUT_LIMIT)?;
-    for path in rollout_files {
-        match sync_rollout_file_provider(&path, target_provider) {
-            Ok(true) => updated += 1,
-            Ok(false) => {}
-            Err(err) => errors.push(err),
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(updated)
-    } else {
-        Err(format!(
-            "同步 Codex 会话失败，已更新 {updated} 个文件，{} 个文件失败：{}",
-            errors.len(),
-            errors.join("；")
-        ))
-    }
+    sync_rollout_files_to_provider(rollout_files, target_provider)
 }
 
 fn sync_codex_session_rollout_dirs_to_provider(
     rollout_dirs: &[PathBuf],
     target_provider: &str,
+    extra_rollout_paths: &[PathBuf],
 ) -> Result<usize, String> {
-    let mut updated = 0;
-    let mut errors = Vec::new();
-
-    for dir in rollout_dirs {
-        if !dir.exists() {
-            continue;
-        }
-        match sync_codex_session_rollouts_to_provider(dir, target_provider) {
-            Ok(count) => updated += count,
-            Err(err) => errors.push(err),
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(updated)
-    } else {
-        Err(format!(
-            "同步 Codex 会话失败，已更新 {updated} 项：{}",
-            errors.join("；")
-        ))
-    }
+    let rollout_files = collect_recent_rollout_files_from_dirs(
+        rollout_dirs,
+        SESSION_SYNC_RECENT_ROLLOUT_LIMIT,
+        extra_rollout_paths,
+    )?;
+    sync_rollout_files_to_provider(rollout_files, target_provider)
 }
 
-fn sync_recent_codex_session_rollout_dirs_to_provider_by_modified_time(
-    rollout_dirs: &[PathBuf],
+fn sync_rollout_files_to_provider(
+    rollout_files: Vec<PathBuf>,
     target_provider: &str,
-    limit: usize,
 ) -> Result<usize, String> {
-    let rollout_files = collect_recent_modified_rollout_files(rollout_dirs, limit)?;
     let mut updated = 0;
     let mut errors = Vec::new();
 
@@ -318,47 +137,43 @@ struct RolloutFileCandidate {
     sort_key: String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct RolloutFileModifiedCandidate {
-    path: PathBuf,
-    modified: SystemTime,
+#[cfg(test)]
+fn collect_recent_rollout_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    collect_recent_rollout_files_from_dirs(&[dir.to_path_buf()], limit, &[])
 }
 
-fn collect_recent_rollout_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+fn collect_recent_rollout_files_from_dirs(
+    dirs: &[PathBuf],
+    limit: usize,
+    extra_rollout_paths: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
-    collect_rollout_file_candidates(dir, &mut files)?;
+    for dir in dirs {
+        if dir.exists() {
+            collect_rollout_file_candidates(dir, &mut files)?;
+        }
+    }
     files.sort_by(|a, b| {
         b.sort_key
             .cmp(&a.sort_key)
             .then_with(|| b.path.cmp(&a.path))
     });
-    Ok(files
-        .into_iter()
-        .take(limit)
-        .map(|candidate| candidate.path)
-        .collect())
-}
 
-fn collect_recent_modified_rollout_files(
-    dirs: &[PathBuf],
-    limit: usize,
-) -> Result<Vec<PathBuf>, String> {
-    let mut files = Vec::new();
-    for dir in dirs {
-        if dir.exists() {
-            collect_modified_rollout_file_candidates(dir, &mut files)?;
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in files.into_iter().take(limit) {
+        if seen.insert(candidate.path.clone()) {
+            selected.push(candidate.path);
         }
     }
-    files.sort_by(|a, b| {
-        b.modified
-            .cmp(&a.modified)
-            .then_with(|| b.path.cmp(&a.path))
-    });
-    Ok(files
-        .into_iter()
-        .take(limit)
-        .map(|candidate| candidate.path)
-        .collect())
+
+    for path in extra_rollout_paths {
+        if path.is_file() && is_rollout_jsonl(path) && seen.insert(path.clone()) {
+            selected.push(path.clone());
+        }
+    }
+
+    Ok(selected)
 }
 
 fn collect_rollout_file_candidates(
@@ -378,32 +193,6 @@ fn collect_rollout_file_candidates(
         } else if file_type.is_file() && is_rollout_jsonl(&path) {
             let sort_key = rollout_activity_sort_key(&path);
             files.push(RolloutFileCandidate { path, sort_key });
-        }
-    }
-    Ok(())
-}
-
-fn collect_modified_rollout_file_candidates(
-    dir: &Path,
-    files: &mut Vec<RolloutFileModifiedCandidate>,
-) -> Result<(), String> {
-    let entries = fs::read_dir(dir)
-        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", dir.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| format!("读取 Codex session 目录条目失败: {err}"))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|err| format!("读取 Codex session 文件类型失败 {}: {err}", path.display()))?;
-        if file_type.is_dir() {
-            collect_modified_rollout_file_candidates(&path, files)?;
-        } else if file_type.is_file() && is_rollout_jsonl(&path) {
-            let modified = fs::metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .map_err(|err| {
-                    format!("读取 Codex session 修改时间失败 {}: {err}", path.display())
-                })?;
-            files.push(RolloutFileModifiedCandidate { path, modified });
         }
     }
     Ok(())
@@ -635,6 +424,73 @@ fn update_model_provider_fields(value: &mut Value, target_provider: &str) -> boo
     }
 }
 
+fn pinned_thread_rollout_paths_if_exists() -> Result<Vec<PathBuf>, String> {
+    pinned_thread_rollout_paths(&global_state_path()?, &state_db_path()?)
+}
+
+fn pinned_thread_rollout_paths(
+    global_state: &Path,
+    state_db: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    if !global_state.exists() || !state_db.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(global_state).map_err(|err| {
+        format!(
+            "读取 Codex global state 失败 {}: {err}",
+            global_state.display()
+        )
+    })?;
+    let state: Value = serde_json::from_str(&content).map_err(|err| {
+        format!(
+            "解析 Codex global state 失败 {}: {err}",
+            global_state.display()
+        )
+    })?;
+    let pinned_thread_ids = state
+        .get("pinned-thread-ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if pinned_thread_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let connection = Connection::open_with_flags(
+        state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("打开 Codex state 数据库失败 {}: {err}", state_db.display()))?;
+    let mut statement = connection
+        .prepare("SELECT rollout_path FROM threads WHERE id = ?1")
+        .map_err(|err| {
+            format!(
+                "读取 Codex pinned thread rollout 查询失败 {}: {err}",
+                state_db.display()
+            )
+        })?;
+
+    let mut paths = Vec::new();
+    for thread_id in pinned_thread_ids {
+        let thread_id = thread_id.as_str().unwrap_or("").trim();
+        if thread_id.is_empty() {
+            continue;
+        }
+        match statement.query_row([thread_id], |row| row.get::<_, String>(0)) {
+            Ok(path) if !path.trim().is_empty() => paths.push(PathBuf::from(path)),
+            Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => {}
+            Err(err) => {
+                return Err(format!(
+                    "读取 Codex pinned thread rollout 失败 {thread_id}: {err}"
+                ))
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
 fn sync_codex_state_threads_to_provider(
     state_db: &Path,
     target_provider: &str,
@@ -671,51 +527,6 @@ fn sync_codex_state_threads_to_provider(
         .commit()
         .map_err(|err| format!("保存 Codex state 会话同步结果失败: {err}"))?;
     Ok(updated)
-}
-
-fn codex_session_sync_enabled() -> bool {
-    read_settings_value()
-        .ok()
-        .and_then(|settings| {
-            settings
-                .get("codex_session_sync_enabled")
-                .and_then(Value::as_bool)
-        })
-        .unwrap_or(true)
-}
-
-pub(crate) fn start_codex_session_sync_watcher() {
-    thread::spawn(move || {
-        let mut last_error = String::new();
-        loop {
-            if codex_session_sync_enabled() {
-                match queue_codex_sessions_to_current_mode_if_idle() {
-                    Ok(_) => last_error.clear(),
-                    Err(err) if err != last_error => {
-                        eprintln!("Codex 会话同步失败: {err}");
-                        last_error = err;
-                    }
-                    Err(_) => {}
-                }
-            }
-            thread::sleep(Duration::from_secs(SESSION_SYNC_WATCH_INTERVAL_SECONDS));
-        }
-    });
-}
-
-#[tauri::command]
-pub(crate) fn sync_codex_sessions() -> Result<Value, String> {
-    let queued = queue_codex_sessions_to_current_mode()?;
-    let message = if queued {
-        "会话同步已转入后台".to_string()
-    } else {
-        "会话同步正在后台进行".to_string()
-    };
-    Ok(json!({
-        "ok": true,
-        "queued": queued,
-        "message": message
-    }))
 }
 
 #[cfg(test)]

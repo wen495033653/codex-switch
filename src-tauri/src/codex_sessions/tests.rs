@@ -44,21 +44,37 @@ fn create_state_db(path: &Path) {
         .execute(
             "CREATE TABLE threads (
                 id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
                 model_provider TEXT NOT NULL,
                 cwd TEXT NOT NULL
             )",
             [],
         )
         .unwrap();
-    for (id, provider, cwd) in [
-        ("thread-api", "api", "E:\\Project\\api"),
-        ("thread-openai", "openai", "D:\\Workspace\\openai"),
-        ("thread-custom", "custom-provider", "F:\\Work\\custom"),
+    for (id, provider, cwd, rollout_path) in [
+        (
+            "thread-api",
+            "api",
+            "E:\\Project\\api",
+            "E:\\Project\\api\\rollout-api.jsonl",
+        ),
+        (
+            "thread-openai",
+            "openai",
+            "D:\\Workspace\\openai",
+            "D:\\Workspace\\openai\\rollout-openai.jsonl",
+        ),
+        (
+            "thread-custom",
+            "custom-provider",
+            "F:\\Work\\custom",
+            "F:\\Work\\custom\\rollout-custom.jsonl",
+        ),
     ] {
         connection
             .execute(
-                "INSERT INTO threads (id, model_provider, cwd) VALUES (?1, ?2, ?3)",
-                (id, provider, cwd),
+                "INSERT INTO threads (id, model_provider, cwd, rollout_path) VALUES (?1, ?2, ?3, ?4)",
+                (id, provider, cwd, rollout_path),
             )
             .unwrap();
     }
@@ -128,6 +144,7 @@ fn sync_session_provider_updates_sessions_and_archived_sessions() {
     let updated = sync_codex_session_rollout_dirs_to_provider(
         &[sessions_dir, archived_dir, root.join("missing_sessions")],
         "api",
+        &[],
     )
     .unwrap();
 
@@ -156,12 +173,12 @@ fn sync_session_provider_updates_sessions_and_archived_sessions() {
 }
 
 #[test]
-fn recent_sync_uses_combined_modified_time_limit() {
-    let root = unique_sessions_dir("combined-mtime-limit");
+fn sync_uses_combined_activity_time_limit() {
+    let root = unique_sessions_dir("combined-activity-limit");
     let sessions_dir = root.join("sessions");
     let archived_dir = root.join("archived_sessions");
     let mut paths = Vec::new();
-    let count = SESSION_SYNC_RESTART_ROLLOUT_LIMIT + 4;
+    let count = SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 4;
     let base_time = 1_700_000_000u64;
 
     for index in 0..count {
@@ -171,8 +188,10 @@ fn recent_sync_uses_combined_modified_time_limit() {
             &archived_dir
         };
         let path = dir.join(format!("rollout-{index:03}.jsonl"));
-        write_rollout_file(&path, "openai", "E:\\Project\\ai");
-        let modified = SystemTime::UNIX_EPOCH + StdDuration::from_secs(base_time + index as u64);
+        let timestamp = format!("2026-05-07T00:{:02}:{:02}.000Z", index / 60, index % 60);
+        write_rollout_file_with_timestamp(&path, "openai", "E:\\Project\\ai", &timestamp);
+        let modified = SystemTime::UNIX_EPOCH
+            + StdDuration::from_secs(base_time + count as u64 - index as u64);
         fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -182,14 +201,11 @@ fn recent_sync_uses_combined_modified_time_limit() {
         paths.push((index, path));
     }
 
-    let updated = sync_recent_codex_session_rollout_dirs_to_provider_by_modified_time(
-        &[sessions_dir, archived_dir],
-        "api",
-        SESSION_SYNC_RESTART_ROLLOUT_LIMIT,
-    )
-    .unwrap();
+    let updated =
+        sync_codex_session_rollout_dirs_to_provider(&[sessions_dir, archived_dir], "api", &[])
+            .unwrap();
 
-    assert_eq!(updated, SESSION_SYNC_RESTART_ROLLOUT_LIMIT);
+    assert_eq!(updated, SESSION_SYNC_RECENT_ROLLOUT_LIMIT);
     for (index, path) in paths {
         let line = fs::read_to_string(path)
             .unwrap()
@@ -206,6 +222,80 @@ fn recent_sync_uses_combined_modified_time_limit() {
     }
 
     fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn sync_always_updates_pinned_rollouts() {
+    let root = unique_sessions_dir("pinned-rollouts");
+    let sessions_dir = root.join("sessions");
+    let archived_dir = root.join("archived_sessions");
+    let pinned_path = sessions_dir.join("rollout-pinned.jsonl");
+    let state_db = root.join("state_5.sqlite");
+    let global_state = root.join(GLOBAL_STATE_FILE_NAME);
+    let count = SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 4;
+
+    write_rollout_file_with_timestamp(
+        &pinned_path,
+        "openai",
+        "E:\\Project\\pinned",
+        "2026-05-01T00:00:00.000Z",
+    );
+    for index in 0..count {
+        let dir = if index % 2 == 0 {
+            &sessions_dir
+        } else {
+            &archived_dir
+        };
+        let path = dir.join(format!("rollout-{index:03}.jsonl"));
+        let timestamp = format!("2026-05-07T00:{:02}:{:02}.000Z", index / 60, index % 60);
+        write_rollout_file_with_timestamp(&path, "openai", "E:\\Project\\ai", &timestamp);
+    }
+
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    connection
+        .execute(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path) VALUES (?1, ?2)",
+            ("pinned-thread", pinned_path.to_string_lossy().to_string()),
+        )
+        .unwrap();
+    drop(connection);
+    fs::write(
+        &global_state,
+        json!({ "pinned-thread-ids": ["pinned-thread"] }).to_string(),
+    )
+    .unwrap();
+
+    let pinned_rollouts = pinned_thread_rollout_paths(&global_state, &state_db).unwrap();
+    let updated = sync_codex_session_rollout_dirs_to_provider(
+        &[sessions_dir, archived_dir],
+        "api",
+        &pinned_rollouts,
+    )
+    .unwrap();
+
+    let pinned_line = fs::read_to_string(&pinned_path)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let pinned_meta: Value = serde_json::from_str(&pinned_line).unwrap();
+
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(pinned_rollouts, vec![pinned_path]);
+    assert_eq!(updated, SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 1);
+    assert_eq!(pinned_meta["payload"]["model_provider"], "api");
 }
 
 #[test]

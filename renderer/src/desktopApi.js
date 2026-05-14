@@ -35,7 +35,6 @@ const COMMAND_BINDINGS = {
   deleteAccount: ['delete_account', id => ({ id })],
   switchAccount: ['switch_account', id => ({ id })],
   switchApiMode: ['switch_api_mode'],
-  syncCodexSessions: ['sync_codex_sessions'],
   setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled),
     proxyUrl: payload && payload.proxyUrl ? payload.proxyUrl : ''

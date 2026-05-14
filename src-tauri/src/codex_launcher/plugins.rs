@@ -1,5 +1,4 @@
 use super::*;
-use crate::codex_sessions::sync_recent_codex_sessions_to_current_mode_now_if_enabled;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
     io::{Read, Write},
@@ -146,13 +145,6 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 })();
 "###;
 
-pub(crate) fn should_launch_codex_with_plugins(path: &Path) -> Result<bool, String> {
-    if !cfg!(windows) || !is_codex_app_executable(path) {
-        return Ok(false);
-    }
-    codex_plugins_enabled()
-}
-
 pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("Codex app 插件解锁目前仅支持 Windows 重启入口".to_string());
@@ -233,8 +225,6 @@ pub(crate) fn restart_codex_app_with_plugins() -> Result<Value, String> {
         return Err("Codex app 进程未能退出，请手动关闭后重试".to_string());
     }
 
-    let session_sync_warning = sync_recent_codex_sessions_to_current_mode_now_if_enabled().err();
-
     let mut restarted = 0usize;
     for executable in executables {
         launch_codex_with_plugins(Path::new(&executable))?;
@@ -247,11 +237,6 @@ pub(crate) fn restart_codex_app_with_plugins() -> Result<Value, String> {
     } else {
         "未能重启 Codex app 插件模式".to_string()
     };
-    let message = if let Some(err) = session_sync_warning {
-        format!("{message}；会话同步失败：{err}")
-    } else {
-        message
-    };
 
     Ok(json!({
         "ok": true,
@@ -261,20 +246,16 @@ pub(crate) fn restart_codex_app_with_plugins() -> Result<Value, String> {
     }))
 }
 
-fn codex_plugins_enabled() -> Result<bool, String> {
-    read_settings_value().map(|settings| bool_field(&settings, "codex_plugins_enabled"))
+pub(crate) fn codex_plugin_takeover_enabled() -> Result<bool, String> {
+    read_settings_value().map(|settings| codex_plugin_takeover_enabled_from_settings(&settings))
 }
 
-fn is_codex_app_executable(path: &Path) -> bool {
-    let normalized = path
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .replace('/', "\\");
-    let file_name = normalized.rsplit('\\').next().unwrap_or("");
-    file_name == "codex.exe"
-        && normalized.contains("\\openai.codex_")
-        && normalized.contains("\\app\\codex.exe")
-        && !normalized.contains("\\app\\resources\\codex.exe")
+fn codex_plugin_takeover_enabled_from_settings(settings: &Value) -> bool {
+    bool_field(settings, "codex_plugins_enabled")
+        || settings
+            .get("codex_session_sync_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
 }
 
 fn select_loopback_port(requested: u16) -> Result<u16, String> {
@@ -554,16 +535,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_packaged_codex_app_executable() {
-        assert!(is_codex_app_executable(Path::new(
-            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__abc\App\Codex.exe"
-        )));
-    }
-
-    #[test]
-    fn ignores_embedded_codex_resource_executable() {
-        assert!(!is_codex_app_executable(Path::new(
-            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__abc\App\resources\codex.exe"
-        )));
+    fn plugin_takeover_is_enabled_by_session_sync() {
+        assert!(codex_plugin_takeover_enabled_from_settings(&json!({
+            "codex_plugins_enabled": false,
+            "codex_session_sync_enabled": true
+        })));
+        assert!(codex_plugin_takeover_enabled_from_settings(&json!({
+            "codex_plugins_enabled": true,
+            "codex_session_sync_enabled": false
+        })));
+        assert!(!codex_plugin_takeover_enabled_from_settings(&json!({
+            "codex_plugins_enabled": false,
+            "codex_session_sync_enabled": false
+        })));
     }
 }
