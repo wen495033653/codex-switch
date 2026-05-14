@@ -36,6 +36,7 @@ pub(crate) struct IdeRuntime {
 
 mod codex_app;
 mod ide_snapshot;
+mod plugin_watcher;
 mod plugins;
 mod process_control;
 mod scripts;
@@ -43,6 +44,7 @@ mod shell;
 
 pub(crate) use codex_app::*;
 pub(crate) use ide_snapshot::*;
+pub(crate) use plugin_watcher::*;
 pub(crate) use plugins::*;
 pub(crate) use process_control::*;
 pub(crate) use scripts::*;

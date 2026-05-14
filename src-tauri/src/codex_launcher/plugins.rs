@@ -6,7 +6,7 @@ use std::{
 };
 use url::Url;
 
-const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
+pub(crate) const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 (() => {

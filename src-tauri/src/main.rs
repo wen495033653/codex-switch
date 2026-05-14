@@ -74,6 +74,7 @@ fn main() {
                 Arc::clone(app.state::<Arc<RefreshAllRuntime>>().inner()),
             );
             codex_sessions::start_codex_session_sync_watcher();
+            codex_launcher::start_codex_plugin_takeover_watcher();
             Ok(())
         })
         .on_window_event(|window, event| {

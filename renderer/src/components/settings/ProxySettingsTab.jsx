@@ -10,9 +10,11 @@ export default function ProxySettingsTab({
     setCodexSessionSyncEnabled,
     settingsDraft,
     switching,
-    updateCodexProxySettings
+    updateCodexProxySettings,
+    updateSettingsDraftAndSave
 }) {
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
+    const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const pluginSaving = savingCodexPlugins || switching;
     const sessionSyncHelp = 'Codex 订阅和 API 模式默认使用独立 workspace，会话列表不同步；开启后会同步两种模式的会话列表。';
@@ -54,19 +56,35 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-plugin-section">
                 <div className="settings-section-head">
                     <div className="settings-section-title">解锁 API 模式 Plugin</div>
-                    <div className="settings-section-desc">点击后由 Codex Switch 重启当前 Codex app，并解锁 Plugin</div>
+                    <div className="settings-section-desc">开启后由 Codex Switch 解锁 Codex app Plugin</div>
                 </div>
-                <div className="settings-suboption-panel settings-plugin-action-panel">
-                    <button
-                        type="button"
-                        className="btn btn-secondary"
-                        aria-label="重启 Codex app 并显示 Plugin 入口"
-                        disabled={pluginSaving}
-                        onClick={restartCodexAppWithPlugins}
-                    >
-                        {savingCodexPlugins ? '重启中...' : '重启 Codex app'}
-                    </button>
-                </div>
+                <button
+                    type="button"
+                    className={`settings-toggle-row ${codexPluginsEnabled ? 'active' : ''}`}
+                    aria-pressed={codexPluginsEnabled}
+                    aria-label={codexPluginsEnabled ? '关闭 Plugin 解锁' : '开启 Plugin 解锁'}
+                    disabled={pluginSaving}
+                    onClick={() => updateSettingsDraftAndSave({ codex_plugins_enabled: !codexPluginsEnabled })}
+                >
+                    <span className="settings-toggle-copy">
+                        <span className="settings-toggle-title">解锁 Plugin</span>
+                    </span>
+                    <span className="settings-switch" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                    </span>
+                </button>
+                {codexPluginsEnabled ? (
+                    <div className="settings-suboption-panel settings-plugin-action-panel">
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            disabled={pluginSaving}
+                            onClick={restartCodexAppWithPlugins}
+                        >
+                            {savingCodexPlugins ? '重启中...' : '重启 Codex app'}
+                        </button>
+                    </div>
+                ) : null}
             </section>
 
             <section className="settings-section settings-app-card-section settings-session-sync-section">
