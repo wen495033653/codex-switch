@@ -266,15 +266,11 @@ fn codex_plugins_enabled() -> Result<bool, String> {
 }
 
 fn is_codex_app_executable(path: &Path) -> bool {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
     let normalized = path
         .to_string_lossy()
         .to_ascii_lowercase()
         .replace('/', "\\");
+    let file_name = normalized.rsplit('\\').next().unwrap_or("");
     file_name == "codex.exe"
         && normalized.contains("\\openai.codex_")
         && normalized.contains("\\app\\codex.exe")
