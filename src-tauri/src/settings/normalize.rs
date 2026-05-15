@@ -86,6 +86,7 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "codex_proxy_url": codex_proxy_url,
         "codex_proxy_env_enabled": bool_field(data, "codex_proxy_env_enabled"),
         "codex_plugins_enabled": bool_field(data, "codex_plugins_enabled"),
+        "codex_delete_button_enabled": bool_field(data, "codex_delete_button_enabled"),
         "codex_session_sync_enabled": data
             .get("codex_session_sync_enabled")
             .and_then(Value::as_bool)
@@ -175,6 +176,20 @@ mod tests {
         assert_eq!(
             settings
                 .get("codex_plugins_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_codex_delete_button_enabled() {
+        let settings = normalize_settings(&json!({
+            "codex_delete_button_enabled": true
+        }));
+
+        assert_eq!(
+            settings
+                .get("codex_delete_button_enabled")
                 .and_then(Value::as_bool),
             Some(true)
         );

@@ -20,6 +20,7 @@ enum CodexRelaunchMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CodexAppOpenActions {
     plugin_unlock_enabled: bool,
+    delete_button_enabled: bool,
     session_sync_enabled: bool,
 }
 
@@ -27,6 +28,7 @@ impl CodexAppOpenActions {
     fn from_settings(settings: &Value) -> Self {
         Self {
             plugin_unlock_enabled: bool_field(settings, "codex_plugins_enabled"),
+            delete_button_enabled: bool_field(settings, "codex_delete_button_enabled"),
             session_sync_enabled: settings
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool)
@@ -35,7 +37,11 @@ impl CodexAppOpenActions {
     }
 
     fn enabled(self) -> bool {
-        self.plugin_unlock_enabled || self.session_sync_enabled
+        self.plugin_unlock_enabled || self.delete_button_enabled || self.session_sync_enabled
+    }
+
+    fn enhancement_enabled(self) -> bool {
+        self.plugin_unlock_enabled || self.delete_button_enabled
     }
 }
 
@@ -53,7 +59,7 @@ pub(crate) fn handle_codex_app_open(
         }
     }
 
-    if !actions.plugin_unlock_enabled {
+    if !actions.enhancement_enabled() {
         return Ok(CodexAppOpenOutcome::default());
     }
 
@@ -123,7 +129,7 @@ enum CodexRelaunchOrigin {
 
 fn codex_relaunch_mode_for_current_settings() -> Result<CodexRelaunchMode, String> {
     let actions = codex_app_open_actions()?;
-    Ok(if actions.plugin_unlock_enabled {
+    Ok(if actions.enhancement_enabled() {
         CodexRelaunchMode::Plugin
     } else {
         CodexRelaunchMode::Normal
@@ -222,14 +228,22 @@ mod tests {
     fn codex_app_open_actions_keep_plugin_and_session_actions_separate() {
         let session_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
+            "codex_delete_button_enabled": false,
             "codex_session_sync_enabled": true
         }));
         let plugin_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": true,
+            "codex_delete_button_enabled": false,
+            "codex_session_sync_enabled": false
+        }));
+        let delete_button_only = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": false,
+            "codex_delete_button_enabled": true,
             "codex_session_sync_enabled": false
         }));
         let disabled = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
+            "codex_delete_button_enabled": false,
             "codex_session_sync_enabled": false
         }));
 
@@ -238,7 +252,12 @@ mod tests {
         assert!(!session_only.plugin_unlock_enabled);
         assert!(plugin_only.enabled());
         assert!(plugin_only.plugin_unlock_enabled);
+        assert!(plugin_only.enhancement_enabled());
         assert!(!plugin_only.session_sync_enabled);
+        assert!(delete_button_only.enabled());
+        assert!(delete_button_only.delete_button_enabled);
+        assert!(delete_button_only.enhancement_enabled());
+        assert!(!delete_button_only.session_sync_enabled);
         assert!(!disabled.enabled());
     }
 }

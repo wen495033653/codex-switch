@@ -1,16 +1,21 @@
 use super::*;
+use crate::{json_util::bool_field, session_manager, settings::read_settings_value};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use serde::Deserialize;
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    sync::atomic::{AtomicI64, Ordering},
 };
 use url::Url;
 
 pub(crate) const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
+const CODEX_DELETE_BINDING_NAME: &str = "codexSwitchDeleteBridgeV1";
+static CDP_BRIDGE_COMMAND_ID: AtomicI64 = AtomicI64::new(100);
 const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 (() => {
-  const version = "3";
+  const version = "4";
   if (window.__codexSwitchPluginUnlockController?.version === version) {
     window.__codexSwitchPluginUnlockScan?.();
     return;
@@ -149,9 +154,254 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 })();
 "###;
 
+const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
+(() => {
+  const version = "4";
+  if (window.__codexSwitchDeleteButtonController?.version === version) {
+    window.__codexSwitchDeleteButtonScan?.();
+    return;
+  }
+  window.__codexSwitchDeleteButtonController?.stop?.();
+
+  const selectors = {
+    row: "[data-app-action-sidebar-thread-id]",
+    archiveButton: 'button[aria-label="归档对话"], button[aria-label="Archive conversation"]',
+    title: "[data-thread-title], .truncate.select-none, .truncate.text-base",
+  };
+  const controller = {
+    version,
+    observer: null,
+    interval: null,
+    timeout: null,
+    stopped: false,
+    stop() {
+      this.stopped = true;
+      this.observer?.disconnect?.();
+      if (this.interval) clearInterval(this.interval);
+      if (this.timeout) clearTimeout(this.timeout);
+    },
+  };
+  window.__codexSwitchDeleteButtonController = controller;
+
+  function showToast(message) {
+    document.querySelectorAll(".codex-switch-delete-toast").forEach((node) => node.remove());
+    const toast = document.createElement("div");
+    toast.className = "codex-switch-delete-toast";
+    toast.textContent = message;
+    Object.assign(toast.style, {
+      position: "fixed",
+      right: "18px",
+      bottom: "18px",
+      zIndex: "2147483647",
+      padding: "9px 12px",
+      borderRadius: "8px",
+      background: "rgba(17, 24, 39, .92)",
+      color: "#fff",
+      fontSize: "13px",
+      lineHeight: "18px",
+      boxShadow: "0 8px 24px rgba(0,0,0,.22)",
+      maxWidth: "320px",
+      pointerEvents: "none",
+    });
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4200);
+  }
+
+  function rowHref(row) {
+    return row.getAttribute("href") || row.querySelector("a")?.getAttribute("href") || "";
+  }
+
+  function isCurrentSessionRow(row, ref) {
+    if (row.getAttribute("aria-current") === "page" || row.getAttribute("aria-current") === "true") return true;
+    const href = rowHref(row);
+    if (href) {
+      try {
+        const url = new URL(href, window.location.href);
+        if (url.href === window.location.href || url.pathname === window.location.pathname) return true;
+      } catch {
+        if (window.location.href.includes(href)) return true;
+      }
+    }
+    return !!ref.session_id && window.location.href.includes(ref.session_id);
+  }
+
+  function sessionRefFromRow(row) {
+    const href = rowHref(row);
+    const idMatch = href.match(/(?:session|conversation|thread)[=/:-]([A-Za-z0-9_.-]+)/i) || href.match(/([A-Za-z0-9_-]{8,})$/);
+    const sessionId = row.getAttribute("data-app-action-sidebar-thread-id") || (idMatch && idMatch[1]) || "";
+    const titleNode = row.querySelector(selectors.title);
+    const rawTitle = titleNode?.textContent || row.textContent || "Untitled session";
+    const title = rawTitle.replace(/\s*(删除|归档|置顶|取消置顶)\s*$/g, "").trim().slice(0, 160);
+    return { session_id: sessionId, title };
+  }
+
+  function trashIcon() {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>';
+  }
+
+  function stopButtonEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+  }
+
+  function releaseFocus(row, button) {
+    button.blur();
+    if (row.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+  }
+
+  function buildDeleteButton(archiveButton) {
+    const button = archiveButton.cloneNode(false);
+    button.type = "button";
+    button.className = archiveButton.className;
+    button.dataset.codexSwitchDeleteButton = "true";
+    button.dataset.codexSwitchDeleteButtonVersion = version;
+    button.disabled = false;
+    button.removeAttribute("disabled");
+    button.setAttribute("aria-label", "删除对话");
+    button.title = "删除";
+    button.innerHTML = trashIcon();
+    button.style.display = "";
+    button.style.pointerEvents = "auto";
+    return button;
+  }
+
+  async function requestDelete(ref) {
+    if (typeof window.__codexSwitchDeleteBridge !== "function") {
+      throw new Error("删除桥接不可用，请重启 Codex app");
+    }
+    return await window.__codexSwitchDeleteBridge(ref);
+  }
+
+  async function deleteRow(row, button, ref, event) {
+    stopButtonEvent(event);
+    releaseFocus(row, button);
+    if (button.dataset.codexSwitchDeleteBusy === "true") return;
+    if (!ref.session_id) {
+      showToast("删除失败：未找到会话 ID");
+      return;
+    }
+    if (!window.confirm(`确定删除会话“${ref.title || ref.session_id}”？`)) return;
+    button.disabled = true;
+    button.dataset.codexSwitchDeleteBusy = "true";
+    try {
+      const result = await requestDelete(ref);
+      if (result.status === "local_deleted") {
+        const shouldReload = isCurrentSessionRow(row, ref);
+        row.remove();
+        showToast(result.message || "删除成功");
+        if (shouldReload) window.location.reload();
+      } else {
+        showToast(result.message || "删除失败");
+      }
+    } catch (error) {
+      showToast(error?.message || "删除失败");
+    } finally {
+      delete button.dataset.codexSwitchDeleteBusy;
+      if (button.isConnected) button.disabled = false;
+    }
+  }
+
+  function attachDeleteButton(row) {
+    const archiveButton = row.querySelector(selectors.archiveButton);
+    if (!archiveButton) return;
+    const existing = row.querySelector('[data-codex-switch-delete-button="true"]');
+    if (existing?.dataset.codexSwitchDeleteButtonVersion === version) return;
+    existing?.remove();
+    const ref = sessionRefFromRow(row);
+    if (!ref.session_id) return;
+    const button = buildDeleteButton(archiveButton);
+    ["pointerdown", "mousedown", "mouseup", "touchstart"].forEach((eventName) => {
+      button.addEventListener(eventName, stopButtonEvent, true);
+    });
+    const onActivate = (event) => deleteRow(row, button, ref, event);
+    button.addEventListener("click", onActivate, true);
+    if (archiveButton.parentElement) {
+      archiveButton.parentElement.insertBefore(button, archiveButton);
+    } else {
+      archiveButton.before(button);
+    }
+  }
+
+  let scanScheduled = false;
+  function scan() {
+    scanScheduled = false;
+    if (controller.stopped) return;
+    try {
+      document.querySelectorAll(selectors.row).forEach(attachDeleteButton);
+    } catch (error) {
+      window.__codexSwitchDeleteButtonErrors = window.__codexSwitchDeleteButtonErrors || [];
+      window.__codexSwitchDeleteButtonErrors.push(String(error?.stack || error));
+    }
+  }
+
+  function scheduleScan() {
+    if (controller.stopped || scanScheduled) return;
+    scanScheduled = true;
+    controller.timeout = setTimeout(() => {
+      controller.timeout = null;
+      requestAnimationFrame(scan);
+    }, 200);
+  }
+
+  window.__codexSwitchDeleteButtonScan = scan;
+  controller.observer = new MutationObserver(scheduleScan);
+  controller.observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+  controller.interval = setInterval(scheduleScan, 5000);
+  scan();
+})();
+"###;
+
+const CODEX_DELETE_BRIDGE_SCRIPT: &str = r###"
+(() => {
+  const bindingName = __CODEX_SWITCH_DELETE_BINDING_NAME__;
+  window.__codexSwitchDeleteCallbacks = window.__codexSwitchDeleteCallbacks || new Map();
+  window.__codexSwitchDeleteSeq = window.__codexSwitchDeleteSeq || 0;
+  window.__codexSwitchDeleteResolve = (id, result) => {
+    const callback = window.__codexSwitchDeleteCallbacks.get(id);
+    if (!callback) return;
+    window.__codexSwitchDeleteCallbacks.delete(id);
+    callback.resolve(result);
+  };
+  window.__codexSwitchDeleteReject = (id, message) => {
+    const callback = window.__codexSwitchDeleteCallbacks.get(id);
+    if (!callback) return;
+    window.__codexSwitchDeleteCallbacks.delete(id);
+    callback.resolve({ status: "failed", message });
+  };
+  window.__codexSwitchDeleteBridge = (payload) => new Promise((resolve) => {
+    const id = String(++window.__codexSwitchDeleteSeq);
+    window.__codexSwitchDeleteCallbacks.set(id, { resolve });
+    window[bindingName](JSON.stringify({ id, payload }));
+  });
+})();
+"###;
+
+#[derive(Deserialize)]
+struct DeleteBridgeRequest {
+    session_id: String,
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DeleteBridgeEnvelope {
+    id: String,
+    payload: DeleteBridgeRequest,
+}
+
+struct CodexEnhancementScript {
+    source: String,
+    delete_bridge_enabled: bool,
+}
+
 pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), String> {
     if !cfg!(windows) {
-        return Err("Codex app 插件解锁目前仅支持 Windows 重启入口".to_string());
+        return Err("Codex app 增强目前仅支持 Windows 重启入口".to_string());
     }
     if !executable_path.exists() {
         return Err(format!(
@@ -160,6 +410,7 @@ pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), St
         ));
     }
 
+    let enhancement = build_codex_enhancement_script()?;
     let debug_port = select_loopback_port(CODEX_PLUGIN_DEBUG_PORT)?;
     let mut command = Command::new(executable_path);
     command
@@ -177,12 +428,41 @@ pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), St
 
     let mut child = command
         .spawn()
-        .map_err(|err| format!("启动 Codex app 插件模式失败: {err}"))?;
-    if let Err(err) = wait_and_inject_plugin_unlock(debug_port) {
+        .map_err(|err| format!("启动 Codex app 增强模式失败: {err}"))?;
+    if let Err(err) = wait_and_inject_plugin_unlock(debug_port, enhancement) {
         let _ = child.kill();
         return Err(err);
     }
     Ok(())
+}
+
+fn build_codex_enhancement_script() -> Result<CodexEnhancementScript, String> {
+    let settings = read_settings_value()?;
+    let mut scripts = Vec::new();
+    let mut delete_bridge_enabled = false;
+    if bool_field(&settings, "codex_plugins_enabled") {
+        scripts.push(CODEX_PLUGIN_UNLOCK_SCRIPT.to_string());
+    }
+    if bool_field(&settings, "codex_delete_button_enabled") {
+        let binding_name = serde_json::to_string(CODEX_DELETE_BINDING_NAME)
+            .map_err(|err| format!("序列化删除 binding 名称失败: {err}"))?;
+        scripts.push(
+            CODEX_DELETE_BRIDGE_SCRIPT
+                .replace("__CODEX_SWITCH_DELETE_BINDING_NAME__", &binding_name),
+        );
+        scripts.push(
+            CODEX_DELETE_BUTTON_SCRIPT
+                .replace("__CODEX_SWITCH_DELETE_BINDING_NAME__", &binding_name),
+        );
+        delete_bridge_enabled = true;
+    }
+    if scripts.is_empty() {
+        return Err("未启用 Codex app 增强功能".to_string());
+    }
+    Ok(CodexEnhancementScript {
+        source: scripts.join("\n"),
+        delete_bridge_enabled,
+    })
 }
 
 fn select_loopback_port(requested: u16) -> Result<u16, String> {
@@ -197,13 +477,16 @@ fn select_loopback_port(requested: u16) -> Result<u16, String> {
         .map_err(|err| format!("读取 CDP 端口失败: {err}"))
 }
 
-fn wait_and_inject_plugin_unlock(port: u16) -> Result<(), String> {
+fn wait_and_inject_plugin_unlock(
+    port: u16,
+    enhancement: CodexEnhancementScript,
+) -> Result<(), String> {
     let started = Instant::now();
     let timeout = StdDuration::from_millis(CDP_CONNECT_TIMEOUT_MS);
     let mut last_error = String::new();
 
     while started.elapsed() < timeout {
-        match inject_plugin_unlock(port) {
+        match inject_plugin_unlock(port, &enhancement) {
             Ok(()) => return Ok(()),
             Err(err) => last_error = err,
         }
@@ -213,30 +496,132 @@ fn wait_and_inject_plugin_unlock(port: u16) -> Result<(), String> {
     Err(if last_error.is_empty() {
         "等待 Codex app CDP 端口超时".to_string()
     } else {
-        format!("注入 Codex app 插件解锁脚本失败: {last_error}")
+        format!("注入 Codex app 增强脚本失败: {last_error}")
     })
 }
 
-fn inject_plugin_unlock(port: u16) -> Result<(), String> {
+fn inject_plugin_unlock(port: u16, enhancement: &CodexEnhancementScript) -> Result<(), String> {
     let websocket_url = page_websocket_url(port)?;
     let mut ws = connect_websocket(&websocket_url)?;
+    if enhancement.delete_bridge_enabled {
+        install_delete_binding(&mut ws)?;
+    }
     send_cdp_command(
         &mut ws,
         1,
         "Page.addScriptToEvaluateOnNewDocument",
-        json!({ "source": CODEX_PLUGIN_UNLOCK_SCRIPT }),
+        json!({ "source": enhancement.source }),
     )?;
     send_cdp_command(
         &mut ws,
         2,
         "Runtime.evaluate",
         json!({
-            "expression": CODEX_PLUGIN_UNLOCK_SCRIPT,
+            "expression": enhancement.source,
             "awaitPromise": false,
             "allowUnsafeEvalBlockedByCSP": true
         }),
     )?;
+    if enhancement.delete_bridge_enabled {
+        ws.set_read_timeout(None)
+            .map_err(|err| format!("设置 Codex 删除 binding read timeout 失败: {err}"))?;
+        thread::spawn(move || run_delete_binding_loop(ws));
+    }
     Ok(())
+}
+
+fn install_delete_binding(ws: &mut TcpStream) -> Result<(), String> {
+    send_cdp_command(ws, 10, "Runtime.enable", json!({}))?;
+    let _ = send_cdp_command(
+        ws,
+        11,
+        "Runtime.removeBinding",
+        json!({ "name": CODEX_DELETE_BINDING_NAME }),
+    );
+    send_cdp_command(
+        ws,
+        12,
+        "Runtime.addBinding",
+        json!({ "name": CODEX_DELETE_BINDING_NAME }),
+    )?;
+    Ok(())
+}
+
+fn run_delete_binding_loop(mut ws: TcpStream) {
+    loop {
+        let message = match read_ws_text(&mut ws) {
+            Ok(message) => message,
+            Err(err) => {
+                eprintln!("Codex 删除 binding 已断开: {err}");
+                return;
+            }
+        };
+        let value = match serde_json::from_str::<Value>(&message) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if value.get("method").and_then(Value::as_str) != Some("Runtime.bindingCalled") {
+            continue;
+        }
+        let payload = value
+            .get("params")
+            .and_then(|params| params.get("payload"))
+            .and_then(Value::as_str)
+            .unwrap_or("{}");
+        match serde_json::from_str::<DeleteBridgeEnvelope>(payload) {
+            Ok(envelope) => {
+                let result = handle_delete_bridge_request(envelope.payload);
+                let _ = resolve_delete_binding(&mut ws, &envelope.id, &result);
+            }
+            Err(err) => {
+                eprintln!("解析 Codex 删除 binding 请求失败: {err}");
+            }
+        }
+    }
+}
+
+fn handle_delete_bridge_request(payload: DeleteBridgeRequest) -> Value {
+    let title = payload.title.unwrap_or_default();
+    match session_manager::delete_codex_session_for_bridge(&payload.session_id, &title) {
+        Ok(value) => json!({
+            "status": "local_deleted",
+            "session_id": payload.session_id,
+            "message": value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("删除成功"),
+            "report": value.get("report").cloned().unwrap_or(Value::Null)
+        }),
+        Err(err) => json!({
+            "status": "failed",
+            "session_id": payload.session_id,
+            "message": err
+        }),
+    }
+}
+
+fn resolve_delete_binding(
+    ws: &mut TcpStream,
+    request_id: &str,
+    result: &Value,
+) -> Result<(), String> {
+    let request_id = serde_json::to_string(request_id)
+        .map_err(|err| format!("序列化 Codex 删除 binding 请求 ID 失败: {err}"))?;
+    let expression = format!(
+        "window.__codexSwitchDeleteResolve({request_id}, {})",
+        result
+    );
+    let id = CDP_BRIDGE_COMMAND_ID.fetch_add(1, Ordering::Relaxed);
+    let payload = json!({
+        "id": id,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": expression,
+            "awaitPromise": false,
+            "allowUnsafeEvalBlockedByCSP": true
+        }
+    });
+    send_ws_text(ws, &payload.to_string())
 }
 
 fn page_websocket_url(port: u16) -> Result<String, String> {

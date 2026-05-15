@@ -24,6 +24,7 @@ export default function ProxySettingsTab({
 }) {
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
     const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
+    const codexDeleteButtonEnabled = settingsDraft.codex_delete_button_enabled === true;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex app 或 VS Code 前同步会话列表。';
     const [codexAppProcessStatus, setCodexAppProcessStatus] = useState({
@@ -154,6 +155,28 @@ export default function ProxySettingsTab({
                 >
                     <span className="settings-toggle-copy">
                         <span className="settings-toggle-title">启动</span>
+                    </span>
+                    <span className="settings-switch" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                    </span>
+                </button>
+            </section>
+
+            <section className="settings-section settings-app-card-section settings-plugin-section">
+                <div className="settings-section-head">
+                    <div className="settings-section-title">Codex 删除按钮</div>
+                    <div className="settings-section-desc">在 Codex 会话行的归档按钮左侧显示删除</div>
+                </div>
+                <button
+                    type="button"
+                    className={`settings-toggle-row ${codexDeleteButtonEnabled ? 'active' : ''}`}
+                    aria-pressed={codexDeleteButtonEnabled}
+                    aria-label={codexDeleteButtonEnabled ? '关闭 Codex 删除按钮' : '开启 Codex 删除按钮'}
+                    disabled={switching}
+                    onClick={() => updateSettingsDraftAndSave({ codex_delete_button_enabled: !codexDeleteButtonEnabled })}
+                >
+                    <span className="settings-toggle-copy">
+                        <span className="settings-toggle-title">启用</span>
                     </span>
                     <span className="settings-switch" aria-hidden="true">
                         <span className="settings-switch-thumb" />

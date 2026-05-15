@@ -21,7 +21,7 @@ export default function AppDialogs({
       {pluginRestartNotice.visible && (
         <ConfirmDialog
           title="重启后生效"
-          message="Plugin 解锁设置已保存，重启 Codex app 后生效。"
+          message="Codex app 增强设置已保存，重启 Codex app 后生效。"
           isLoading={pluginRestartNotice.loading}
           confirmText="重启"
           loadingText="重启中..."
