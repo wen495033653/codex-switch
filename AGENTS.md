@@ -27,3 +27,12 @@
 - 面向用户的 release notes、updater notes 和下载页更新说明不要直接写 GPT Pool、公益站点、API Key 自动配置、广告入口、推广远程开关等内嵌推广细节。
 - 这类改动属于运营/推广入口调整，对用户只用泛化文案描述为 `API 模式配置体验优化`、`提示入口展示改进`、`界面体验优化` 等。
 - 可以在 commit message、内部上下文或实现说明中保留准确技术名词，但不要把这些推广细节放进用户会看到的版本更新说明。
+
+## Tag 发布流程
+
+- 用户要求打 tag、发版、发布 Release 或准备新版本时，必须先给出发布说明文件 demo 版，等待用户确认；确认前禁止创建正式 release notes 文件、禁止 commit 发布说明、禁止打 tag。
+- 发布说明 demo 必须使用目标 tag 号作为标题，并按仓库约定的 release notes 文件内容格式展示；本仓库使用 `.github/release-notes/<tag>.md`，demo 内容必须对应这个文件。
+- 用户确认 demo 后，才允许把 demo 内容写入正式发布说明文件；写入后必须检查文件路径、内容和编码，再按本仓库 Git 流程 commit / push。
+- 只有正式发布说明文件已经存在、内容已经由用户确认、且对应 commit 已在目标发布分支上，才允许创建并 push tag。
+- push tag 前必须再次检查目标 tag 是否已存在；如果 tag 已存在或曾触发失败的 Release Workflow，禁止擅自移动、删除、重建或覆盖 tag，必须先向用户确认处理方式。
+- 打 tag 前必须用本地检查确认 `.github/release-notes/<tag>.md` 已存在；不要用口头发布说明代替仓库里的正式文件。
