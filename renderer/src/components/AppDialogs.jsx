@@ -9,6 +9,7 @@ export default function AppDialogs({
   gptPoolAutoConfig = { visible: false, loading: false },
   ideReopen,
   message,
+  pluginRestartNotice = { visible: false },
   refreshAll,
   refreshToken,
   update
@@ -16,6 +17,19 @@ export default function AppDialogs({
   return (
     <>
       {message && <div className="toast">{message}</div>}
+
+      {pluginRestartNotice.visible && (
+        <ConfirmDialog
+          title="重启后生效"
+          message="Plugin 解锁设置已保存，重启 Codex app 后生效。"
+          isLoading={pluginRestartNotice.loading}
+          confirmText="重启"
+          loadingText="重启中..."
+          cancelText="稍后"
+          onConfirm={pluginRestartNotice.onRestart}
+          onCancel={pluginRestartNotice.onClose}
+        />
+      )}
 
       {addAccount.visible && (
         <AddAccountModal

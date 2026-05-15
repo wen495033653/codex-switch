@@ -35,11 +35,13 @@ const COMMAND_BINDINGS = {
   deleteAccount: ['delete_account', id => ({ id })],
   switchAccount: ['switch_account', id => ({ id })],
   switchApiMode: ['switch_api_mode'],
+  getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
+  restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
+  restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
   setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled),
     proxyUrl: payload && payload.proxyUrl ? payload.proxyUrl : ''
   })],
-  restartCodexAppWithPlugins: ['restart_codex_app_with_plugins'],
   restartOpenIdes: ['restart_open_ides', snapshotId => ({ snapshotId })],
   discardIdeSnapshot: ['discard_ide_snapshot', snapshotId => ({ snapshotId })],
   importAccounts: ['import_accounts'],

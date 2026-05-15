@@ -10,18 +10,33 @@ pub(crate) const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 (() => {
-  const version = "1";
-  if (window.__codexSwitchPluginUnlockVersion === version) {
+  const version = "3";
+  if (window.__codexSwitchPluginUnlockController?.version === version) {
     window.__codexSwitchPluginUnlockScan?.();
     return;
   }
+  window.__codexSwitchPluginUnlockController?.stop?.();
   window.__codexSwitchPluginUnlockVersion = version;
 
   const selectors = {
     disabledInstallButton: 'button:disabled.w-full.justify-center, [role="button"][aria-disabled="true"].cursor-not-allowed',
-    pluginNavButton: 'nav[role="navigation"] button.h-token-nav-row.w-full',
+    pluginNavButton: 'button.h-token-nav-row.w-full',
     pluginSvgPath: 'svg path[d^="M7.94562 14.0277"]',
   };
+  const controller = {
+    version,
+    observer: null,
+    interval: null,
+    timeout: null,
+    stopped: false,
+    stop() {
+      this.stopped = true;
+      this.observer?.disconnect?.();
+      if (this.interval) clearInterval(this.interval);
+      if (this.timeout) clearTimeout(this.timeout);
+    },
+  };
+  window.__codexSwitchPluginUnlockController = controller;
 
   function reactFiberFrom(element) {
     const key = Object.keys(element || {}).find((name) => name.startsWith("__reactFiber"));
@@ -53,15 +68,6 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
       .find((button) => /^(插件|Plugins)(\s+-\s+.*)?$/i.test((button.textContent || "").trim())) || null;
   }
 
-  function labelUnlockedPluginEntry(button) {
-    const labelTextNode = Array.from(button.querySelectorAll("span, div")).reverse()
-      .flatMap((node) => Array.from(node.childNodes))
-      .find((node) => node.nodeType === 3 && /^(插件|Plugins)( - 已解锁| - Unlocked)?$/i.test((node.nodeValue || "").trim()));
-    if (!labelTextNode) return;
-    const current = (labelTextNode.nodeValue || "").trim();
-    labelTextNode.nodeValue = /^Plugins/i.test(current) ? "Plugins - Unlocked" : "插件 - 已解锁";
-  }
-
   function enablePluginEntry() {
     const button = pluginEntryButton();
     if (!button) return;
@@ -72,16 +78,16 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
     button.querySelectorAll("*").forEach((node) => {
       node.style.display = "";
     });
-    labelUnlockedPluginEntry(button);
     const reactPropsKey = Object.keys(button).find((key) => key.startsWith("__reactProps"));
     if (reactPropsKey) {
       button[reactPropsKey].disabled = false;
     }
-    if (button.dataset.codexSwitchPluginEnabled === "true") return;
-    button.dataset.codexSwitchPluginEnabled = "true";
-    button.addEventListener("click", () => {
-      spoofChatGPTAuthMethod(button);
-    }, true);
+    if (button.dataset.codexSwitchPluginEnabled !== "true") {
+      button.dataset.codexSwitchPluginEnabled = "true";
+      button.addEventListener("click", () => {
+        spoofChatGPTAuthMethod(button);
+      }, true);
+    }
   }
 
   function unblockButtonElement(button) {
@@ -98,26 +104,20 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
     }
   }
 
-  function labelForcedInstallButton(button) {
-    const textNode = Array.from(button.childNodes).find((node) => {
-      const text = (node.nodeValue || "").trim();
-      return node.nodeType === 3 && (/^安装\s/.test(text) || /^Install\s/.test(text) || text === "强制安装");
-    });
-    if (textNode) textNode.nodeValue = "强制安装";
-  }
-
   function unblockPluginInstallButtons() {
     Array.from(document.querySelectorAll(selectors.disabledInstallButton)).forEach((button) => {
       const text = (button.textContent || "").trim();
-      if (!/^安装\s/.test(text) && !/^Install\s/.test(text) && text !== "强制安装") return;
+      if (!/^安装\s/.test(text) && !/^Install\s/.test(text)) return;
       unblockButtonElement(button);
-      labelForcedInstallButton(button);
     });
   }
 
   let scanScheduled = false;
+  let lastScanAt = 0;
   function scan() {
     scanScheduled = false;
+    lastScanAt = Date.now();
+    if (controller.stopped) return;
     try {
       enablePluginEntry();
       unblockPluginInstallButtons();
@@ -128,19 +128,23 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
   }
 
   function scheduleScan() {
+    if (controller.stopped) return;
     if (scanScheduled) return;
     scanScheduled = true;
-    requestAnimationFrame(scan);
+    const delay = Math.max(0, 600 - (Date.now() - lastScanAt));
+    controller.timeout = setTimeout(() => {
+      controller.timeout = null;
+      requestAnimationFrame(scan);
+    }, delay);
   }
 
   window.__codexSwitchPluginUnlockScan = scan;
-  new MutationObserver(scheduleScan).observe(document.documentElement, {
+  controller.observer = new MutationObserver(scheduleScan);
+  controller.observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
-    attributes: true,
-    attributeFilter: ["disabled", "aria-disabled", "class", "style"],
   });
-  setInterval(scheduleScan, 1500);
+  controller.interval = setInterval(scheduleScan, 8000);
   scan();
 })();
 "###;
@@ -179,83 +183,6 @@ pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), St
         return Err(err);
     }
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) fn restart_codex_app_with_plugins() -> Result<Value, String> {
-    if !cfg!(windows) {
-        return Err("Codex app 插件解锁目前仅支持 Windows".to_string());
-    }
-
-    let snapshot = capture_open_ide_snapshot()?;
-    let entries = snapshot
-        .get("entries")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|entry| string_field(entry, "kind") == "codex")
-        .collect::<Vec<_>>();
-
-    if entries.is_empty() {
-        return Ok(json!({
-            "ok": true,
-            "restarted": false,
-            "message": "未检测到正在运行的 Codex app"
-        }));
-    }
-
-    let pids = entries
-        .iter()
-        .filter_map(|entry| value_u64_field(entry, "pid"))
-        .collect::<Vec<_>>();
-    let mut executables = entries
-        .iter()
-        .map(|entry| raw_string_field(entry, "executablePath"))
-        .filter(|path| !path.trim().is_empty())
-        .collect::<Vec<_>>();
-    executables.sort_by_key(|path| path.trim().to_ascii_lowercase());
-    executables.dedup_by_key(|path| path.trim().to_ascii_lowercase());
-
-    for pid in &pids {
-        let _ = kill_process_tree(*pid);
-    }
-    let alive = wait_for_pids_exit(&pids, 12_000);
-    if !alive.is_empty() {
-        return Err("Codex app 进程未能退出，请手动关闭后重试".to_string());
-    }
-
-    let mut restarted = 0usize;
-    for executable in executables {
-        launch_codex_with_plugins(Path::new(&executable))?;
-        restarted += 1;
-        thread::sleep(StdDuration::from_millis(120));
-    }
-
-    let message = if restarted > 0 {
-        "Codex app 插件模式已重启".to_string()
-    } else {
-        "未能重启 Codex app 插件模式".to_string()
-    };
-
-    Ok(json!({
-        "ok": true,
-        "restarted": restarted > 0,
-        "restartedCount": restarted,
-        "message": message
-    }))
-}
-
-pub(crate) fn codex_plugin_takeover_enabled() -> Result<bool, String> {
-    read_settings_value().map(|settings| codex_plugin_takeover_enabled_from_settings(&settings))
-}
-
-fn codex_plugin_takeover_enabled_from_settings(settings: &Value) -> bool {
-    bool_field(settings, "codex_plugins_enabled")
-        || settings
-            .get("codex_session_sync_enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
 }
 
 fn select_loopback_port(requested: u16) -> Result<u16, String> {
@@ -527,26 +454,5 @@ fn read_ws_text(stream: &mut TcpStream) -> Result<String, String> {
             0xA => {}
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plugin_takeover_is_enabled_by_session_sync() {
-        assert!(codex_plugin_takeover_enabled_from_settings(&json!({
-            "codex_plugins_enabled": false,
-            "codex_session_sync_enabled": true
-        })));
-        assert!(codex_plugin_takeover_enabled_from_settings(&json!({
-            "codex_plugins_enabled": true,
-            "codex_session_sync_enabled": false
-        })));
-        assert!(!codex_plugin_takeover_enabled_from_settings(&json!({
-            "codex_plugins_enabled": false,
-            "codex_session_sync_enabled": false
-        })));
     }
 }

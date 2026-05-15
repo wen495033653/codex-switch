@@ -48,6 +48,12 @@ pub(crate) fn process_entry_pid(value: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn process_entry_parent_pid(value: &Value) -> u64 {
+    value_u64_field(value, "parentPid")
+        .or_else(|| value_u64_field(value, "ParentProcessId"))
+        .unwrap_or(0)
+}
+
 fn process_entry_name(value: &Value) -> String {
     let name = raw_string_field(value, "name");
     if name.is_empty() {
@@ -82,6 +88,7 @@ pub(crate) fn normalize_ide_entries(items: Vec<Value>) -> Vec<Value> {
         };
         entries.push(json!({
             "pid": pid,
+            "parentPid": process_entry_parent_pid(&item),
             "name": name,
             "executablePath": executable_path,
             "kind": kind,

@@ -2,19 +2,28 @@ import { useState } from 'react';
 import { REPOSITORY_URL } from '../utils/appState';
 import { getErrorMessage } from '../utils/errors';
 
+function hasRunningCodexApp(processStatus) {
+  const pids = Array.isArray(processStatus && processStatus.pids) ? processStatus.pids : [];
+  return pids.some(pid => {
+    const value = Number(pid);
+    return Number.isInteger(value) && value > 0;
+  });
+}
+
 export function useSettingsActions({
   applySettings,
   settings,
   settingsDraft,
   setSettingsDraft,
-  setSettingsTab,
   setViewMode,
   toast,
   toastError
 }) {
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
-  const [savingCodexPlugins, setSavingCodexPlugins] = useState(false);
+  const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
+  const [pluginRestartNoticeLoading, setPluginRestartNoticeLoading] = useState(false);
+  const [restartingCodexApp, setRestartingCodexApp] = useState(false);
 
   const openSettingsPage = async () => {
     try {
@@ -23,15 +32,29 @@ export function useSettingsActions({
     } catch (_err) {
       setSettingsDraft(settings);
     }
-    setSettingsTab('general');
     setViewMode('settings');
   };
 
   const updateSettingsDraftAndSave = async (patch) => {
+    const pluginEnabledBeforeSave = settingsDraft.codex_plugins_enabled === true;
+    const shouldCheckPluginRestartNotice = Object.prototype.hasOwnProperty.call(patch, 'codex_plugins_enabled')
+      && pluginEnabledBeforeSave === false
+      && patch.codex_plugins_enabled === true;
     setSettingsDraft(prev => ({ ...prev, ...patch }));
     try {
       const res = await window.api.updateSettings(patch);
       applySettings(res);
+      if (shouldCheckPluginRestartNotice) {
+        let processStatus;
+        try {
+          processStatus = await window.api.getCurrentCodexAppProcesses();
+        } catch (err) {
+          toastError(err, '检测 Codex app 状态失败', 7000);
+          return;
+        }
+        if (!hasRunningCodexApp(processStatus)) return;
+        setPluginRestartNoticeVisible(true);
+      }
     } catch (err) {
       setSettingsDraft(settings);
       toastError(err, '设置保存失败');
@@ -91,19 +114,6 @@ export function useSettingsActions({
     }
   };
 
-  const restartCodexAppWithPlugins = async () => {
-    if (savingCodexPlugins) return;
-    setSavingCodexPlugins(true);
-    try {
-      const res = await window.api.restartCodexAppWithPlugins();
-      toast((res && res.message) || 'Codex app 插件模式已重启');
-    } catch (err) {
-      toastError(err, '重启 Codex app 插件模式失败', 9000);
-    } finally {
-      setSavingCodexPlugins(false);
-    }
-  };
-
   const openDataDir = async () => {
     try {
       await window.api.openDataDir();
@@ -120,13 +130,46 @@ export function useSettingsActions({
     }
   };
 
+  const restartCodexAppForPluginSetting = async () => {
+    if (pluginRestartNoticeLoading) return;
+    setPluginRestartNoticeLoading(true);
+    try {
+      const res = await window.api.restartCurrentCodexAppForPluginSetting();
+      setPluginRestartNoticeVisible(false);
+      toast((res && res.message) || 'Codex app 已重启');
+    } catch (err) {
+      toastError(err, '重启 Codex app 失败', 7000);
+    } finally {
+      setPluginRestartNoticeLoading(false);
+    }
+  };
+
+  const restartCurrentCodexAppNormal = async () => {
+    if (restartingCodexApp) return;
+    setRestartingCodexApp(true);
+    try {
+      const res = await window.api.restartCurrentCodexAppNormal();
+      toast((res && res.message) || 'Codex app 已重启');
+    } catch (err) {
+      toastError(err, '重启 Codex app 失败', 7000);
+    } finally {
+      setRestartingCodexApp(false);
+    }
+  };
+
   return {
     openCodexConfigToml,
     openDataDir,
     openRepository,
-    restartCodexAppWithPlugins,
+    pluginRestartNotice: {
+      visible: pluginRestartNoticeVisible,
+      loading: pluginRestartNoticeLoading,
+      onRestart: restartCodexAppForPluginSetting,
+      onClose: () => !pluginRestartNoticeLoading && setPluginRestartNoticeVisible(false)
+    },
     openSettingsPage,
-    savingCodexPlugins,
+    restartingCodexApp,
+    restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
     savingProxySettings,
     setCodexProxyEnvEnabled,

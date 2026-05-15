@@ -9,7 +9,8 @@ export default function ConfirmDialog({
     loadingText = '处理中...',
     cancelText = '取消',
     width = '380px',
-    confirmVariant = 'primary'
+    confirmVariant = 'primary',
+    showCancel = true
 }) {
     const isDanger = confirmVariant === 'danger';
     const widthClass = width === '460px' ? 'modal-content-lg' : 'modal-content-sm';
@@ -29,9 +30,11 @@ export default function ConfirmDialog({
                     <p className="confirm-dialog-message">{message}</p>
                 )}
                 <div className="confirm-dialog-actions">
-                    <button className="btn btn-secondary confirm-dialog-button" onClick={onCancel} disabled={isLoading}>
-                        {cancelText}
-                    </button>
+                    {showCancel && (
+                        <button className="btn btn-secondary confirm-dialog-button" onClick={onCancel} disabled={isLoading}>
+                            {cancelText}
+                        </button>
+                    )}
                     <button className="btn btn-primary confirm-dialog-button confirm-dialog-confirm" onClick={onConfirm} disabled={isLoading}>
                         {isLoading ? loadingText : confirmText}
                     </button>

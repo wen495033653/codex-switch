@@ -244,9 +244,10 @@ export default function App() {
     openCodexConfigToml,
     openDataDir,
     openRepository,
+    pluginRestartNotice,
     openSettingsPage,
-    restartCodexAppWithPlugins,
-    savingCodexPlugins,
+    restartingCodexApp,
+    restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
     savingProxySettings,
     setCodexProxyEnvEnabled,
@@ -257,7 +258,6 @@ export default function App() {
     settings,
     settingsDraft,
     setSettingsDraft,
-    setSettingsTab,
     setViewMode,
     toast,
     toastError
@@ -365,13 +365,13 @@ export default function App() {
             appVersion,
             checkingUpdate,
             codexSessionSyncEnabled,
-            savingCodexPlugins,
             savingCodexProxyEnv,
             savingCodexSessionSync,
             savingProxySettings,
+            restartingCodexApp,
+            restartCurrentCodexAppNormal,
             setCodexProxyEnvEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
-            restartCodexAppWithPlugins,
             switching,
             updateSettingsDraftAndSave,
             normalizeBackgroundRefreshInterval,
@@ -466,6 +466,7 @@ export default function App() {
             onCancel: cancelGptPoolAutoConfig,
             onConfirm: confirmGptPoolAutoConfig
           }}
+          pluginRestartNotice={pluginRestartNotice}
           refreshAll={{
             visible: refreshModal,
             isLoading: refreshAllStarting,

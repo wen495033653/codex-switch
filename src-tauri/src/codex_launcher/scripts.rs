@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $names = @("Codex.exe", "Code.exe")
 $list = Get-CimInstance Win32_Process | Where-Object {
   $_.ExecutablePath -and $_.Name -and $names -contains $_.Name
-} | Select-Object ProcessId, Name, ExecutablePath
+} | Select-Object ProcessId, ParentProcessId, Name, ExecutablePath
 $list | ConvertTo-Json -Depth 2 -Compress
 "#;
 

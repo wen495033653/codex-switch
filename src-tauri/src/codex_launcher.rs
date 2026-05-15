@@ -35,17 +35,37 @@ pub(crate) struct IdeRuntime {
 }
 
 mod codex_app;
+mod codex_app_open;
+mod codex_app_watcher;
 mod ide_snapshot;
-mod plugin_watcher;
 mod plugins;
 mod process_control;
 mod scripts;
 mod shell;
 
 pub(crate) use codex_app::*;
+pub(crate) use codex_app_watcher::{CodexAppOpenOutcome, CodexProcess};
 pub(crate) use ide_snapshot::*;
-pub(crate) use plugin_watcher::*;
 pub(crate) use plugins::*;
 pub(crate) use process_control::*;
 pub(crate) use scripts::*;
 pub(crate) use shell::*;
+
+pub(crate) fn start_codex_app_watcher() {
+    codex_app_watcher::start_codex_app_open_watcher(codex_app_open::handle_codex_app_open);
+}
+
+#[tauri::command]
+pub(crate) fn get_current_codex_app_processes() -> Result<Value, String> {
+    codex_app_watcher::current_codex_app_processes_value()
+}
+
+#[tauri::command]
+pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, String> {
+    codex_app_open::restart_current_codex_app_for_plugin_setting()
+}
+
+#[tauri::command]
+pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
+    codex_app_open::restart_current_codex_app_normal()
+}

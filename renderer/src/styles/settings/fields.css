@@ -53,6 +53,86 @@
   background: var(--bg-panel);
 }
 
+.settings-codex-app-pid-card {
+  min-height: 46px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--bg-panel);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-codex-app-pid-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.settings-codex-app-pid-actions {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.settings-codex-app-pid-value {
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-app);
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.settings-codex-app-pid-value.active {
+  color: #60a5fa;
+  border-color: rgba(96, 165, 250, 0.36);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.settings-codex-app-pid-value.error {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.32);
+  background: rgba(251, 113, 133, 0.08);
+}
+
+.settings-codex-app-restart-button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.38);
+  background: rgba(96, 165, 250, 0.1);
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.settings-codex-app-restart-button:hover {
+  border-color: rgba(96, 165, 250, 0.58);
+  background: rgba(96, 165, 250, 0.16);
+}
+
+.settings-codex-app-restart-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .settings-proxy-section {
   gap: 16px;
 }

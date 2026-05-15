@@ -76,7 +76,14 @@ where
 
     let mut restarted_paths = HashSet::new();
     for executable in executables {
-        if relaunch_executable_with_retry(&executable)? {
+        let restarted = if is_codex_executable(&entries, &executable) {
+            crate::codex_launcher::codex_app_open::relaunch_codex_executable_for_current_settings(
+                &executable,
+            )?
+        } else {
+            relaunch_executable_with_retry(&executable)?
+        };
+        if restarted {
             restarted_paths.insert(normalize_executable_path(&executable));
         }
         thread::sleep(StdDuration::from_millis(120));
@@ -102,4 +109,12 @@ where
         "restartedCount": restarted_paths.len(),
         "summary": summary
     }))
+}
+
+fn is_codex_executable(entries: &[Value], executable: &str) -> bool {
+    let target = normalize_executable_path(executable);
+    entries.iter().any(|entry| {
+        string_field(entry, "kind") == "codex"
+            && normalize_executable_path(&process_entry_executable_path(entry)) == target
+    })
 }

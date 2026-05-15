@@ -1,4 +1,9 @@
-use crate::{json_util::raw_string_field, paths::codex_dir};
+use crate::{
+    accounts::{get_codex_state_value, restore_api_mode_if_selected},
+    api_config::API_PROVIDER_ID,
+    json_util::raw_string_field,
+    paths::codex_dir,
+};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::{
@@ -13,6 +18,7 @@ use std::{
 const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 50;
 const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
 const GLOBAL_STATE_FILE_NAME: &str = ".codex-global-state.json";
+const OPENAI_PROVIDER_ID: &str = "openai";
 
 static SESSION_SYNC_IO_LOCK: Mutex<()> = Mutex::new(());
 
@@ -32,12 +38,32 @@ fn global_state_path() -> Result<PathBuf, String> {
     Ok(codex_dir()?.join(GLOBAL_STATE_FILE_NAME))
 }
 
+fn current_session_provider() -> Result<String, String> {
+    restore_api_mode_if_selected()?;
+    let state = get_codex_state_value();
+    let model_provider = raw_string_field(&state, "model_provider");
+    if !model_provider.is_empty() {
+        return Ok(model_provider);
+    }
+
+    match raw_string_field(&state, "mode").as_str() {
+        "api" => Ok(API_PROVIDER_ID.to_string()),
+        "chatgpt" => Ok(OPENAI_PROVIDER_ID.to_string()),
+        _ => Err("当前 Codex 模式未知，无法同步会话".to_string()),
+    }
+}
+
 fn normalize_target_provider(target_provider: &str) -> Result<String, String> {
     let target_provider = target_provider.trim();
     if target_provider.is_empty() {
         return Err("当前 Codex provider 为空，无法同步会话".to_string());
     }
     Ok(target_provider.to_string())
+}
+
+pub(crate) fn sync_codex_sessions_to_current_mode_now() -> Result<usize, String> {
+    let target_provider = current_session_provider()?;
+    sync_codex_sessions_to_provider_now(&target_provider)
 }
 
 pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {

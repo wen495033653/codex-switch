@@ -73,7 +73,7 @@ fn main() {
                 app.handle().clone(),
                 Arc::clone(app.state::<Arc<RefreshAllRuntime>>().inner()),
             );
-            codex_launcher::start_codex_plugin_takeover_watcher();
+            codex_launcher::start_codex_app_watcher();
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -93,7 +93,9 @@ fn main() {
             commands::switch_account,
             commands::switch_api_mode,
             codex_launcher::set_codex_proxy_env_enabled,
-            codex_launcher::restart_codex_app_with_plugins,
+            codex_launcher::get_current_codex_app_processes,
+            codex_launcher::restart_current_codex_app_for_plugin_setting,
+            codex_launcher::restart_current_codex_app_normal,
             codex_launcher::restart_open_ides,
             codex_launcher::discard_ide_snapshot,
             commands::import_accounts,

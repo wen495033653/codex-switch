@@ -13,13 +13,13 @@ export default function SettingsPage({
     appVersion,
     checkingUpdate,
     codexSessionSyncEnabled,
-    savingCodexPlugins,
     savingCodexProxyEnv,
     savingCodexSessionSync,
     savingProxySettings,
+    restartingCodexApp,
+    restartCurrentCodexAppNormal,
     setCodexProxyEnvEnabled,
     setCodexSessionSyncEnabled,
-    restartCodexAppWithPlugins,
     switching,
     updateSettingsDraftAndSave,
     normalizeBackgroundRefreshInterval,
@@ -72,14 +72,14 @@ export default function SettingsPage({
                     {settingsTab === 'proxy' && (
                         <ProxySettingsTab
                             codexSessionSyncEnabled={codexSessionSyncEnabled}
-                            savingCodexPlugins={savingCodexPlugins}
                             savingCodexProxyEnv={savingCodexProxyEnv}
                             savingCodexSessionSync={savingCodexSessionSync}
                             savingProxySettings={savingProxySettings}
+                            restartingCodexApp={restartingCodexApp}
+                            restartCurrentCodexAppNormal={restartCurrentCodexAppNormal}
                             setSettingsDraft={setSettingsDraft}
                             setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
                             setCodexSessionSyncEnabled={setCodexSessionSyncEnabled}
-                            restartCodexAppWithPlugins={restartCodexAppWithPlugins}
                             settingsDraft={settingsDraft}
                             switching={switching}
                             updateCodexProxySettings={updateCodexProxySettings}

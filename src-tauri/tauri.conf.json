@@ -5,7 +5,7 @@
   "identifier": "com.codex.switch",
   "build": {
     "beforeDevCommand": "npm run dev:renderer",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build:renderer",
     "frontendDist": "../renderer/dist"
   },
