@@ -36,3 +36,4 @@
 - 只有正式发布说明文件已经存在、内容已经由用户确认、且对应 commit 已在目标发布分支上，才允许创建并 push tag。
 - push tag 前必须再次检查目标 tag 是否已存在；如果 tag 已存在或曾触发失败的 Release Workflow，禁止擅自移动、删除、重建或覆盖 tag，必须先向用户确认处理方式。
 - 打 tag 前必须用本地检查确认 `.github/release-notes/<tag>.md` 已存在；不要用口头发布说明代替仓库里的正式文件。
+- 修改已发布版本的用户可见更新说明时，必须同时更新 GitHub Release body 和 `latest.json` asset 的 `notes` 字段，并回读两处内容确认一致。
