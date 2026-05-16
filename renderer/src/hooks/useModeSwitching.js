@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import { API_MODE_ACCOUNT_ID } from '../utils/auth';
-import { buildApiModePayload } from '../utils/appState';
+import {
+  buildApiSettingsPayload,
+  getActiveApiProfile,
+  normalizeApiProfiles
+} from '../utils/appState';
 
 export function useModeSwitching({
+  activeApiProfileId,
   apiDraft,
+  apiProfiles,
   applySettings,
   clearApiAutoSaveTimer,
   handleRes,
@@ -13,18 +19,27 @@ export function useModeSwitching({
   const [savingApiMode, setSavingApiMode] = useState(false);
   const [switching, setSwitching] = useState(false);
 
-  const switchToApiModeFromPage = async () => {
+  const switchToApiModeFromPage = async (profileId = activeApiProfileId) => {
     if (switching || savingApiMode) return;
     setSavingApiMode(true);
     setSwitching(true);
     clearApiAutoSaveTimer();
     try {
-      const saveRes = await window.api.updateSettings({
-        api_mode: buildApiModePayload(apiDraft)
-      });
+      const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
+      const activeProfile = profiles.find(profile => profile.id === profileId)
+        || getActiveApiProfile({
+          active_api_profile_id: activeApiProfileId,
+          api_profiles: profiles,
+          api_mode: apiDraft
+        });
+      const saveRes = await window.api.updateSettings(buildApiSettingsPayload({
+        activeId: activeProfile.id,
+        activeProfile,
+        profiles
+      }));
       applySettings(saveRes);
 
-      const res = await window.api.switchApiMode();
+      const res = await window.api.switchApiMode(activeProfile.id);
       handleRes(res);
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);
     } catch (err) {
@@ -40,7 +55,7 @@ export function useModeSwitching({
     setSwitching(true);
     try {
       const res = accountId === API_MODE_ACCOUNT_ID
-        ? await window.api.switchApiMode()
+        ? await window.api.switchApiMode(activeApiProfileId)
         : await window.api.switchAccount(accountId);
       handleRes(res);
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);

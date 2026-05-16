@@ -60,7 +60,13 @@ pub(crate) fn attach_ide_reopen(mut payload: Value, ide_reopen: Option<Value>) -
 
 pub(super) fn apply_pending_ide_auth(pending: &IdePending) -> Result<(), String> {
     if pending.api_mode {
-        let settings = read_settings_value()?;
+        let mut settings = read_settings_value()?;
+        let api_profile_id = pending.account_id.trim();
+        if !api_profile_id.is_empty() {
+            settings = update_settings_value(&json!({
+                "active_api_profile_id": api_profile_id
+            }))?;
+        }
         let profile = settings
             .get("api_mode")
             .cloned()

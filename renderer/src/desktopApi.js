@@ -34,7 +34,7 @@ const COMMAND_BINDINGS = {
   importRefreshToken: ['import_refresh_token', token => ({ token })],
   deleteAccount: ['delete_account', id => ({ id })],
   switchAccount: ['switch_account', id => ({ id })],
-  switchApiMode: ['switch_api_mode'],
+  switchApiMode: ['switch_api_mode', profileId => ({ profileId: profileId || null })],
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
   restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
