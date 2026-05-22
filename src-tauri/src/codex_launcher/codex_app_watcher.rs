@@ -46,6 +46,7 @@ struct CodexAppWatcherSnapshot {
 #[derive(Clone, Debug, Default)]
 struct ExpectedCodexAppOpen {
     executables: Vec<String>,
+    source: String,
     until: Option<Instant>,
 }
 
@@ -99,21 +100,31 @@ pub(crate) fn refresh_current_codex_app_processes() -> Result<Vec<CodexProcess>,
 }
 
 pub(crate) fn expect_codex_app_open_for_executables(executables: &[String]) {
+    expect_codex_app_open_for_executables_from(executables, "expected_relaunch");
+}
+
+pub(crate) fn expect_app_command_codex_app_open_for_executables(executables: &[String]) {
+    expect_codex_app_open_for_executables_from(executables, "app_command");
+}
+
+fn expect_codex_app_open_for_executables_from(executables: &[String], source: &str) {
     let keys = normalize_executable_keys(executables.iter().map(String::as_str));
     if keys.is_empty() {
         log_session_sync_event(
             "codex_app_watcher_expect_open_skip",
-            json!({ "reason": "empty_executables" }),
+            json!({ "reason": "empty_executables", "source": source }),
         );
         return;
     }
     if let Ok(mut expected) = expected_codex_app_open_state().lock() {
         expected.executables = keys;
+        expected.source = source.to_string();
         expected.until = Some(Instant::now() + StdDuration::from_millis(PENDING_RELAUNCH_TTL_MS));
         log_session_sync_event(
             "codex_app_watcher_expect_open_set",
             json!({
                 "executables": expected.executables.clone(),
+                "source": expected.source.clone(),
                 "ttlMs": PENDING_RELAUNCH_TTL_MS
             }),
         );
@@ -128,6 +139,7 @@ pub(crate) fn clear_expected_codex_app_open_for_executables(executables: &[Strin
     if let Ok(mut expected) = expected_codex_app_open_state().lock() {
         if expected.executables == keys {
             expected.executables.clear();
+            expected.source.clear();
             expected.until = None;
             log_session_sync_event(
                 "codex_app_watcher_expect_open_cleared",
@@ -214,11 +226,14 @@ where
         open_absence_since = None;
         let signature = codex_open_signature(&processes);
         let executable_keys = codex_executable_keys(&processes);
-        if take_expected_codex_app_open_if_matches(&executable_keys, now) {
+        if let Some(expected_source) =
+            take_expected_codex_app_open_source_if_matches(&executable_keys, now)
+        {
             log_session_sync_event(
                 "codex_app_watcher_expected_open_matched",
                 json!({
                     "action": "skip_on_open_handler",
+                    "source": expected_source,
                     "signature": codex_open_signature_log_value(&signature),
                     "executables": executable_keys.clone(),
                     "processes": codex_processes_log_value(&processes)
@@ -374,21 +389,27 @@ fn open_absence_elapsed(absence_since: &mut Option<Instant>, now: Instant) -> bo
     now.duration_since(started) >= StdDuration::from_millis(OPEN_ABSENCE_RESET_MS)
 }
 
-fn take_expected_codex_app_open_if_matches(executable_keys: &[String], now: Instant) -> bool {
+fn take_expected_codex_app_open_source_if_matches(
+    executable_keys: &[String],
+    now: Instant,
+) -> Option<String> {
     let Ok(mut expected) = expected_codex_app_open_state().lock() else {
-        return false;
+        return None;
     };
     if until_expired(expected.until, now) {
         expected.executables.clear();
+        expected.source.clear();
         expected.until = None;
-        return false;
+        return None;
     }
     if expected.executables != executable_keys {
-        return false;
+        return None;
     }
+    let source = expected.source.clone();
     expected.executables.clear();
+    expected.source.clear();
     expected.until = None;
-    true
+    Some(source)
 }
 
 fn normalize_executable_key(path: &str) -> String {
@@ -591,5 +612,22 @@ mod tests {
             codex_open_signature(&restarted)
         );
         assert_eq!(codex_open_signature(&first), codex_open_signature(&moved));
+    }
+
+    #[test]
+    fn app_command_expected_open_skips_handler_once() {
+        let executables = vec![r"C:\Codex\AppCommand\codex.exe".to_string()];
+        let executable_keys = normalize_executable_keys(executables.iter().map(String::as_str));
+
+        expect_app_command_codex_app_open_for_executables(&executables);
+
+        assert_eq!(
+            take_expected_codex_app_open_source_if_matches(&executable_keys, Instant::now()),
+            Some("app_command".to_string())
+        );
+        assert_eq!(
+            take_expected_codex_app_open_source_if_matches(&executable_keys, Instant::now()),
+            None
+        );
     }
 }

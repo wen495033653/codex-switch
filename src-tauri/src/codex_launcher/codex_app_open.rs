@@ -188,7 +188,7 @@ fn sync_codex_sessions_for_app_command(
                     "command": command,
                     "directSessionSync": true,
                     "updated": updated,
-                    "openHandlerMayBeSkippedByExpectedOpen": true
+                    "nextOpenHandledByAppCommand": true
                 }),
             );
             Ok(())
@@ -410,7 +410,7 @@ fn relaunch_running_codex_processes(
                 "executables": executables.clone()
             }),
         );
-        super::codex_app_watcher::expect_codex_app_open_for_executables(&executables);
+        super::codex_app_watcher::expect_app_command_codex_app_open_for_executables(&executables);
     }
 
     let mut restarted = 0usize;
