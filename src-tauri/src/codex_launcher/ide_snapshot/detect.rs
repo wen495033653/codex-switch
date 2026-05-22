@@ -72,12 +72,22 @@ pub(crate) fn process_entry_executable_path(value: &Value) -> String {
     }
 }
 
+fn process_entry_command_line(value: &Value) -> String {
+    let command_line = raw_string_field(value, "commandLine");
+    if command_line.is_empty() {
+        raw_string_field(value, "CommandLine")
+    } else {
+        command_line
+    }
+}
+
 pub(crate) fn normalize_ide_entries(items: Vec<Value>) -> Vec<Value> {
     let mut entries = Vec::new();
     for item in items {
         let pid = process_entry_pid(&item);
         let raw_name = process_entry_name(&item);
         let executable_path = process_entry_executable_path(&item);
+        let command_line = process_entry_command_line(&item);
         if pid == 0 || executable_path.trim().is_empty() {
             continue;
         }
@@ -91,6 +101,7 @@ pub(crate) fn normalize_ide_entries(items: Vec<Value>) -> Vec<Value> {
             "parentPid": process_entry_parent_pid(&item),
             "name": name,
             "executablePath": executable_path,
+            "commandLine": command_line,
             "kind": kind,
             "displayName": display_name
         }));

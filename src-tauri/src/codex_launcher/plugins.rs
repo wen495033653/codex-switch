@@ -149,6 +149,18 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 })();
 "###;
 
+pub(crate) fn codex_processes_have_plugin_unlock(processes: &[CodexProcess]) -> bool {
+    processes
+        .iter()
+        .any(|process| command_line_has_plugin_unlock(&process.command_line))
+}
+
+fn command_line_has_plugin_unlock(command_line: &str) -> bool {
+    let normalized = command_line.to_ascii_lowercase();
+    normalized.contains("--remote-debugging-port")
+        && normalized.contains("--remote-allow-origins=http://127.0.0.1:")
+}
+
 pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("Codex app 插件解锁目前仅支持 Windows 重启入口".to_string());
@@ -342,6 +354,22 @@ fn connect_websocket(websocket_url: &str) -> Result<TcpStream, String> {
     }
 
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_line_has_plugin_unlock_requires_cdp_launch_args() {
+        assert!(command_line_has_plugin_unlock(
+            r#""C:\Codex\codex.exe" --remote-debugging-port=9229 --remote-allow-origins=http://127.0.0.1:9229"#
+        ));
+        assert!(!command_line_has_plugin_unlock(
+            r#""C:\Codex\codex.exe" --remote-debugging-port=9229"#
+        ));
+        assert!(!command_line_has_plugin_unlock(r#""C:\Codex\codex.exe""#));
+    }
 }
 
 fn send_cdp_command(

@@ -1,6 +1,6 @@
 use super::{
-    kill_process_tree, launch_codex_with_plugins, relaunch_executable_with_retry,
-    wait_for_pids_exit, CodexAppOpenOutcome, CodexProcess,
+    codex_processes_have_plugin_unlock, kill_process_tree, launch_codex_with_plugins,
+    relaunch_executable_with_retry, wait_for_pids_exit, CodexAppOpenOutcome, CodexProcess,
 };
 use crate::{
     codex_sessions::sync_codex_sessions_to_current_mode_now, json_util::bool_field,
@@ -21,6 +21,12 @@ enum CodexRelaunchMode {
 struct CodexAppOpenActions {
     plugin_unlock_enabled: bool,
     session_sync_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CodexAppOpenStatus {
+    session_sync_updated: bool,
+    plugin_unlock_applied: bool,
 }
 
 impl CodexAppOpenActions {
@@ -47,21 +53,25 @@ pub(crate) fn handle_codex_app_open(
         return Ok(CodexAppOpenOutcome::default());
     }
 
+    let mut session_sync_updated = false;
     if actions.session_sync_enabled {
-        if let Err(err) = sync_codex_sessions_to_current_mode_now() {
-            eprintln!("Codex app 会话同步失败: {err}");
+        match sync_codex_sessions_to_current_mode_now() {
+            Ok(updated) => session_sync_updated = updated > 0,
+            Err(err) => eprintln!("Codex app 会话同步失败: {err}"),
         }
     }
 
-    if !actions.plugin_unlock_enabled {
+    let status = CodexAppOpenStatus {
+        session_sync_updated,
+        plugin_unlock_applied: actions.plugin_unlock_enabled
+            && codex_processes_have_plugin_unlock(processes),
+    };
+    let Some(relaunch_mode) = codex_relaunch_mode_for_app_open(actions, status) else {
         return Ok(CodexAppOpenOutcome::default());
-    }
+    };
 
-    let restarted = relaunch_running_codex_processes(
-        processes,
-        CodexRelaunchMode::Plugin,
-        CodexRelaunchOrigin::Watcher,
-    )?;
+    let restarted =
+        relaunch_running_codex_processes(processes, relaunch_mode, CodexRelaunchOrigin::Watcher)?;
     Ok(CodexAppOpenOutcome {
         relaunch_expected: restarted > 0,
     })
@@ -69,6 +79,23 @@ pub(crate) fn handle_codex_app_open(
 
 fn codex_app_open_actions() -> Result<CodexAppOpenActions, String> {
     read_settings_value().map(|settings| CodexAppOpenActions::from_settings(&settings))
+}
+
+fn codex_relaunch_mode_for_app_open(
+    actions: CodexAppOpenActions,
+    status: CodexAppOpenStatus,
+) -> Option<CodexRelaunchMode> {
+    if actions.session_sync_enabled && status.session_sync_updated {
+        return Some(if actions.plugin_unlock_enabled {
+            CodexRelaunchMode::Plugin
+        } else {
+            CodexRelaunchMode::Normal
+        });
+    }
+    if actions.plugin_unlock_enabled && !status.plugin_unlock_applied {
+        return Some(CodexRelaunchMode::Plugin);
+    }
+    None
 }
 
 pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, String> {
@@ -240,5 +267,84 @@ mod tests {
         assert!(plugin_only.plugin_unlock_enabled);
         assert!(!plugin_only.session_sync_enabled);
         assert!(!disabled.enabled());
+    }
+
+    #[test]
+    fn codex_app_open_relaunches_only_for_session_changes_or_missing_plugin_unlock() {
+        let session_only = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": false,
+            "codex_session_sync_enabled": true
+        }));
+        let session_disabled = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": false,
+            "codex_session_sync_enabled": false
+        }));
+        let plugin_only = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": true,
+            "codex_session_sync_enabled": false
+        }));
+        let session_and_plugin = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": true,
+            "codex_session_sync_enabled": true
+        }));
+
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                session_only,
+                CodexAppOpenStatus {
+                    session_sync_updated: true,
+                    plugin_unlock_applied: false
+                }
+            ),
+            Some(CodexRelaunchMode::Normal)
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(session_only, CodexAppOpenStatus::default()),
+            None
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(plugin_only, CodexAppOpenStatus::default()),
+            Some(CodexRelaunchMode::Plugin)
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                plugin_only,
+                CodexAppOpenStatus {
+                    session_sync_updated: false,
+                    plugin_unlock_applied: true
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                session_and_plugin,
+                CodexAppOpenStatus {
+                    session_sync_updated: false,
+                    plugin_unlock_applied: true
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                session_and_plugin,
+                CodexAppOpenStatus {
+                    session_sync_updated: true,
+                    plugin_unlock_applied: true
+                }
+            ),
+            Some(CodexRelaunchMode::Plugin)
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                session_disabled,
+                CodexAppOpenStatus {
+                    session_sync_updated: true,
+                    plugin_unlock_applied: false
+                }
+            ),
+            None
+        );
     }
 }

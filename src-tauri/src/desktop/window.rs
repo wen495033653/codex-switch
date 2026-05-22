@@ -113,6 +113,14 @@ fn handle_main_window_close(window: &tauri::Window, api: &CloseRequestApi) {
     }
 
     let app = window.app_handle().clone();
+    if cfg!(debug_assertions) {
+        app.state::<AppRuntime>()
+            .is_quitting
+            .store(true, Ordering::SeqCst);
+        app.exit(0);
+        return;
+    }
+
     if app.state::<AppRuntime>().is_quitting.load(Ordering::SeqCst) {
         return;
     }

@@ -10,8 +10,8 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 
-const WATCHER_INTERVAL_MS: u64 = 3_000;
-const TAKEOVER_GRACE_MS: u64 = 2_000;
+const WATCHER_INTERVAL_MS: u64 = 2_000;
+const TAKEOVER_GRACE_MS: u64 = 500;
 const PENDING_RELAUNCH_TTL_MS: u64 = 30_000;
 const OPEN_ABSENCE_RESET_MS: u64 = 3_000;
 
@@ -20,6 +20,7 @@ pub(crate) struct CodexProcess {
     pub(crate) pid: u64,
     parent_pid: u64,
     pub(crate) executable_path: String,
+    pub(crate) command_line: String,
 }
 
 #[derive(Default)]
@@ -356,6 +357,7 @@ fn running_codex_processes() -> Result<Vec<CodexProcess>, String> {
             let pid = value_u64_field(&entry, "pid")?;
             let parent_pid = value_u64_field(&entry, "parentPid").unwrap_or(0);
             let executable_path = raw_string_field(&entry, "executablePath");
+            let command_line = raw_string_field(&entry, "commandLine");
             if executable_path.trim().is_empty() {
                 return None;
             }
@@ -363,6 +365,7 @@ fn running_codex_processes() -> Result<Vec<CodexProcess>, String> {
                 pid,
                 parent_pid,
                 executable_path,
+                command_line,
             })
         })
         .collect::<Vec<_>>();
@@ -382,11 +385,13 @@ mod tests {
                 pid: 1,
                 parent_pid: 0,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
             CodexProcess {
                 pid: 2,
                 parent_pid: 1,
                 executable_path: "c:/codex/codex.exe".to_string(),
+                command_line: String::new(),
             },
         ];
 
@@ -403,16 +408,19 @@ mod tests {
                 pid: 10,
                 parent_pid: 1,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
             CodexProcess {
                 pid: 11,
                 parent_pid: 10,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
             CodexProcess {
                 pid: 12,
                 parent_pid: 10,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
         ];
 
@@ -426,11 +434,13 @@ mod tests {
                 pid: 10,
                 parent_pid: 1,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
             CodexProcess {
                 pid: 11,
                 parent_pid: 10,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
         ];
         let restarted = vec![
@@ -438,11 +448,13 @@ mod tests {
                 pid: 20,
                 parent_pid: 1,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
             CodexProcess {
                 pid: 21,
                 parent_pid: 20,
                 executable_path: r"C:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
         ];
         let moved = vec![
@@ -450,11 +462,13 @@ mod tests {
                 pid: 10,
                 parent_pid: 1,
                 executable_path: r"D:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
             CodexProcess {
                 pid: 11,
                 parent_pid: 10,
                 executable_path: r"D:\Codex\codex.exe".to_string(),
+                command_line: String::new(),
             },
         ];
 
