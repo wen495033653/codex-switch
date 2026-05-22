@@ -3,15 +3,6 @@ use url::Url;
 pub(crate) const DEFAULT_API_NAME: &str = "api";
 pub(crate) const API_PROVIDER_ID: &str = "api";
 
-pub(crate) fn api_provider_name(name: &str) -> String {
-    let trimmed_name = name.trim();
-    if !trimmed_name.is_empty() {
-        return trimmed_name.to_string();
-    }
-
-    DEFAULT_API_NAME.to_string()
-}
-
 pub(crate) fn normalize_api_base_url(base_url: &str) -> Result<String, String> {
     let raw = base_url.trim();
     if raw.is_empty() {
@@ -78,16 +69,5 @@ mod tests {
             normalize_api_base_url("  ").unwrap_err(),
             "API Base URL 不能为空"
         );
-    }
-
-    #[test]
-    fn api_provider_name_uses_api_when_name_is_default() {
-        assert_eq!(api_provider_name(DEFAULT_API_NAME), DEFAULT_API_NAME);
-        assert_eq!(api_provider_name(""), DEFAULT_API_NAME);
-    }
-
-    #[test]
-    fn api_provider_name_preserves_custom_name() {
-        assert_eq!(api_provider_name("Custom Provider"), "Custom Provider");
     }
 }
