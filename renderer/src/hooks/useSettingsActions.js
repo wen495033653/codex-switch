@@ -119,10 +119,10 @@ export function useSettingsActions({
     try {
       const res = await window.api.setCodexRemoteControlHookEnabled({ enabled });
       applySettings(res);
-      toast((res && res.message) || (enabled ? 'Remote Control Hook 已启用' : 'Remote Control Hook 已关闭'));
+      toast((res && res.message) || (enabled ? '远程控制（手机app）已启用' : '远程控制（手机app）已关闭'));
     } catch (err) {
       setSettingsDraft(settings);
-      toast(getErrorMessage(err, enabled ? '启用 Remote Control Hook 失败' : '关闭 Remote Control Hook 失败'), 7000);
+      toast(getErrorMessage(err, enabled ? '启用远程控制（手机app）失败' : '关闭远程控制（手机app）失败'), 7000);
     } finally {
       setSavingCodexRemoteControlHook(false);
     }

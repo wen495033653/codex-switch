@@ -307,9 +307,9 @@ pub(crate) fn set_codex_remote_control_hook_enabled(enabled: bool) -> Result<Val
     Ok(json!({
         "ok": true,
         "message": if enabled {
-            "Remote Control Hook 已启用"
+            "远程控制（手机app）已启用"
         } else {
-            "Remote Control Hook 已关闭"
+            "远程控制（手机app）已关闭"
         },
         "settings": settings,
         "changed": changed

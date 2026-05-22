@@ -166,14 +166,13 @@ export default function ProxySettingsTab({
 
             <section className="settings-section settings-app-card-section settings-remote-control-section">
                 <div className="settings-section-head">
-                    <div className="settings-section-title">Remote Control Hook</div>
-                    <div className="settings-section-desc">阻止 Codex app 关闭 remote_control</div>
+                    <div className="settings-section-title">开启远程控制（手机app）</div>
                 </div>
                 <button
                     type="button"
                     className={`settings-toggle-row ${codexRemoteControlHookEnabled ? 'active' : ''}`}
                     aria-pressed={codexRemoteControlHookEnabled}
-                    aria-label={codexRemoteControlHookEnabled ? '关闭 Remote Control Hook' : '开启 Remote Control Hook'}
+                    aria-label={codexRemoteControlHookEnabled ? '关闭远程控制（手机app）' : '开启远程控制（手机app）'}
                     disabled={savingCodexRemoteControlHook || switching}
                     onClick={() => setCodexRemoteControlHookEnabled(!codexRemoteControlHookEnabled)}
                 >
