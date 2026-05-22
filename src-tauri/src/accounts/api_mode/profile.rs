@@ -37,6 +37,16 @@ pub(crate) fn read_api_key_from_auth() -> String {
         .unwrap_or_default()
 }
 
+fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Value)> {
+    vec![
+        ("name", Value::String(profile.provider_name())),
+        ("base_url", Value::String(profile.base_url.clone())),
+        ("wire_api", Value::String("responses".to_string())),
+        ("supports_websockets", Value::Bool(true)),
+        ("requires_openai_auth", Value::Bool(true)),
+    ]
+}
+
 pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
     let profile = ApiModeProfile::from_value(profile)?;
     let api_key = profile.api_key_or_auth_file();
@@ -52,11 +62,7 @@ pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
     ])?;
     set_table_config(
         &format!("model_providers.{API_PROVIDER_ID}"),
-        vec![
-            ("name", Value::String(profile.provider_name())),
-            ("base_url", Value::String(profile.base_url)),
-            ("requires_openai_auth", Value::Bool(true)),
-        ],
+        api_mode_provider_config(&profile),
     )?;
     Ok(())
 }
@@ -84,4 +90,37 @@ pub(crate) fn restore_api_mode_if_selected() -> Result<bool, String> {
 
     set_api_mode(&profile)?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Map;
+
+    #[test]
+    fn api_mode_provider_config_enables_responses_websockets() {
+        let profile = ApiModeProfile {
+            name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+        };
+
+        let config: Map<String, Value> = api_mode_provider_config(&profile)
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+
+        assert_eq!(
+            config.get("wire_api").and_then(Value::as_str),
+            Some("responses")
+        );
+        assert_eq!(
+            config.get("supports_websockets").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            config.get("requires_openai_auth").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
 }
