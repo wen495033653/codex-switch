@@ -6,6 +6,11 @@ use serde_json::Value;
 
 const FEATURES_TABLE: &str = "features";
 const REMOTE_CONTROL_CONFIG_KEY: &str = "remote_control";
+const LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY: &str = "remote_connections";
+const REMOTE_CONTROL_CONFIG_KEYS: &[&str] = &[
+    REMOTE_CONTROL_CONFIG_KEY,
+    LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY,
+];
 
 fn remove_table_lines(table_name: &str) -> Result<Vec<String>, String> {
     let mut lines = read_config_lines()?;
@@ -131,6 +136,38 @@ pub(crate) fn remove_table_config(table_name: &str) -> Result<(), String> {
     write_config_lines(&lines)
 }
 
+fn remove_table_config_entries(lines: &[String], table_name: &str, keys: &[&str]) -> Vec<String> {
+    let header = format!("[{table_name}]");
+    let Some((start, end)) = table_bounds(lines, &header) else {
+        return lines.to_vec();
+    };
+
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            if index > start && index < end {
+                if let Some((key, _value)) = root_assignment(line) {
+                    if keys.iter().any(|target| *target == key) {
+                        return None;
+                    }
+                }
+            }
+            Some(line.clone())
+        })
+        .collect()
+}
+
+fn remove_table_config_values(table_name: &str, keys: &[&str]) -> Result<bool, String> {
+    let lines = read_config_lines()?;
+    let next_lines = remove_table_config_entries(&lines, table_name, keys);
+    let changed = next_lines != lines;
+    if changed {
+        write_config_lines(&next_lines)?;
+    }
+    Ok(changed)
+}
+
 fn upsert_root_config_entries(lines: &[String], values: Vec<(String, Value)>) -> Vec<String> {
     let root_end = find_root_table_index(lines).unwrap_or(lines.len());
     let mut pending = values;
@@ -194,19 +231,31 @@ pub(crate) fn set_config_values(values: Vec<(&str, String)>) -> Result<(), Strin
 
 pub(crate) fn ensure_remote_control_enabled() -> Result<bool, String> {
     let features = read_table_config(FEATURES_TABLE)?;
-    if features
+    let remote_control_enabled = features
         .get(REMOTE_CONTROL_CONFIG_KEY)
         .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return Ok(false);
+        == Some(true);
+    let has_legacy_remote_connections = features.contains_key(LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY);
+
+    let mut changed = false;
+    if !remote_control_enabled {
+        set_table_config_values(
+            FEATURES_TABLE,
+            vec![(REMOTE_CONTROL_CONFIG_KEY, Value::Bool(true))],
+        )?;
+        changed = true;
+    }
+    if has_legacy_remote_connections {
+        changed =
+            remove_table_config_values(FEATURES_TABLE, &[LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY])?
+                || changed;
     }
 
-    set_table_config_values(
-        FEATURES_TABLE,
-        vec![(REMOTE_CONTROL_CONFIG_KEY, Value::Bool(true))],
-    )?;
-    Ok(true)
+    Ok(changed)
+}
+
+pub(crate) fn remove_remote_control_config() -> Result<bool, String> {
+    remove_table_config_values(FEATURES_TABLE, REMOTE_CONTROL_CONFIG_KEYS)
 }
 
 pub(crate) fn remove_config_values(keys: &[&str]) -> Result<(), String> {
@@ -273,5 +322,46 @@ mod tests {
                 "name = \"API\"",
             ])
         );
+    }
+
+    #[test]
+    fn remove_table_config_entries_removes_remote_control_keys_only_from_features() {
+        let output = remove_table_config_entries(
+            &lines(&[
+                "remote_connections = true",
+                "",
+                "[features]",
+                "memories = true",
+                "remote_control = true",
+                "remote_connections = true",
+                "",
+                "[model_providers.api]",
+                "remote_control = true",
+            ]),
+            FEATURES_TABLE,
+            REMOTE_CONTROL_CONFIG_KEYS,
+        );
+
+        assert_eq!(
+            output,
+            lines(&[
+                "remote_connections = true",
+                "",
+                "[features]",
+                "memories = true",
+                "",
+                "[model_providers.api]",
+                "remote_control = true",
+            ])
+        );
+    }
+
+    #[test]
+    fn remove_table_config_entries_preserves_file_without_features_table() {
+        let input = lines(&["model_provider = \"api\""]);
+        let output =
+            remove_table_config_entries(&input, FEATURES_TABLE, REMOTE_CONTROL_CONFIG_KEYS);
+
+        assert_eq!(output, input);
     }
 }

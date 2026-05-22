@@ -1,5 +1,8 @@
 use crate::{
-    codex_config::ensure_remote_control_enabled as ensure_config_remote_control_enabled,
+    codex_config::{
+        ensure_remote_control_enabled as ensure_config_remote_control_enabled,
+        remove_remote_control_config,
+    },
     json_util::bool_field,
     session_sync_diagnostics::log_session_sync_event,
     settings::{read_settings_value, update_settings_value},
@@ -297,7 +300,7 @@ pub(crate) fn set_codex_remote_control_hook_enabled(enabled: bool) -> Result<Val
     let changed = if enabled {
         ensure_config_remote_control_enabled()?
     } else {
-        false
+        remove_remote_control_config()?
     };
     let settings = update_settings_value(&json!({
         REMOTE_CONTROL_HOOK_SETTING_KEY: enabled
