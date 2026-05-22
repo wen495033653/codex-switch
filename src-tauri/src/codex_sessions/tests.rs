@@ -46,7 +46,8 @@ fn create_state_db(path: &Path) {
                 id TEXT PRIMARY KEY,
                 rollout_path TEXT NOT NULL,
                 model_provider TEXT NOT NULL,
-                cwd TEXT NOT NULL
+                cwd TEXT NOT NULL,
+                updated_at INTEGER
             )",
             [],
         )
@@ -458,6 +459,30 @@ fn sync_state_provider_updates_all_threads_without_touching_cwd() {
                 "D:\\Workspace\\openai".to_string()
             ),
         ]
+    );
+}
+
+#[test]
+fn state_db_summary_reports_provider_change_groups() {
+    let temp_dir = unique_sessions_dir("state-db-summary");
+    let state_db = temp_dir.join("state_5.sqlite");
+    create_state_db(&state_db);
+
+    let connection = Connection::open(&state_db).unwrap();
+    let summary = query_state_db_summary(&connection, "openai").unwrap();
+
+    drop(connection);
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(summary["totalThreads"], 3);
+    assert_eq!(summary["targetProviderThreads"], 1);
+    assert_eq!(summary["wouldUpdateThreads"], 2);
+    assert_eq!(
+        summary["providerChanges"],
+        json!([
+            {"fromProvider": "api", "toProvider": "openai", "threads": 1},
+            {"fromProvider": "custom-provider", "toProvider": "openai", "threads": 1}
+        ])
     );
 }
 

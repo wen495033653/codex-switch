@@ -95,6 +95,12 @@ pub(super) fn apply_settings_patch(
             Value::Bool(bool_field(patch, "codex_plugins_enabled")),
         );
     }
+    if has_key(patch, "codex_remote_control_hook_enabled") {
+        object.insert(
+            "codex_remote_control_hook_enabled".to_string(),
+            Value::Bool(bool_field(patch, "codex_remote_control_hook_enabled")),
+        );
+    }
     if has_key(patch, "codex_session_sync_enabled") {
         object.insert(
             "codex_session_sync_enabled".to_string(),
@@ -241,6 +247,26 @@ mod tests {
 
         assert_eq!(
             object.get("codex_plugins_enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_codex_remote_control_hook_enabled() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_remote_control_hook_enabled": true
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object
+                .get("codex_remote_control_hook_enabled")
+                .and_then(Value::as_bool),
             Some(true)
         );
     }

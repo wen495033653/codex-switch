@@ -5,6 +5,7 @@ export { useAppBootstrap } from './useAppBootstrap';
 export { useApiModeDraft } from './useApiModeDraft';
 export { useCodexSessionSync } from './useCodexSessionSync';
 export { useCurrentModeSummary } from './useCurrentModeSummary';
+export { useDevDiagnostics } from './useDevDiagnostics';
 export { useIdeReopen } from './useIdeReopen';
 export { useModeSwitching } from './useModeSwitching';
 export { useRefreshTokenModal } from './useRefreshTokenModal';

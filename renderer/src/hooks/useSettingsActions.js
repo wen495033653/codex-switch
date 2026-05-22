@@ -21,7 +21,11 @@ export function useSettingsActions({
 }) {
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
+  const [savingCodexRemoteControlHook, setSavingCodexRemoteControlHook] = useState(false);
   const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
+  const [pluginRestartNoticeMessage, setPluginRestartNoticeMessage] = useState(
+    'Plugin 解锁设置已保存，重启 Codex app 后生效。'
+  );
   const [pluginRestartNoticeLoading, setPluginRestartNoticeLoading] = useState(false);
   const [restartingCodexApp, setRestartingCodexApp] = useState(false);
 
@@ -53,6 +57,7 @@ export function useSettingsActions({
           return;
         }
         if (!hasRunningCodexApp(processStatus)) return;
+        setPluginRestartNoticeMessage('Plugin 解锁设置已保存，重启 Codex app 后生效。');
         setPluginRestartNoticeVisible(true);
       }
     } catch (err) {
@@ -103,6 +108,23 @@ export function useSettingsActions({
       toast(getErrorMessage(err, enabled ? '启用 Codex app 代理失败' : '关闭 Codex app 代理失败'), 7000);
     } finally {
       setSavingCodexProxyEnv(false);
+    }
+  };
+
+  const setCodexRemoteControlHookEnabled = async (enabled) => {
+    if (savingCodexRemoteControlHook || savingProxySettings) return;
+    setSettingsDraft(prev => ({ ...prev, codex_remote_control_hook_enabled: enabled }));
+
+    setSavingCodexRemoteControlHook(true);
+    try {
+      const res = await window.api.setCodexRemoteControlHookEnabled({ enabled });
+      applySettings(res);
+      toast((res && res.message) || (enabled ? 'Remote Control Hook 已启用' : 'Remote Control Hook 已关闭'));
+    } catch (err) {
+      setSettingsDraft(settings);
+      toast(getErrorMessage(err, enabled ? '启用 Remote Control Hook 失败' : '关闭 Remote Control Hook 失败'), 7000);
+    } finally {
+      setSavingCodexRemoteControlHook(false);
     }
   };
 
@@ -164,6 +186,7 @@ export function useSettingsActions({
     pluginRestartNotice: {
       visible: pluginRestartNoticeVisible,
       loading: pluginRestartNoticeLoading,
+      message: pluginRestartNoticeMessage,
       onRestart: restartCodexAppForPluginSetting,
       onClose: () => !pluginRestartNoticeLoading && setPluginRestartNoticeVisible(false)
     },
@@ -171,8 +194,10 @@ export function useSettingsActions({
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
+    savingCodexRemoteControlHook,
     savingProxySettings,
     setCodexProxyEnvEnabled,
+    setCodexRemoteControlHookEnabled,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   };

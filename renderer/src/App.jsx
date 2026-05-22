@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppDialogs, AppMainView, AppNavbar } from './components';
+import { AppDialogs, AppMainView, AppNavbar, DevDiagnosticsPanel } from './components';
 import {
   DEFAULT_CODEX_STATE,
   DEFAULT_SETTINGS,
@@ -15,6 +15,7 @@ import {
   useApiModeDraft,
   useCodexSessionSync,
   useCurrentModeSummary,
+  useDevDiagnostics,
   useIdeReopen,
   useModeSwitching,
   useRefreshAllFlow,
@@ -23,6 +24,8 @@ import {
   useToast,
   useUpdateFlow
 } from './hooks';
+
+const IS_DEV_BUILD = import.meta.env.DEV;
 
 export default function App() {
   const [store, setStore] = useState({ accounts: [], active_id: '' });
@@ -41,6 +44,7 @@ export default function App() {
   });
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
   const {
     closeRefreshAllModal,
@@ -249,8 +253,10 @@ export default function App() {
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
+    savingCodexRemoteControlHook,
     savingProxySettings,
     setCodexProxyEnvEnabled,
+    setCodexRemoteControlHookEnabled,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   } = useSettingsActions({
@@ -280,6 +286,19 @@ export default function App() {
     const nextTheme = (viewMode === 'settings' ? settingsDraft.ui_theme : settings.ui_theme) || DEFAULT_SETTINGS.ui_theme;
     document.documentElement.dataset.theme = nextTheme;
   }, [settings.ui_theme, settingsDraft.ui_theme, viewMode]);
+
+  useEffect(() => {
+    if (!IS_DEV_BUILD) return undefined;
+    const previousTitle = document.title;
+    document.title = previousTitle.startsWith('[DEV]')
+      ? previousTitle
+      : `[DEV] ${previousTitle || 'Codex Switch'}`;
+    document.documentElement.dataset.build = 'dev';
+    return () => {
+      document.title = previousTitle;
+      delete document.documentElement.dataset.build;
+    };
+  }, []);
 
   const openGptPoolLanding = async () => {
     try {
@@ -341,11 +360,15 @@ export default function App() {
   });
 
   return (
-    <div className="app">
+    <div className={`app ${IS_DEV_BUILD ? 'dev-build' : ''}`}>
       <AppNavbar
         apiModeActive={apiModeActive}
         currentModeDetail={currentModeDetail}
         currentModeLabel={currentModeLabel}
+        devErrorCount={devDiagnostics.errorCount}
+        devLogCount={devDiagnostics.totalCount}
+        isDevBuild={IS_DEV_BUILD}
+        onDevDiagnosticsToggle={devDiagnostics.toggle}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
         onSettingsClick={openSettingsPage}
@@ -366,11 +389,13 @@ export default function App() {
             checkingUpdate,
             codexSessionSyncEnabled,
             savingCodexProxyEnv,
+            savingCodexRemoteControlHook,
             savingCodexSessionSync,
             savingProxySettings,
             restartingCodexApp,
             restartCurrentCodexAppNormal,
             setCodexProxyEnvEnabled,
+            setCodexRemoteControlHookEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
             switching,
             updateSettingsDraftAndSave,
@@ -485,6 +510,16 @@ export default function App() {
             onConfirm: confirmUpdateAction
           }}
         />
+        {IS_DEV_BUILD && (
+          <DevDiagnosticsPanel
+            entries={devDiagnostics.entries}
+            errorCount={devDiagnostics.errorCount}
+            isOpen={devDiagnostics.isOpen}
+            onClear={devDiagnostics.clear}
+            onToggle={devDiagnostics.toggle}
+            warningCount={devDiagnostics.warningCount}
+          />
+        )}
       </div>
     </div>
   );

@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS = {
   codex_proxy_url: DEFAULT_CODEX_PROXY_URL,
   codex_proxy_env_enabled: false,
   codex_plugins_enabled: false,
+  codex_remote_control_hook_enabled: false,
   codex_session_sync_enabled: true,
   codex_active_mode: '',
   api_promo_bar_open: false,

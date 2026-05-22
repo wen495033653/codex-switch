@@ -1,5 +1,6 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
+use serde_json::json;
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -18,6 +19,7 @@ mod oauth_flow;
 mod paths;
 mod proxy_config;
 mod quota;
+mod session_sync_diagnostics;
 mod settings;
 mod time_util;
 mod updater;
@@ -57,6 +59,8 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            session_sync_diagnostics::init_session_sync_diagnostics(app.handle().clone());
+            session_sync_diagnostics::log_session_sync_event("app_start", json!({}));
             restore_main_window_state(app.handle()).map_err(setup_error)?;
             setup_tray(app.handle()).map_err(setup_error)?;
             let launch_args: Vec<String> = std::env::args().collect();
@@ -93,11 +97,13 @@ fn main() {
             commands::switch_account,
             commands::switch_api_mode,
             codex_launcher::set_codex_proxy_env_enabled,
+            codex_launcher::set_codex_remote_control_hook_enabled,
             codex_launcher::get_current_codex_app_processes,
             codex_launcher::restart_current_codex_app_for_plugin_setting,
             codex_launcher::restart_current_codex_app_normal,
             codex_launcher::restart_open_ides,
             codex_launcher::discard_ide_snapshot,
+            session_sync_diagnostics::get_dev_log_entries,
             commands::import_accounts,
             commands::export_accounts,
             commands::refresh_all_quotas,

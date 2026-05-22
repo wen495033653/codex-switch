@@ -7,6 +7,7 @@ export { default as ApiModePage } from './ApiModePage';
 export { default as AppDialogs } from './AppDialogs';
 export { default as AppMainView } from './AppMainView';
 export { default as AppNavbar } from './AppNavbar';
+export { default as DevDiagnosticsPanel } from './DevDiagnosticsPanel';
 export { default as RefreshTokenDialog } from './RefreshTokenDialog';
 export { default as SettingsPage } from './SettingsPage';
 export { default as UpdateDialog } from './UpdateDialog';

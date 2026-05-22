@@ -3,6 +3,16 @@ import ConfirmDialog from './ConfirmDialog';
 import RefreshTokenDialog from './RefreshTokenDialog';
 import UpdateDialog from './UpdateDialog';
 
+function buildIdeReopenMessage({ sessionSync, summaryText }) {
+  const targetText = summaryText || '当前已打开的软件';
+  return [
+    sessionSync
+      ? '切换已完成。是否关闭后重新打开？'
+      : '切换已完成。是否重新打开？',
+    targetText
+  ].join('\n');
+}
+
 export default function AppDialogs({
   addAccount,
   deleteAccount,
@@ -21,7 +31,7 @@ export default function AppDialogs({
       {pluginRestartNotice.visible && (
         <ConfirmDialog
           title="重启后生效"
-          message="Plugin 解锁设置已保存，重启 Codex app 后生效。"
+          message={pluginRestartNotice.message || 'Codex app 设置已保存，重启后生效。'}
           isLoading={pluginRestartNotice.loading}
           confirmText="重启"
           loadingText="重启中..."
@@ -105,11 +115,10 @@ export default function AppDialogs({
 
       {ideReopen.modal.visible && (
         <ConfirmDialog
-          message={
-            ideReopen.modal.sessionSync
-              ? `切换已完成。是否关闭 ${ideReopen.summaryText || 'Codex app 或 VS Code'}，同步会话后重新打开？`
-              : `切换已完成。是否重新打开 ${ideReopen.summaryText || 'Codex app 或 VS Code'}？`
-          }
+          message={buildIdeReopenMessage({
+            sessionSync: ideReopen.modal.sessionSync,
+            summaryText: ideReopen.summaryText
+          })}
           isLoading={ideReopen.modal.loading}
           confirmText="重新打开"
           loadingText={ideReopen.modal.sessionSync ? '同步并重新打开中...' : '重新打开中...'}

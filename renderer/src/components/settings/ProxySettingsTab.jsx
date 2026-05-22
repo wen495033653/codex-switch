@@ -10,12 +10,14 @@ function normalizePids(value) {
 export default function ProxySettingsTab({
     codexSessionSyncEnabled,
     savingCodexProxyEnv,
+    savingCodexRemoteControlHook,
     savingCodexSessionSync,
     savingProxySettings,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     setSettingsDraft,
     setCodexProxyEnvEnabled,
+    setCodexRemoteControlHookEnabled,
     setCodexSessionSyncEnabled,
     settingsDraft,
     switching,
@@ -24,6 +26,7 @@ export default function ProxySettingsTab({
 }) {
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
     const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
+    const codexRemoteControlHookEnabled = settingsDraft.codex_remote_control_hook_enabled === true;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex app 或 VS Code 前同步会话列表。';
     const [codexAppProcessStatus, setCodexAppProcessStatus] = useState({
@@ -154,6 +157,28 @@ export default function ProxySettingsTab({
                 >
                     <span className="settings-toggle-copy">
                         <span className="settings-toggle-title">启动</span>
+                    </span>
+                    <span className="settings-switch" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                    </span>
+                </button>
+            </section>
+
+            <section className="settings-section settings-app-card-section settings-remote-control-section">
+                <div className="settings-section-head">
+                    <div className="settings-section-title">Remote Control Hook</div>
+                    <div className="settings-section-desc">阻止 Codex app 关闭 remote_control</div>
+                </div>
+                <button
+                    type="button"
+                    className={`settings-toggle-row ${codexRemoteControlHookEnabled ? 'active' : ''}`}
+                    aria-pressed={codexRemoteControlHookEnabled}
+                    aria-label={codexRemoteControlHookEnabled ? '关闭 Remote Control Hook' : '开启 Remote Control Hook'}
+                    disabled={savingCodexRemoteControlHook || switching}
+                    onClick={() => setCodexRemoteControlHookEnabled(!codexRemoteControlHookEnabled)}
+                >
+                    <span className="settings-toggle-copy">
+                        <span className="settings-toggle-title">启用</span>
                     </span>
                     <span className="settings-switch" aria-hidden="true">
                         <span className="settings-switch-thumb" />

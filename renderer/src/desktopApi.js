@@ -38,6 +38,9 @@ const COMMAND_BINDINGS = {
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
   restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
+  setCodexRemoteControlHookEnabled: ['set_codex_remote_control_hook_enabled', payload => ({
+    enabled: Boolean(payload && payload.enabled)
+  })],
   setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled),
     proxyUrl: payload && payload.proxyUrl ? payload.proxyUrl : ''
@@ -58,6 +61,7 @@ const COMMAND_BINDINGS = {
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
+  getDevLogEntries: ['get_dev_log_entries'],
   startOauth: ['oauth_start', payload => ({ payload })],
   cancelOauth: ['oauth_cancel'],
   submitOauthCallback: ['oauth_submit_callback', callbackUrl => ({ callbackUrl })]
@@ -67,7 +71,8 @@ const EVENT_BINDINGS = {
   onOauthUpdate: 'oauth-update',
   onStoreUpdated: 'store-updated',
   onRefreshAllStatus: 'refresh-all-status',
-  onUpdateStatus: 'update-status'
+  onUpdateStatus: 'update-status',
+  onDevLog: 'dev-log'
 };
 
 function unsupportedApiCall() {

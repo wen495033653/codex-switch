@@ -1,3 +1,4 @@
+use super::remote_control::CODEX_REMOTE_CONTROL_HOOK_SCRIPT;
 use super::*;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
@@ -8,6 +9,18 @@ use url::Url;
 
 pub(crate) const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CodexCdpLaunchHooks {
+    pub(crate) plugin_unlock: bool,
+    pub(crate) remote_control_hook: bool,
+}
+
+struct CdpScript {
+    name: &'static str,
+    source: &'static str,
+}
+
 const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 (() => {
   const version = "3";
@@ -149,27 +162,47 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 })();
 "###;
 
-pub(crate) fn codex_processes_have_plugin_unlock(processes: &[CodexProcess]) -> bool {
+pub(crate) fn codex_processes_have_cdp_launch(processes: &[CodexProcess]) -> bool {
     processes
         .iter()
-        .any(|process| command_line_has_plugin_unlock(&process.command_line))
+        .any(|process| command_line_has_cdp_launch(&process.command_line))
 }
 
-fn command_line_has_plugin_unlock(command_line: &str) -> bool {
+fn command_line_has_cdp_launch(command_line: &str) -> bool {
     let normalized = command_line.to_ascii_lowercase();
     normalized.contains("--remote-debugging-port")
         && normalized.contains("--remote-allow-origins=http://127.0.0.1:")
 }
 
-pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), String> {
+pub(crate) fn launch_codex_with_cdp_hooks(
+    executable_path: &Path,
+    hooks: CodexCdpLaunchHooks,
+) -> Result<(), String> {
     if !cfg!(windows) {
-        return Err("Codex app 插件解锁目前仅支持 Windows 重启入口".to_string());
+        return Err("Codex app hook 目前仅支持 Windows 重启入口".to_string());
     }
     if !executable_path.exists() {
         return Err(format!(
             "Codex app 路径不存在: {}",
             executable_path.display()
         ));
+    }
+
+    let scripts = cdp_scripts_for_hooks(hooks);
+    if scripts.is_empty() {
+        let mut command = Command::new(executable_path);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(parent) = executable_path.parent() {
+            command.current_dir(parent);
+        }
+        hide_command_window(&mut command);
+        command
+            .spawn()
+            .map_err(|err| format!("启动 Codex app 失败: {err}"))?;
+        return Ok(());
     }
 
     let debug_port = select_loopback_port(CODEX_PLUGIN_DEBUG_PORT)?;
@@ -189,12 +222,29 @@ pub(crate) fn launch_codex_with_plugins(executable_path: &Path) -> Result<(), St
 
     let mut child = command
         .spawn()
-        .map_err(|err| format!("启动 Codex app 插件模式失败: {err}"))?;
-    if let Err(err) = wait_and_inject_plugin_unlock(debug_port) {
+        .map_err(|err| format!("启动 Codex app hook 模式失败: {err}"))?;
+    if let Err(err) = wait_and_inject_cdp_scripts(debug_port, &scripts) {
         let _ = child.kill();
         return Err(err);
     }
     Ok(())
+}
+
+fn cdp_scripts_for_hooks(hooks: CodexCdpLaunchHooks) -> Vec<CdpScript> {
+    let mut scripts = Vec::new();
+    if hooks.plugin_unlock {
+        scripts.push(CdpScript {
+            name: "plugin_unlock",
+            source: CODEX_PLUGIN_UNLOCK_SCRIPT,
+        });
+    }
+    if hooks.remote_control_hook {
+        scripts.push(CdpScript {
+            name: "remote_control_hook",
+            source: CODEX_REMOTE_CONTROL_HOOK_SCRIPT,
+        });
+    }
+    scripts
 }
 
 fn select_loopback_port(requested: u16) -> Result<u16, String> {
@@ -209,13 +259,13 @@ fn select_loopback_port(requested: u16) -> Result<u16, String> {
         .map_err(|err| format!("读取 CDP 端口失败: {err}"))
 }
 
-fn wait_and_inject_plugin_unlock(port: u16) -> Result<(), String> {
+fn wait_and_inject_cdp_scripts(port: u16, scripts: &[CdpScript]) -> Result<(), String> {
     let started = Instant::now();
     let timeout = StdDuration::from_millis(CDP_CONNECT_TIMEOUT_MS);
     let mut last_error = String::new();
 
     while started.elapsed() < timeout {
-        match inject_plugin_unlock(port) {
+        match inject_cdp_scripts(port, scripts) {
             Ok(()) => return Ok(()),
             Err(err) => last_error = err,
         }
@@ -225,29 +275,38 @@ fn wait_and_inject_plugin_unlock(port: u16) -> Result<(), String> {
     Err(if last_error.is_empty() {
         "等待 Codex app CDP 端口超时".to_string()
     } else {
-        format!("注入 Codex app 插件解锁脚本失败: {last_error}")
+        format!("注入 Codex app hook 脚本失败: {last_error}")
     })
 }
 
-fn inject_plugin_unlock(port: u16) -> Result<(), String> {
+fn inject_cdp_scripts(port: u16, scripts: &[CdpScript]) -> Result<(), String> {
     let websocket_url = page_websocket_url(port)?;
     let mut ws = connect_websocket(&websocket_url)?;
-    send_cdp_command(
-        &mut ws,
-        1,
-        "Page.addScriptToEvaluateOnNewDocument",
-        json!({ "source": CODEX_PLUGIN_UNLOCK_SCRIPT }),
-    )?;
-    send_cdp_command(
-        &mut ws,
-        2,
-        "Runtime.evaluate",
-        json!({
-            "expression": CODEX_PLUGIN_UNLOCK_SCRIPT,
-            "awaitPromise": false,
-            "allowUnsafeEvalBlockedByCSP": true
-        }),
-    )?;
+    let mut command_id = 1;
+    for script in scripts {
+        send_cdp_command(
+            &mut ws,
+            command_id,
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({ "source": script.source }),
+        )
+        .map_err(|err| format!("注入 {} new-document 脚本失败: {err}", script.name))?;
+        command_id += 1;
+    }
+    for script in scripts {
+        send_cdp_command(
+            &mut ws,
+            command_id,
+            "Runtime.evaluate",
+            json!({
+                "expression": script.source,
+                "awaitPromise": false,
+                "allowUnsafeEvalBlockedByCSP": true
+            }),
+        )
+        .map_err(|err| format!("执行 {} 脚本失败: {err}", script.name))?;
+        command_id += 1;
+    }
     Ok(())
 }
 
@@ -361,14 +420,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_line_has_plugin_unlock_requires_cdp_launch_args() {
-        assert!(command_line_has_plugin_unlock(
+    fn command_line_has_cdp_launch_requires_cdp_launch_args() {
+        assert!(command_line_has_cdp_launch(
             r#""C:\Codex\codex.exe" --remote-debugging-port=9229 --remote-allow-origins=http://127.0.0.1:9229"#
         ));
-        assert!(!command_line_has_plugin_unlock(
+        assert!(!command_line_has_cdp_launch(
             r#""C:\Codex\codex.exe" --remote-debugging-port=9229"#
         ));
-        assert!(!command_line_has_plugin_unlock(r#""C:\Codex\codex.exe""#));
+        assert!(!command_line_has_cdp_launch(r#""C:\Codex\codex.exe""#));
     }
 }
 

@@ -10,6 +10,7 @@
 @import './account-card.css';
 @import './pagination.css';
 @import './dialogs.css';
+@import './dev-diagnostics.css';
 @import './token-modal.css';
 @import './connect-modal.css';
 @import './quota-status.css';

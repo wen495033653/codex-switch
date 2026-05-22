@@ -15,7 +15,11 @@ export function useToast() {
   };
 
   const toastError = (err, fallback, duration = 3000) => {
-    toast(getErrorMessage(err, fallback), duration);
+    const message = getErrorMessage(err, fallback);
+    if (import.meta.env.DEV) {
+      console.error(message, err);
+    }
+    toast(message, duration);
   };
 
   useEffect(() => () => {

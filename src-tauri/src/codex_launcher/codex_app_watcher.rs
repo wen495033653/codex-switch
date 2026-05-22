@@ -1,6 +1,9 @@
 use super::capture_open_ide_snapshot;
-use crate::json_util::{raw_string_field, string_field, value_u64_field};
 use crate::time_util::now_string;
+use crate::{
+    json_util::{raw_string_field, string_field, value_u64_field},
+    session_sync_diagnostics::log_session_sync_event,
+};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -98,11 +101,22 @@ pub(crate) fn refresh_current_codex_app_processes() -> Result<Vec<CodexProcess>,
 pub(crate) fn expect_codex_app_open_for_executables(executables: &[String]) {
     let keys = normalize_executable_keys(executables.iter().map(String::as_str));
     if keys.is_empty() {
+        log_session_sync_event(
+            "codex_app_watcher_expect_open_skip",
+            json!({ "reason": "empty_executables" }),
+        );
         return;
     }
     if let Ok(mut expected) = expected_codex_app_open_state().lock() {
         expected.executables = keys;
         expected.until = Some(Instant::now() + StdDuration::from_millis(PENDING_RELAUNCH_TTL_MS));
+        log_session_sync_event(
+            "codex_app_watcher_expect_open_set",
+            json!({
+                "executables": expected.executables.clone(),
+                "ttlMs": PENDING_RELAUNCH_TTL_MS
+            }),
+        );
     }
 }
 
@@ -115,6 +129,10 @@ pub(crate) fn clear_expected_codex_app_open_for_executables(executables: &[Strin
         if expected.executables == keys {
             expected.executables.clear();
             expected.until = None;
+            log_session_sync_event(
+                "codex_app_watcher_expect_open_cleared",
+                json!({ "executables": keys }),
+            );
         }
     }
 }
@@ -124,9 +142,14 @@ where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String> + Send + 'static,
 {
     if !cfg!(windows) {
+        log_session_sync_event(
+            "codex_app_watcher_not_started",
+            json!({ "reason": "non_windows" }),
+        );
         return;
     }
 
+    log_session_sync_event("codex_app_watcher_started", json!({}));
     thread::spawn(move || watch_codex_app(on_open));
 }
 
@@ -153,6 +176,10 @@ where
             Ok(processes) => processes,
             Err(err) => {
                 eprintln!("Codex app watcher 检测失败: {err}");
+                log_session_sync_event(
+                    "codex_app_watcher_scan_error",
+                    json!({ "error": err.clone() }),
+                );
                 update_current_codex_app_processes(Vec::new(), Some(err));
                 reset_candidate(&mut candidate_signature, &mut candidate_since);
                 sleep_interval();
@@ -167,9 +194,17 @@ where
                 && open_signature.is_some()
                 && open_absence_elapsed(&mut open_absence_since, now)
             {
+                log_session_sync_event(
+                    "codex_app_watcher_open_signature_reset",
+                    json!({ "reason": "process_absence_elapsed" }),
+                );
                 open_signature = None;
             }
             if baseline_current_processes {
+                log_session_sync_event(
+                    "codex_app_watcher_baseline_empty",
+                    json!({ "reason": "no_processes_on_first_scan" }),
+                );
                 baseline_current_processes = false;
             }
             sleep_interval();
@@ -180,6 +215,15 @@ where
         let signature = codex_open_signature(&processes);
         let executable_keys = codex_executable_keys(&processes);
         if take_expected_codex_app_open_if_matches(&executable_keys, now) {
+            log_session_sync_event(
+                "codex_app_watcher_expected_open_matched",
+                json!({
+                    "action": "skip_on_open_handler",
+                    "signature": codex_open_signature_log_value(&signature),
+                    "executables": executable_keys.clone(),
+                    "processes": codex_processes_log_value(&processes)
+                }),
+            );
             open_signature = Some(signature.clone());
             reset_candidate(&mut candidate_signature, &mut candidate_since);
             sleep_interval();
@@ -188,12 +232,29 @@ where
         if !pending_relaunch_executables.is_empty()
             && executable_keys == pending_relaunch_executables
         {
+            log_session_sync_event(
+                "codex_app_watcher_pending_relaunch_matched",
+                json!({
+                    "action": "mark_open_without_handler",
+                    "signature": codex_open_signature_log_value(&signature),
+                    "executables": executable_keys.clone()
+                }),
+            );
             open_signature = Some(signature.clone());
             pending_relaunch_executables.clear();
             pending_relaunch_until = None;
         }
 
         if baseline_current_processes {
+            log_session_sync_event(
+                "codex_app_watcher_baseline_existing_processes",
+                json!({
+                    "action": "set_open_signature_without_handler",
+                    "signature": codex_open_signature_log_value(&signature),
+                    "executables": executable_keys.clone(),
+                    "processes": codex_processes_log_value(&processes)
+                }),
+            );
             candidate_signature = Some(signature.clone());
             open_signature = Some(signature.clone());
             pending_relaunch_executables.clear();
@@ -211,6 +272,15 @@ where
         }
 
         if candidate_signature.as_ref() != Some(&signature) {
+            log_session_sync_event(
+                "codex_app_watcher_open_candidate_seen",
+                json!({
+                    "signature": codex_open_signature_log_value(&signature),
+                    "executables": executable_keys.clone(),
+                    "processes": codex_processes_log_value(&processes),
+                    "graceMs": TAKEOVER_GRACE_MS
+                }),
+            );
             candidate_signature = Some(signature.clone());
             candidate_since = Some(now);
             sleep_interval();
@@ -226,21 +296,61 @@ where
         }
 
         open_signature = Some(signature.clone());
+        log_session_sync_event(
+            "codex_app_watcher_on_open_invoke",
+            json!({
+                "signature": codex_open_signature_log_value(&signature),
+                "executables": executable_keys.clone(),
+                "processes": codex_processes_log_value(&processes)
+            }),
+        );
         match on_open(&processes) {
             Ok(outcome) if outcome.relaunch_expected => {
+                log_session_sync_event(
+                    "codex_app_watcher_on_open_finish",
+                    json!({
+                        "relaunchExpected": true,
+                        "executables": executable_keys.clone()
+                    }),
+                );
                 pending_relaunch_executables = executable_keys;
                 pending_relaunch_until =
                     Some(Instant::now() + StdDuration::from_millis(PENDING_RELAUNCH_TTL_MS));
             }
-            Ok(_) => {}
+            Ok(_) => {
+                log_session_sync_event(
+                    "codex_app_watcher_on_open_finish",
+                    json!({ "relaunchExpected": false }),
+                );
+            }
             Err(err) => {
                 eprintln!("Codex app 打开后处理失败: {err}");
+                log_session_sync_event("codex_app_watcher_on_open_error", json!({ "error": err }));
             }
         }
         reset_candidate(&mut candidate_signature, &mut candidate_since);
 
         sleep_interval();
     }
+}
+
+fn codex_processes_log_value(processes: &[CodexProcess]) -> Value {
+    Value::Array(
+        processes
+            .iter()
+            .map(|process| {
+                json!({
+                    "pid": process.pid,
+                    "parentPid": process.parent_pid,
+                    "executablePath": process.executable_path.as_str()
+                })
+            })
+            .collect(),
+    )
+}
+
+fn codex_open_signature_log_value(signature: &CodexAppOpenSignature) -> Value {
+    json!({ "rootPids": signature.root_pids.clone() })
 }
 
 fn reset_candidate(

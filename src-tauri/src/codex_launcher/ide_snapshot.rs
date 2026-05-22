@@ -1,5 +1,8 @@
 use super::*;
-use crate::codex_sessions::sync_codex_sessions_to_provider_now;
+use crate::{
+    codex_sessions::sync_codex_sessions_to_provider_now_from,
+    session_sync_diagnostics::log_session_sync_event,
+};
 
 mod detect;
 mod pending;
@@ -74,14 +77,33 @@ pub(crate) fn restart_open_ides(
         .remove(id)
         .ok_or_else(|| "编辑器快照不存在或已过期".to_string())?;
 
+    log_session_sync_event(
+        "ide_reopen_confirm_start",
+        json!({
+            "snapshotId": id,
+            "apiMode": pending.api_mode,
+            "accountIdPresent": !pending.account_id.trim().is_empty(),
+            "sessionSyncProvider": pending.session_sync_provider.clone()
+        }),
+    );
     apply_pending_ide_auth(&pending)?;
     let session_sync_provider = pending.session_sync_provider.clone();
     let mut session_sync_warning = None;
     let result = restart_from_ide_snapshot(&pending.snapshot, || {
         if let Some(target_provider) = session_sync_provider.as_deref() {
-            if let Err(err) = sync_codex_sessions_to_provider_now(target_provider) {
+            if let Err(err) =
+                sync_codex_sessions_to_provider_now_from(target_provider, "ide_reopen_confirm")
+            {
                 session_sync_warning = Some(err);
             }
+        } else {
+            log_session_sync_event(
+                "ide_reopen_session_sync_skip",
+                json!({
+                    "snapshotId": id,
+                    "reason": "missing_session_sync_provider"
+                }),
+            );
         }
     })?;
     let target_text = ide_summary_text(&result);
@@ -90,11 +112,19 @@ pub(crate) fn restart_open_ides(
     } else {
         format!("未能重新打开 {target_text}")
     };
-    let message = if let Some(err) = session_sync_warning {
+    let message = if let Some(ref err) = session_sync_warning {
         format!("{message}；会话同步失败：{err}")
     } else {
         message
     };
+    log_session_sync_event(
+        "ide_reopen_confirm_finish",
+        json!({
+            "snapshotId": id,
+            "sessionSyncWarning": session_sync_warning,
+            "result": result
+        }),
+    );
     store_payload(Some(&message))
 }
 
@@ -111,6 +141,15 @@ pub(crate) fn discard_ide_snapshot(
             .map_err(|_| "编辑器快照状态锁异常".to_string())?
             .remove(id)
         {
+            log_session_sync_event(
+                "ide_reopen_discard_apply_auth_without_sync",
+                json!({
+                    "snapshotId": id,
+                    "apiMode": pending.api_mode,
+                    "accountIdPresent": !pending.account_id.trim().is_empty(),
+                    "sessionSyncProvider": pending.session_sync_provider.clone()
+                }),
+            );
             apply_pending_ide_auth(&pending)?;
         }
     }

@@ -57,7 +57,7 @@ export function useIdeReopen({
 
   const ideSummaryText = ideReopenModal.summary.length > 0
     ? ideReopenModal.summary.map(item => (item.count > 1 ? `${item.displayName} x${item.count}` : item.displayName)).join('、')
-    : '当前已打开的 Codex app 或 VS Code';
+    : '当前已打开的软件';
 
   return {
     cancelIdeReopen,

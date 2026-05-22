@@ -4,6 +4,10 @@ export default function AppNavbar({
   apiModeActive,
   currentModeDetail,
   currentModeLabel,
+  devErrorCount = 0,
+  devLogCount = 0,
+  isDevBuild = false,
+  onDevDiagnosticsToggle,
   onAccountsClick,
   onApiClick,
   onSettingsClick,
@@ -39,6 +43,18 @@ export default function AppNavbar({
           设置
         </button>
       </div>
+      {isDevBuild && (
+        <button
+          type="button"
+          className={`dev-build-chip ${devErrorCount > 0 ? 'has-errors' : ''}`}
+          onClick={onDevDiagnosticsToggle}
+        >
+          <span className="dev-build-chip-main">DEV</span>
+          <span className="dev-build-chip-meta">
+            {devErrorCount > 0 ? `${devErrorCount} ERR` : `${devLogCount} LOG`}
+          </span>
+        </button>
+      )}
       <div className={`current-mode-pill ${apiModeActive ? 'api' : subscriptionModeActive ? 'subscription' : 'unknown'}`}>
         <span className="current-mode-dot" aria-hidden="true" />
         <span className="current-mode-label">当前：{currentModeLabel}</span>
