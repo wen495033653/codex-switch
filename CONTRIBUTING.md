@@ -1,6 +1,6 @@
 # Contributing
 
-感谢你参与 Codex Switch。这个项目是 Tauri 2 + React + Rust 桌面应用，贡献时请保持改动聚焦，并避免提交任何账号 token、API Key 或本机配置文件。
+感谢你参与 Codex Switch。这个项目是 Tauri 2 + React + Rust 桌面应用。贡献时建议尽量保持改动聚焦；提交前也请留意不要带入账号 token、API Key 或本机配置文件。
 
 ## 环境要求
 
@@ -32,7 +32,7 @@ npm run dev:renderer
 
 ## 验证
 
-建议在提交 PR 前按改动范围运行基础检查：
+提交 PR 前，可以按改动范围选择合适的基础检查：
 
 ```powershell
 npm run check
@@ -55,25 +55,21 @@ cargo clippy -- -D warnings
 npm run dist
 ```
 
-如果本地环境不具备完整验证条件，请在 PR 描述中说明已运行的命令和未运行的原因。当前仓库没有单独的 unit test script。不要把单独的 `npm run build:renderer` 当作完整验证；它只覆盖 renderer 构建。
+如果本地环境不具备完整验证条件，可以在 PR 描述中说明已运行的命令和未运行的原因。当前仓库没有单独的 unit test script；单独的 `npm run build:renderer` 只覆盖 renderer 构建，不建议把它当作完整验证。
 
 ## 分支与 PR
 
-- 外部贡献流程：fork 本仓库 -> 在 fork 内创建 `feature/fix/chore` 分支 -> 提交 PR。
-- 外部贡献者不要直接 push 到本仓库分支；除非维护者明确授权，所有改动都通过 PR 进入。
-- `main` 是受保护的发布基线，不直接在 `main` 上开发。
-- 新功能默认使用 `feature/<slug>`。
-- bugfix 默认使用 `fix/<slug>`。
-- 维护、文档、构建或流程调整默认使用 `chore/<slug>`。
-- 一个 PR 只解决一个清晰问题。
-- PR 描述应包含改动摘要、验证命令和影响范围。
-- UI 改动请附截图或录屏。
-- 修改账号、OAuth、API 模式、updater 或本机文件写入逻辑时，请说明隐私与回滚影响。
-- 不要把无关格式化、重命名或大范围重排混入功能修复。
+- 推荐流程：fork 本仓库 -> 在 fork 内从最新 `main` 创建贡献分支 -> 提交 PR。
+- 分支命名可以参考：新功能 `feature/<slug>`，修复 `fix/<slug>`，维护、文档、构建或流程调整 `chore/<slug>`。
+- PR 尽量聚焦在一个清晰问题上；小修小改不必过度拆分，方便 review 即可。
+- PR 描述建议包含改动摘要、已运行的验证命令和影响范围。
+- UI 改动如方便请附截图或录屏。
+- 修改账号、OAuth、API 模式、updater 或本机文件写入逻辑时，建议说明隐私与回滚影响。
+- 尽量避免把无关格式化、重命名或大范围重排混入功能修复。
 
 ## Issue
 
-提交 bug 时请包含：
+提交 bug 时，建议包含：
 
 - 操作系统和版本。
 - Codex Switch 版本。
@@ -81,4 +77,4 @@ npm run dist
 - 期望结果和实际结果。
 - 相关日志或截图。
 
-请先删除 token、refresh token、API Key、邮箱、账号 ID、本机用户名、本机路径等敏感信息。
+提交 PR 或 Issue 前，请留意截图、日志和说明中是否包含 token、refresh token、API Key、邮箱、账号 ID、本机用户名、本机路径等敏感信息，尽量先删除或打码。
