@@ -1,6 +1,50 @@
 use super::*;
+use crate::json_util::value_u64_field;
 
 const MANUAL_QUOTA_TIMEOUT_MS: u64 = 10_000;
+
+fn is_auth_retryable_usage_error(error: &Value) -> bool {
+    matches!(value_u64_field(error, "status"), Some(401 | 403))
+}
+
+fn usage_error_message(error: &Value, fallback: &str) -> String {
+    raw_string_field(error, "message")
+        .chars()
+        .next()
+        .map(|_| raw_string_field(error, "message"))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn account_with_usage_result(account: &Value, usage_result: Result<Value, Value>) -> Value {
+    let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
+    let custom = match usage_result {
+        Ok(usage_info) => set_usage_state(
+            account.get("custom"),
+            "ok",
+            "",
+            Some(usage_info),
+            Value::Null,
+        ),
+        Err(error) => set_usage_state(
+            account.get("custom"),
+            "error",
+            &usage_error_message(&error, "Usage refresh failed, please refresh manually"),
+            None,
+            error,
+        ),
+    };
+    json!({
+        "tokens": tokens,
+        "custom": custom
+    })
+}
+
+fn update_account_usage_preserve_tokens(
+    account: &Value,
+    usage_result: Result<Value, Value>,
+) -> Result<Value, String> {
+    add_account_to_store(account_with_usage_result(account, usage_result), false)
+}
 
 pub(super) struct AccountRefreshContext {
     pub(super) account: Value,
@@ -61,6 +105,49 @@ fn auth_error_payload(target_id: &str, message: &str) -> Result<Value, String> {
 }
 
 pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
+    let target_id = id.trim();
+    if target_id.is_empty() {
+        return Err("account_id 无效".to_string());
+    }
+
+    let account = find_store_account(target_id)?;
+    let access_token = account
+        .get("tokens")
+        .and_then(|tokens| tokens.get("access_token"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if !access_token.is_empty() {
+        match get_usage(&access_token, target_id, MANUAL_QUOTA_TIMEOUT_MS) {
+            Ok(usage_info) => {
+                let store = update_account_usage_preserve_tokens(&account, Ok(usage_info))?;
+                return Ok(json!({
+                    "ok": true,
+                    "message": "配额已刷新",
+                    "store": store
+                }));
+            }
+            Err(error) if !is_auth_retryable_usage_error(&error) => {
+                let message = usage_error_message(&error, "Usage refresh failed");
+                let code = raw_string_field(&error, "code");
+                let store = update_account_usage_preserve_tokens(&account, Err(error))?;
+                return Ok(json!({
+                    "ok": false,
+                    "message": format!("配额刷新失败\n{message}"),
+                    "code": code,
+                    "store": store
+                }));
+            }
+            Err(_) => {}
+        }
+    }
+
+    refresh_account_with_token_refresh(target_id.to_string())
+}
+
+fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
     let context = match prepare_account_refresh(id)? {
         AccountRefreshStart::Ready(context) => context,
         AccountRefreshStart::Failed(payload) => return Ok(payload),
@@ -87,11 +174,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
     sync_auth_file_if_active(&context.account_id)?;
 
     if let Some(error) = usage_error {
-        let message = raw_string_field(&error, "message")
-            .chars()
-            .next()
-            .map(|_| raw_string_field(&error, "message"))
-            .unwrap_or_else(|| "Usage refresh failed".to_string());
+        let message = usage_error_message(&error, "Usage refresh failed");
         return Ok(json!({
             "ok": false,
             "message": format!("Subscription refreshed, but quota refresh failed\n{message}"),
