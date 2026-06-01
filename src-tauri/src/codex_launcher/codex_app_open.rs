@@ -1,7 +1,7 @@
 use super::{
-    codex_processes_have_cdp_launch, kill_process_tree, launch_codex_with_cdp_hooks,
-    relaunch_executable_with_retry, wait_for_pids_exit, CodexAppOpenOutcome, CodexCdpLaunchHooks,
-    CodexProcess,
+    codex_processes_have_cdp_launch, inject_codex_mobile_no_replace_hook, kill_process_tree,
+    launch_codex_with_cdp_hooks, relaunch_executable_with_retry, wait_for_pids_exit,
+    CodexAppOpenOutcome, CodexCdpLaunchHooks, CodexProcess,
 };
 use crate::{
     codex_launcher::{
@@ -37,7 +37,6 @@ struct CodexAppOpenActions {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct CodexAppOpenStatus {
     session_sync_pending: bool,
-    remote_control_runtime_pending: bool,
     cdp_launch_applied: bool,
 }
 
@@ -87,15 +86,25 @@ pub(crate) fn handle_codex_app_open(
         actions.session_sync_enabled,
         None,
     );
-    let remote_control_runtime_pending =
-        remote_control_runtime_pending_for_relaunch("codex_app_open_handler", None);
+    sync_remote_control_runtime_for_open_if_pending("codex_app_open_handler");
 
     let status = CodexAppOpenStatus {
         session_sync_pending,
-        remote_control_runtime_pending,
         cdp_launch_applied: codex_processes_have_cdp_launch(processes),
     };
     let Some(relaunch_mode) = codex_relaunch_mode_for_app_open(actions, status) else {
+        if actions.remote_control_enabled && status.cdp_launch_applied {
+            match inject_codex_mobile_no_replace_hook(processes) {
+                Ok(injected) => log_session_sync_event(
+                    "codex_app_open_handler_cdp_hook_injected",
+                    json!({ "hook": "codex_mobile_no_replace", "injectedCount": injected }),
+                ),
+                Err(err) => log_session_sync_event(
+                    "codex_app_open_handler_cdp_hook_error",
+                    json!({ "hook": "codex_mobile_no_replace", "error": err }),
+                ),
+            }
+        }
         log_session_sync_event(
             "codex_app_open_handler_finish",
             json!({ "relaunchExpected": false }),
@@ -108,7 +117,7 @@ pub(crate) fn handle_codex_app_open(
         relaunch_mode,
         CodexRelaunchOrigin::Watcher,
         session_sync_pending,
-        remote_control_runtime_pending,
+        false,
     )?;
     log_session_sync_event(
         "codex_app_open_handler_finish",
@@ -128,9 +137,7 @@ fn codex_relaunch_mode_for_app_open(
     status: CodexAppOpenStatus,
 ) -> Option<CodexRelaunchMode> {
     let cdp_hooks = codex_cdp_launch_hooks_for_actions(actions);
-    if (actions.session_sync_enabled && status.session_sync_pending)
-        || status.remote_control_runtime_pending
-    {
+    if actions.session_sync_enabled && status.session_sync_pending {
         return Some(if let Some(hooks) = cdp_hooks {
             CodexRelaunchMode::Cdp(hooks)
         } else {
@@ -157,6 +164,7 @@ fn codex_cdp_launch_hooks_for_actions(actions: CodexAppOpenActions) -> Option<Co
     if actions.plugin_unlock_enabled {
         Some(CodexCdpLaunchHooks {
             plugin_unlock: actions.plugin_unlock_enabled,
+            codex_mobile_no_replace: actions.remote_control_enabled,
         })
     } else {
         None
@@ -305,6 +313,38 @@ fn remote_control_runtime_pending_for_relaunch(trigger: &str, command: Option<&s
             log_session_sync_event(event, details);
             false
         }
+    }
+}
+
+fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
+    match preview_remote_control_runtime_for_current_settings(trigger) {
+        Ok(true) => match sync_remote_control_runtime_for_current_settings(trigger) {
+            Ok(changed) => log_session_sync_event(
+                "codex_app_open_handler_remote_control_runtime_applied",
+                json!({
+                    "reason": "runtime_pending",
+                    "changed": changed
+                }),
+            ),
+            Err(err) => log_session_sync_event(
+                "codex_app_open_handler_remote_control_runtime_error",
+                json!({
+                    "trigger": trigger,
+                    "error": err
+                }),
+            ),
+        },
+        Ok(false) => log_session_sync_event(
+            "codex_app_open_handler_remote_control_runtime_skip",
+            json!({ "reason": "runtime_current" }),
+        ),
+        Err(err) => log_session_sync_event(
+            "codex_app_open_handler_remote_control_runtime_error",
+            json!({
+                "trigger": trigger,
+                "error": err
+            }),
+        ),
     }
 }
 
@@ -761,8 +801,18 @@ mod tests {
             "codex_plugins_enabled": true,
             "codex_session_sync_enabled": true
         }));
+        let plugin_and_remote_control = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": true,
+            "codex_remote_control_enabled": true,
+            "codex_session_sync_enabled": false
+        }));
         let plugin_hooks = CodexCdpLaunchHooks {
             plugin_unlock: true,
+            codex_mobile_no_replace: false,
+        };
+        let plugin_remote_control_hooks = CodexCdpLaunchHooks {
+            plugin_unlock: true,
+            codex_mobile_no_replace: true,
         };
 
         assert_eq!(
@@ -801,11 +851,18 @@ mod tests {
             codex_relaunch_mode_for_app_open(
                 remote_control_only,
                 CodexAppOpenStatus {
-                    remote_control_runtime_pending: true,
+                    cdp_launch_applied: true,
                     ..CodexAppOpenStatus::default()
                 }
             ),
-            Some(CodexRelaunchMode::Normal)
+            None
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                plugin_and_remote_control,
+                CodexAppOpenStatus::default()
+            ),
+            Some(CodexRelaunchMode::Cdp(plugin_remote_control_hooks))
         );
         assert_eq!(
             codex_relaunch_mode_for_app_open(
@@ -822,17 +879,6 @@ mod tests {
                 session_and_plugin,
                 CodexAppOpenStatus {
                     session_sync_pending: true,
-                    cdp_launch_applied: true,
-                    ..CodexAppOpenStatus::default()
-                }
-            ),
-            Some(CodexRelaunchMode::Cdp(plugin_hooks))
-        );
-        assert_eq!(
-            codex_relaunch_mode_for_app_open(
-                session_and_plugin,
-                CodexAppOpenStatus {
-                    remote_control_runtime_pending: true,
                     cdp_launch_applied: true,
                     ..CodexAppOpenStatus::default()
                 }

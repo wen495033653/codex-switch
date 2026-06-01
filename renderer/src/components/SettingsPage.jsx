@@ -21,6 +21,7 @@ export default function SettingsPage({
     savingProxySettings,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
+    codexRemoteControlPendingEnabled,
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,
@@ -85,6 +86,7 @@ export default function SettingsPage({
                             savingProxySettings={savingProxySettings}
                             restartingCodexApp={restartingCodexApp}
                             restartCurrentCodexAppNormal={restartCurrentCodexAppNormal}
+                            codexRemoteControlPendingEnabled={codexRemoteControlPendingEnabled}
                             setSettingsDraft={setSettingsDraft}
                             setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
                             setCodexRemoteControlAccountId={setCodexRemoteControlAccountId}

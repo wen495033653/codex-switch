@@ -31,6 +31,7 @@ export default function ProxySettingsTab({
     savingProxySettings,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
+    codexRemoteControlPendingEnabled,
     setSettingsDraft,
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
@@ -203,7 +204,12 @@ export default function ProxySettingsTab({
         : (remoteControlBackendError || remoteControlStatus.error || (remoteControlHelperStatus && remoteControlHelperStatus.status === 'errored'))
         ? 'error'
         : 'muted';
-    const remoteControlDisplayStatus = !codexRemoteControlEnabled
+    const remoteControlPendingStatus = codexRemoteControlPendingEnabled === true
+        ? '打开中'
+        : codexRemoteControlPendingEnabled === false
+            ? '关闭中'
+            : '';
+    const remoteControlDisplayStatus = remoteControlPendingStatus || (!codexRemoteControlEnabled
         ? '未启用'
         : remoteControlStatus.loading && !remoteControlStatusMessage
             ? '检测中'
@@ -213,13 +219,21 @@ export default function ProxySettingsTab({
                         ? '需要 MFA'
                         : '等待登录'
                 )
-            : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, '');
+            : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
     const remoteControlStatusTitle = remoteControlStatusState === 'warning'
         ? remoteControlDisplayStatus
         : '';
+    const remoteControlMissingAccount = !codexRemoteControlEnabled && !remoteControlAccount;
     const remoteControlToggleDisabled = savingCodexRemoteControl
         || switching
-        || (!codexRemoteControlEnabled && !remoteControlAccount);
+        || remoteControlMissingAccount;
+    const remoteControlSwitchLabel = codexRemoteControlPendingEnabled === true
+        ? '打开中'
+        : codexRemoteControlPendingEnabled === false
+            ? '关闭中'
+            : codexRemoteControlEnabled
+                ? '已启用'
+                : '启用';
 
     return (
         <>
@@ -310,11 +324,11 @@ export default function ProxySettingsTab({
                         aria-pressed={codexRemoteControlEnabled}
                         aria-label={codexRemoteControlEnabled ? '关闭 app远程控制' : '开启 app远程控制'}
                         disabled={remoteControlToggleDisabled}
-                        title={remoteControlToggleDisabled && !codexRemoteControlEnabled ? '请先选择 app远程控制账号' : ''}
+                        title={remoteControlMissingAccount ? '请先选择 app远程控制账号' : ''}
                         onClick={() => setCodexRemoteControlEnabled(!codexRemoteControlEnabled)}
                     >
                         <span className="settings-remote-control-switch-label">
-                            {codexRemoteControlEnabled ? '已启用' : '启用'}
+                            {remoteControlSwitchLabel}
                         </span>
                         <span className="settings-switch" aria-hidden="true">
                             <span className="settings-switch-thumb" />

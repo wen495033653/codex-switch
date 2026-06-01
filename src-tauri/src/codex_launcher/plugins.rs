@@ -1,6 +1,7 @@
 use super::*;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
+    collections::BTreeSet,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
@@ -13,6 +14,7 @@ const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodexCdpLaunchHooks {
     pub(crate) plugin_unlock: bool,
+    pub(crate) codex_mobile_no_replace: bool,
 }
 
 struct CdpScript {
@@ -161,16 +163,121 @@ const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 })();
 "###;
 
+const CODEX_MOBILE_NO_REPLACE_SCRIPT: &str = r###"
+(() => {
+  const version = "1";
+  if (window.__codexSwitchCodexMobileNoReplaceController?.version === version) {
+    return;
+  }
+  window.__codexSwitchCodexMobileNoReplaceController?.stop?.();
+
+  const originalReplaceState = history.replaceState;
+  const originalPushState = history.pushState;
+  const controller = {
+    version,
+    stopped: false,
+    blocked: [],
+    stop() {
+      if (this.stopped) return;
+      this.stopped = true;
+      history.replaceState = originalReplaceState;
+      history.pushState = originalPushState;
+    },
+  };
+  window.__codexSwitchCodexMobileNoReplaceController = controller;
+
+  function pathFrom(url) {
+    if (url == null) return location.pathname;
+    try {
+      return new URL(String(url), location.href).pathname;
+    } catch {
+      return "";
+    }
+  }
+
+  function shouldBlock(url) {
+    return location.pathname.startsWith("/codex-mobile") && pathFrom(url) === "/login";
+  }
+
+  function recordBlocked(method, url) {
+    const item = {
+      method,
+      url: url == null ? "" : String(url),
+      from: location.pathname,
+      at: new Date().toISOString(),
+    };
+    controller.blocked.push(item);
+    window.__codexSwitchCodexMobileNoReplaceBlocked = item;
+    window.dispatchEvent(new CustomEvent("codex-switch:codex-mobile-no-replace", { detail: item }));
+  }
+
+  history.replaceState = function codexSwitchReplaceState(state, title, url) {
+    if (!controller.stopped && shouldBlock(url)) {
+      recordBlocked("replaceState", url);
+      return;
+    }
+    return originalReplaceState.apply(this, arguments);
+  };
+
+  history.pushState = function codexSwitchPushState(state, title, url) {
+    if (!controller.stopped && shouldBlock(url)) {
+      recordBlocked("pushState", url);
+      return;
+    }
+    return originalPushState.apply(this, arguments);
+  };
+})();
+"###;
+
 pub(crate) fn codex_processes_have_cdp_launch(processes: &[CodexProcess]) -> bool {
     processes
         .iter()
         .any(|process| command_line_has_cdp_launch(&process.command_line))
 }
 
+pub(crate) fn inject_codex_mobile_no_replace_hook(
+    processes: &[CodexProcess],
+) -> Result<usize, String> {
+    let scripts = cdp_scripts_for_hooks(CodexCdpLaunchHooks {
+        plugin_unlock: false,
+        codex_mobile_no_replace: true,
+    });
+    let ports = processes
+        .iter()
+        .filter_map(|process| cdp_debug_port_from_command_line(&process.command_line))
+        .collect::<BTreeSet<_>>();
+    let mut injected = 0usize;
+    for port in ports {
+        inject_cdp_scripts(port, &scripts)?;
+        injected += 1;
+    }
+    Ok(injected)
+}
+
 fn command_line_has_cdp_launch(command_line: &str) -> bool {
     let normalized = command_line.to_ascii_lowercase();
     normalized.contains("--remote-debugging-port")
         && normalized.contains("--remote-allow-origins=http://127.0.0.1:")
+}
+
+fn cdp_debug_port_from_command_line(command_line: &str) -> Option<u16> {
+    let normalized = command_line.to_ascii_lowercase();
+    let index = normalized.find("--remote-debugging-port")?;
+    let rest = &command_line[index + "--remote-debugging-port".len()..];
+    let rest = rest.trim_start();
+    let value = if let Some(rest) = rest.strip_prefix('=') {
+        rest.trim_start()
+    } else {
+        rest
+    };
+    let digits = value
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u16>().ok()
 }
 
 pub(crate) fn launch_codex_with_cdp_hooks(
@@ -237,6 +344,12 @@ fn cdp_scripts_for_hooks(hooks: CodexCdpLaunchHooks) -> Vec<CdpScript> {
         scripts.push(CdpScript {
             name: "plugin_unlock",
             source: CODEX_PLUGIN_UNLOCK_SCRIPT,
+        });
+    }
+    if hooks.codex_mobile_no_replace {
+        scripts.push(CdpScript {
+            name: "codex_mobile_no_replace",
+            source: CODEX_MOBILE_NO_REPLACE_SCRIPT,
         });
     }
     scripts
@@ -423,6 +536,26 @@ mod tests {
             r#""C:\Codex\codex.exe" --remote-debugging-port=9229"#
         ));
         assert!(!command_line_has_cdp_launch(r#""C:\Codex\codex.exe""#));
+    }
+
+    #[test]
+    fn cdp_debug_port_parses_equals_and_space_forms() {
+        assert_eq!(
+            cdp_debug_port_from_command_line(
+                r#""C:\Codex\codex.exe" --remote-debugging-port=9229 --remote-allow-origins=http://127.0.0.1:9229"#
+            ),
+            Some(9229)
+        );
+        assert_eq!(
+            cdp_debug_port_from_command_line(
+                r#""C:\Codex\codex.exe" --remote-debugging-port 9333 --remote-allow-origins=http://127.0.0.1:9333"#
+            ),
+            Some(9333)
+        );
+        assert_eq!(
+            cdp_debug_port_from_command_line(r#""C:\Codex\codex.exe""#),
+            None
+        );
     }
 
     #[test]

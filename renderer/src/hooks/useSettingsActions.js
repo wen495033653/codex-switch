@@ -22,6 +22,7 @@ export function useSettingsActions({
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
   const [savingCodexRemoteControl, setSavingCodexRemoteControl] = useState(false);
+  const [codexRemoteControlPendingEnabled, setCodexRemoteControlPendingEnabled] = useState(null);
   const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
   const [pluginRestartNoticeMessage, setPluginRestartNoticeMessage] = useState(
     'Plugin 解锁设置已保存，重启 Codex app 后生效。'
@@ -120,6 +121,7 @@ export function useSettingsActions({
     setSettingsDraft(prev => ({ ...prev, codex_remote_control_enabled: enabled }));
 
     setSavingCodexRemoteControl(true);
+    setCodexRemoteControlPendingEnabled(enabled);
     try {
       const res = await window.api.setCodexRemoteControlEnabled({ enabled });
       applySettings(res);
@@ -128,6 +130,7 @@ export function useSettingsActions({
       setSettingsDraft(settings);
       toast(getErrorMessage(err, enabled ? '启用 app远程控制失败' : '关闭 app远程控制失败'), 7000);
     } finally {
+      setCodexRemoteControlPendingEnabled(null);
       setSavingCodexRemoteControl(false);
     }
   };
@@ -219,6 +222,7 @@ export function useSettingsActions({
     openSettingsPage,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
+    codexRemoteControlPendingEnabled,
     savingCodexProxyEnv,
     savingCodexRemoteControl,
     savingProxySettings,
