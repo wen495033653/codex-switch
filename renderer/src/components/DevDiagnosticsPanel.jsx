@@ -1,5 +1,3 @@
-import { useState } from 'react';
-
 export default function DevDiagnosticsPanel({
   entries,
   errorCount,
@@ -8,42 +6,22 @@ export default function DevDiagnosticsPanel({
   onToggle,
   warningCount
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
   const summaryText = `${entries.length} 条 / ${errorCount} 错误 / ${warningCount} 警告`;
 
   if (!isOpen) {
-    return (
-      <button
-        type="button"
-        className={`dev-diagnostics-toggle ${errorCount > 0 ? 'has-errors' : ''}`}
-        onClick={onToggle}
-      >
-        <span>开发日志</span>
-        <strong>{errorCount > 0 ? `错误 ${errorCount}` : entries.length}</strong>
-      </button>
-    );
+    return null;
   }
 
   return (
-    <section
-      className={`dev-diagnostics-panel ${isExpanded ? 'expanded' : ''}`}
-      aria-label="开发日志"
-    >
+    <section className="dev-diagnostics-panel" aria-label="开发日志">
       <div className="dev-diagnostics-header">
         <div className="dev-diagnostics-title">
           <strong>开发日志</strong>
           <span>{summaryText}</span>
         </div>
         <div className="dev-diagnostics-actions">
-          <button
-            type="button"
-            aria-pressed={isExpanded}
-            onClick={() => setIsExpanded(prev => !prev)}
-          >
-            {isExpanded ? '缩小' : '放大'}
-          </button>
           <button type="button" onClick={onClear}>清空</button>
-          <button type="button" onClick={onToggle}>隐藏</button>
+          <button type="button" onClick={onToggle}>关闭</button>
         </div>
       </div>
 

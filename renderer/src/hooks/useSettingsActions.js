@@ -21,7 +21,7 @@ export function useSettingsActions({
 }) {
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
-  const [savingCodexRemoteControlHook, setSavingCodexRemoteControlHook] = useState(false);
+  const [savingCodexRemoteControl, setSavingCodexRemoteControl] = useState(false);
   const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
   const [pluginRestartNoticeMessage, setPluginRestartNoticeMessage] = useState(
     'Plugin 解锁设置已保存，重启 Codex app 后生效。'
@@ -111,20 +111,46 @@ export function useSettingsActions({
     }
   };
 
-  const setCodexRemoteControlHookEnabled = async (enabled) => {
-    if (savingCodexRemoteControlHook || savingProxySettings) return;
-    setSettingsDraft(prev => ({ ...prev, codex_remote_control_hook_enabled: enabled }));
+  const setCodexRemoteControlEnabled = async (enabled) => {
+    if (savingCodexRemoteControl || savingProxySettings) return;
+    if (enabled && !String(settingsDraft.codex_remote_control_account_id || '').trim()) {
+      toast('请先选择 app远程控制账号', 7000);
+      return;
+    }
+    setSettingsDraft(prev => ({ ...prev, codex_remote_control_enabled: enabled }));
 
-    setSavingCodexRemoteControlHook(true);
+    setSavingCodexRemoteControl(true);
     try {
-      const res = await window.api.setCodexRemoteControlHookEnabled({ enabled });
+      const res = await window.api.setCodexRemoteControlEnabled({ enabled });
       applySettings(res);
-      toast((res && res.message) || (enabled ? '远程控制（手机app）已启用' : '远程控制（手机app）已关闭'));
+      toast((res && res.message) || (enabled ? 'app远程控制已启用' : 'app远程控制已关闭'));
     } catch (err) {
       setSettingsDraft(settings);
-      toast(getErrorMessage(err, enabled ? '启用远程控制（手机app）失败' : '关闭远程控制（手机app）失败'), 7000);
+      toast(getErrorMessage(err, enabled ? '启用 app远程控制失败' : '关闭 app远程控制失败'), 7000);
     } finally {
-      setSavingCodexRemoteControlHook(false);
+      setSavingCodexRemoteControl(false);
+    }
+  };
+
+  const setCodexRemoteControlAccountId = async (accountId) => {
+    if (savingCodexRemoteControl || savingProxySettings) return;
+    const nextAccountId = String(accountId || '').trim();
+    if (!nextAccountId) {
+      toast('app远程控制账号不能为空', 7000);
+      return;
+    }
+
+    setSettingsDraft(prev => ({ ...prev, codex_remote_control_account_id: nextAccountId }));
+    setSavingCodexRemoteControl(true);
+    try {
+      const res = await window.api.setCodexRemoteControlAccountId(nextAccountId);
+      applySettings(res);
+      toast((res && res.message) || 'app远程控制账号已更新');
+    } catch (err) {
+      setSettingsDraft(settings);
+      toast(getErrorMessage(err, '更新 app远程控制账号失败'), 7000);
+    } finally {
+      setSavingCodexRemoteControl(false);
     }
   };
 
@@ -194,10 +220,11 @@ export function useSettingsActions({
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
-    savingCodexRemoteControlHook,
+    savingCodexRemoteControl,
     savingProxySettings,
     setCodexProxyEnvEnabled,
-    setCodexRemoteControlHookEnabled,
+    setCodexRemoteControlAccountId,
+    setCodexRemoteControlEnabled,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   };

@@ -4,8 +4,14 @@ use super::{
     CodexProcess,
 };
 use crate::{
-    codex_launcher::{prepare_remote_control_hook, remote_control_hook_enabled_from_settings},
-    codex_sessions::sync_codex_sessions_to_current_mode_now_from,
+    codex_launcher::{
+        preview_remote_control_runtime_for_current_settings, remote_control_enabled_from_settings,
+        sync_remote_control_runtime_for_current_settings,
+    },
+    codex_sessions::{
+        preview_codex_sessions_to_current_mode_now_from,
+        sync_codex_sessions_to_current_mode_now_from,
+    },
     json_util::bool_field,
     session_sync_diagnostics::log_session_sync_event,
     settings::read_settings_value,
@@ -24,13 +30,14 @@ enum CodexRelaunchMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CodexAppOpenActions {
     plugin_unlock_enabled: bool,
-    remote_control_hook_enabled: bool,
+    remote_control_enabled: bool,
     session_sync_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct CodexAppOpenStatus {
-    session_sync_updated: bool,
+    session_sync_pending: bool,
+    remote_control_runtime_pending: bool,
     cdp_launch_applied: bool,
 }
 
@@ -38,7 +45,7 @@ impl CodexAppOpenActions {
     fn from_settings(settings: &Value) -> Self {
         Self {
             plugin_unlock_enabled: bool_field(settings, "codex_plugins_enabled"),
-            remote_control_hook_enabled: remote_control_hook_enabled_from_settings(settings),
+            remote_control_enabled: remote_control_enabled_from_settings(settings),
             session_sync_enabled: settings
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool)
@@ -47,7 +54,7 @@ impl CodexAppOpenActions {
     }
 
     fn enabled(self) -> bool {
-        self.plugin_unlock_enabled || self.remote_control_hook_enabled || self.session_sync_enabled
+        self.plugin_unlock_enabled || self.remote_control_enabled || self.session_sync_enabled
     }
 }
 
@@ -60,7 +67,7 @@ pub(crate) fn handle_codex_app_open(
         json!({
             "processes": codex_processes_log_value(processes),
             "pluginUnlockEnabled": actions.plugin_unlock_enabled,
-            "remoteControlHookEnabled": actions.remote_control_hook_enabled,
+            "remoteControlEnabled": actions.remote_control_enabled,
             "sessionSyncEnabled": actions.session_sync_enabled
         }),
     );
@@ -75,25 +82,17 @@ pub(crate) fn handle_codex_app_open(
         return Ok(CodexAppOpenOutcome::default());
     }
 
-    let mut session_sync_updated = false;
-    if actions.remote_control_hook_enabled {
-        prepare_remote_control_hook("codex_app_open_handler")?;
-    }
-
-    if actions.session_sync_enabled {
-        match sync_codex_sessions_to_current_mode_now_from("codex_app_open_handler") {
-            Ok(updated) => session_sync_updated = updated > 0,
-            Err(err) => eprintln!("Codex app 会话同步失败: {err}"),
-        }
-    } else {
-        log_session_sync_event(
-            "codex_app_open_handler_session_sync_skip",
-            json!({ "reason": "setting_disabled" }),
-        );
-    }
+    let session_sync_pending = session_sync_pending_for_relaunch(
+        "codex_app_open_handler",
+        actions.session_sync_enabled,
+        None,
+    );
+    let remote_control_runtime_pending =
+        remote_control_runtime_pending_for_relaunch("codex_app_open_handler", None);
 
     let status = CodexAppOpenStatus {
-        session_sync_updated,
+        session_sync_pending,
+        remote_control_runtime_pending,
         cdp_launch_applied: codex_processes_have_cdp_launch(processes),
     };
     let Some(relaunch_mode) = codex_relaunch_mode_for_app_open(actions, status) else {
@@ -104,8 +103,13 @@ pub(crate) fn handle_codex_app_open(
         return Ok(CodexAppOpenOutcome::default());
     };
 
-    let restarted =
-        relaunch_running_codex_processes(processes, relaunch_mode, CodexRelaunchOrigin::Watcher)?;
+    let restarted = relaunch_running_codex_processes(
+        processes,
+        relaunch_mode,
+        CodexRelaunchOrigin::Watcher,
+        session_sync_pending,
+        remote_control_runtime_pending,
+    )?;
     log_session_sync_event(
         "codex_app_open_handler_finish",
         json!({ "relaunchExpected": restarted > 0 }),
@@ -124,7 +128,9 @@ fn codex_relaunch_mode_for_app_open(
     status: CodexAppOpenStatus,
 ) -> Option<CodexRelaunchMode> {
     let cdp_hooks = codex_cdp_launch_hooks_for_actions(actions);
-    if actions.session_sync_enabled && status.session_sync_updated {
+    if (actions.session_sync_enabled && status.session_sync_pending)
+        || status.remote_control_runtime_pending
+    {
         return Some(if let Some(hooks) = cdp_hooks {
             CodexRelaunchMode::Cdp(hooks)
         } else {
@@ -148,61 +154,156 @@ fn codex_relaunch_mode_for_actions(actions: CodexAppOpenActions) -> CodexRelaunc
 }
 
 fn codex_cdp_launch_hooks_for_actions(actions: CodexAppOpenActions) -> Option<CodexCdpLaunchHooks> {
-    if actions.plugin_unlock_enabled || actions.remote_control_hook_enabled {
+    if actions.plugin_unlock_enabled {
         Some(CodexCdpLaunchHooks {
             plugin_unlock: actions.plugin_unlock_enabled,
-            remote_control_hook: actions.remote_control_hook_enabled,
         })
     } else {
         None
     }
 }
 
-fn sync_codex_sessions_for_app_command(
-    command: &str,
-    actions: CodexAppOpenActions,
-) -> Result<(), String> {
-    if !actions.session_sync_enabled {
-        log_session_sync_event(
-            "codex_app_restart_command_session_sync_skip",
-            json!({
-                "command": command,
-                "reason": "setting_disabled"
-            }),
-        );
-        return Ok(());
+fn session_sync_pending_for_relaunch(trigger: &str, enabled: bool, command: Option<&str>) -> bool {
+    if !enabled {
+        let event = if command.is_some() {
+            "codex_app_restart_command_session_sync_skip"
+        } else {
+            "codex_app_open_handler_session_sync_skip"
+        };
+        let details = if let Some(command) = command {
+            json!({ "command": command, "reason": "setting_disabled" })
+        } else {
+            json!({ "reason": "setting_disabled" })
+        };
+        log_session_sync_event(event, details);
+        return false;
     }
 
-    log_session_sync_event(
-        "codex_app_restart_command_session_sync_start",
-        json!({
-            "command": command,
-            "directSessionSync": true
-        }),
-    );
-    match sync_codex_sessions_to_current_mode_now_from(command) {
-        Ok(updated) => {
-            log_session_sync_event(
-                "codex_app_restart_command_session_sync_finish",
+    match preview_codex_sessions_to_current_mode_now_from(trigger) {
+        Ok(updated) if updated > 0 => {
+            let event = if command.is_some() {
+                "codex_app_restart_command_session_sync_deferred"
+            } else {
+                "codex_app_open_handler_session_sync_deferred"
+            };
+            let details = if let Some(command) = command {
                 json!({
                     "command": command,
-                    "directSessionSync": true,
-                    "updated": updated,
-                    "nextOpenHandledByAppCommand": true
-                }),
-            );
-            Ok(())
+                    "reason": "sync_after_process_exit",
+                    "updated": updated
+                })
+            } else {
+                json!({
+                    "reason": "sync_after_process_exit",
+                    "updated": updated
+                })
+            };
+            log_session_sync_event(event, details);
+            true
+        }
+        Ok(updated) => {
+            let event = if command.is_some() {
+                "codex_app_restart_command_session_sync_skip"
+            } else {
+                "codex_app_open_handler_session_sync_skip"
+            };
+            let details = if let Some(command) = command {
+                json!({
+                    "command": command,
+                    "reason": "no_session_changes",
+                    "updated": updated
+                })
+            } else {
+                json!({
+                    "reason": "no_session_changes",
+                    "updated": updated
+                })
+            };
+            log_session_sync_event(event, details);
+            false
         }
         Err(err) => {
-            log_session_sync_event(
-                "codex_app_restart_command_session_sync_error",
+            let event = if command.is_some() {
+                "codex_app_restart_command_session_sync_error"
+            } else {
+                "codex_app_open_handler_session_sync_preflight_error"
+            };
+            let details = if let Some(command) = command {
                 json!({
                     "command": command,
-                    "directSessionSync": true,
-                    "error": err.clone()
-                }),
-            );
-            Err(format!("Codex app 会话同步失败，已取消重启：{err}"))
+                    "error": err
+                })
+            } else {
+                json!({
+                    "trigger": trigger,
+                    "error": err
+                })
+            };
+            log_session_sync_event(event, details);
+            true
+        }
+    }
+}
+
+fn remote_control_runtime_pending_for_relaunch(trigger: &str, command: Option<&str>) -> bool {
+    match preview_remote_control_runtime_for_current_settings(trigger) {
+        Ok(true) => {
+            let event = if command.is_some() {
+                "codex_app_restart_command_remote_control_runtime_deferred"
+            } else {
+                "codex_app_open_handler_remote_control_runtime_deferred"
+            };
+            let details = if let Some(command) = command {
+                json!({
+                    "command": command,
+                    "reason": "sync_after_process_exit"
+                })
+            } else {
+                json!({
+                    "reason": "sync_after_process_exit"
+                })
+            };
+            log_session_sync_event(event, details);
+            true
+        }
+        Ok(false) => {
+            let event = if command.is_some() {
+                "codex_app_restart_command_remote_control_runtime_skip"
+            } else {
+                "codex_app_open_handler_remote_control_runtime_skip"
+            };
+            let details = if let Some(command) = command {
+                json!({
+                    "command": command,
+                    "reason": "runtime_current"
+                })
+            } else {
+                json!({
+                    "reason": "runtime_current"
+                })
+            };
+            log_session_sync_event(event, details);
+            false
+        }
+        Err(err) => {
+            let event = if command.is_some() {
+                "codex_app_restart_command_remote_control_runtime_error"
+            } else {
+                "codex_app_open_handler_remote_control_runtime_error"
+            };
+            let details = if let Some(command) = command {
+                json!({
+                    "command": command,
+                    "error": err
+                })
+            } else {
+                json!({
+                    "trigger": trigger,
+                    "error": err
+                })
+            };
+            log_session_sync_event(event, details);
+            false
         }
     }
 }
@@ -232,11 +333,16 @@ pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, St
     }
 
     let actions = codex_app_open_actions()?;
-    sync_codex_sessions_for_app_command(command, actions)?;
+    let session_sync_pending =
+        session_sync_pending_for_relaunch(command, actions.session_sync_enabled, Some(command));
+    let remote_control_runtime_pending =
+        remote_control_runtime_pending_for_relaunch(command, Some(command));
     let restarted = relaunch_running_codex_processes(
         &processes,
         codex_relaunch_mode_for_actions(actions),
         CodexRelaunchOrigin::AppCommand,
+        session_sync_pending,
+        remote_control_runtime_pending,
     )?;
     log_session_sync_event(
         "codex_app_restart_command_finish",
@@ -279,11 +385,16 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     }
 
     let actions = codex_app_open_actions()?;
-    sync_codex_sessions_for_app_command(command, actions)?;
+    let session_sync_pending =
+        session_sync_pending_for_relaunch(command, actions.session_sync_enabled, Some(command));
+    let remote_control_runtime_pending =
+        remote_control_runtime_pending_for_relaunch(command, Some(command));
     let restarted = relaunch_running_codex_processes(
         &processes,
         codex_relaunch_mode_for_actions(actions),
         CodexRelaunchOrigin::AppCommand,
+        session_sync_pending,
+        remote_control_runtime_pending,
     )?;
     log_session_sync_event(
         "codex_app_restart_command_finish",
@@ -367,6 +478,8 @@ fn relaunch_running_codex_processes(
     processes: &[CodexProcess],
     mode: CodexRelaunchMode,
     origin: CodexRelaunchOrigin,
+    post_exit_session_sync: bool,
+    post_exit_remote_control_runtime_sync: bool,
 ) -> Result<usize, String> {
     let pids = processes
         .iter()
@@ -398,6 +511,12 @@ fn relaunch_running_codex_processes(
     let alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
         return Err("Codex app 进程未能退出".to_string());
+    }
+
+    apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;
+
+    if post_exit_session_sync {
+        sync_codex_sessions_after_process_exit(origin);
     }
 
     thread::sleep(StdDuration::from_millis(RELAUNCH_DELAY_MS));
@@ -449,12 +568,114 @@ fn relaunch_running_codex_processes(
     Ok(restarted)
 }
 
+fn apply_codex_config_after_process_exit(
+    origin: CodexRelaunchOrigin,
+    sync_remote_control_runtime: bool,
+) -> Result<(), String> {
+    let context = match origin {
+        CodexRelaunchOrigin::Watcher => "codex_app_relaunch_after_exit_watcher",
+        CodexRelaunchOrigin::AppCommand => "codex_app_relaunch_after_exit_app_command",
+    };
+    log_session_sync_event(
+        "codex_app_relaunch_processes_post_exit_config_apply_start",
+        json!({
+            "origin": format!("{origin:?}"),
+            "context": context
+        }),
+    );
+    match apply_codex_config_for_current_settings(context, sync_remote_control_runtime) {
+        Ok(details) => {
+            log_session_sync_event(
+                "codex_app_relaunch_processes_post_exit_config_apply_finish",
+                json!({
+                    "origin": format!("{origin:?}"),
+                    "context": context,
+                    "details": details
+                }),
+            );
+            Ok(())
+        }
+        Err(err) => {
+            log_session_sync_event(
+                "codex_app_relaunch_processes_post_exit_config_apply_error",
+                json!({
+                    "origin": format!("{origin:?}"),
+                    "context": context,
+                    "error": err.clone()
+                }),
+            );
+            Err(err)
+        }
+    }
+}
+
+fn apply_codex_config_for_current_settings(
+    context: &str,
+    sync_remote_control_runtime: bool,
+) -> Result<Value, String> {
+    let remote_control_changed = if sync_remote_control_runtime {
+        sync_remote_control_runtime_for_post_exit(context)
+    } else {
+        json!({ "changed": false, "skipped": true })
+    };
+
+    Ok(json!({
+        "remoteControl": remote_control_changed
+    }))
+}
+
+fn sync_remote_control_runtime_for_post_exit(context: &str) -> Value {
+    match sync_remote_control_runtime_for_current_settings(context) {
+        Ok(changed) => json!({ "changed": changed }),
+        Err(err) => {
+            let error = err.clone();
+            log_session_sync_event(
+                "codex_app_relaunch_processes_post_exit_remote_control_runtime_error",
+                json!({
+                    "context": context,
+                    "error": error
+                }),
+            );
+            json!({ "changed": false, "error": err })
+        }
+    }
+}
+
+fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) {
+    let trigger = match origin {
+        CodexRelaunchOrigin::Watcher => "codex_app_relaunch_after_exit_watcher",
+        CodexRelaunchOrigin::AppCommand => "codex_app_relaunch_after_exit_app_command",
+    };
+    log_session_sync_event(
+        "codex_app_relaunch_processes_post_exit_session_sync_start",
+        json!({
+            "origin": format!("{origin:?}"),
+            "trigger": trigger
+        }),
+    );
+    match sync_codex_sessions_to_current_mode_now_from(trigger) {
+        Ok(updated) => log_session_sync_event(
+            "codex_app_relaunch_processes_post_exit_session_sync_finish",
+            json!({
+                "origin": format!("{origin:?}"),
+                "trigger": trigger,
+                "updated": updated
+            }),
+        ),
+        Err(err) => log_session_sync_event(
+            "codex_app_relaunch_processes_post_exit_session_sync_error",
+            json!({
+                "origin": format!("{origin:?}"),
+                "trigger": trigger,
+                "error": err
+            }),
+        ),
+    }
+}
+
 fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Result<bool, String> {
     match mode {
         CodexRelaunchMode::Cdp(hooks) => {
-            if hooks.remote_control_hook {
-                prepare_remote_control_hook("codex_app_relaunch")?;
-            }
             launch_codex_with_cdp_hooks(Path::new(executable), hooks)?;
             Ok(true)
         }
@@ -485,22 +706,22 @@ mod tests {
     fn codex_app_open_actions_keep_plugin_and_session_actions_separate() {
         let session_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
-            "codex_remote_control_hook_enabled": false,
+            "codex_remote_control_enabled": false,
             "codex_session_sync_enabled": true
         }));
         let plugin_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": true,
-            "codex_remote_control_hook_enabled": false,
+            "codex_remote_control_enabled": false,
             "codex_session_sync_enabled": false
         }));
         let remote_control_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
-            "codex_remote_control_hook_enabled": true,
+            "codex_remote_control_enabled": true,
             "codex_session_sync_enabled": false
         }));
         let disabled = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
-            "codex_remote_control_hook_enabled": false,
+            "codex_remote_control_enabled": false,
             "codex_session_sync_enabled": false
         }));
 
@@ -511,14 +732,14 @@ mod tests {
         assert!(plugin_only.plugin_unlock_enabled);
         assert!(!plugin_only.session_sync_enabled);
         assert!(remote_control_only.enabled());
-        assert!(remote_control_only.remote_control_hook_enabled);
+        assert!(remote_control_only.remote_control_enabled);
         assert!(!remote_control_only.plugin_unlock_enabled);
         assert!(!remote_control_only.session_sync_enabled);
         assert!(!disabled.enabled());
     }
 
     #[test]
-    fn codex_app_open_relaunches_only_for_session_changes_or_missing_cdp_launch() {
+    fn codex_app_open_relaunches_only_for_pending_work_or_missing_cdp_launch() {
         let session_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
             "codex_session_sync_enabled": true
@@ -533,7 +754,7 @@ mod tests {
         }));
         let remote_control_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
-            "codex_remote_control_hook_enabled": true,
+            "codex_remote_control_enabled": true,
             "codex_session_sync_enabled": false
         }));
         let session_and_plugin = CodexAppOpenActions::from_settings(&json!({
@@ -542,19 +763,14 @@ mod tests {
         }));
         let plugin_hooks = CodexCdpLaunchHooks {
             plugin_unlock: true,
-            remote_control_hook: false,
-        };
-        let remote_control_hooks = CodexCdpLaunchHooks {
-            plugin_unlock: false,
-            remote_control_hook: true,
         };
 
         assert_eq!(
             codex_relaunch_mode_for_app_open(
                 session_only,
                 CodexAppOpenStatus {
-                    session_sync_updated: true,
-                    cdp_launch_applied: false
+                    session_sync_pending: true,
+                    ..CodexAppOpenStatus::default()
                 }
             ),
             Some(CodexRelaunchMode::Normal)
@@ -571,22 +787,32 @@ mod tests {
             codex_relaunch_mode_for_app_open(
                 plugin_only,
                 CodexAppOpenStatus {
-                    session_sync_updated: false,
-                    cdp_launch_applied: true
+                    cdp_launch_applied: true,
+                    ..CodexAppOpenStatus::default()
                 }
             ),
             None
         );
         assert_eq!(
             codex_relaunch_mode_for_app_open(remote_control_only, CodexAppOpenStatus::default()),
-            Some(CodexRelaunchMode::Cdp(remote_control_hooks))
+            None
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                remote_control_only,
+                CodexAppOpenStatus {
+                    remote_control_runtime_pending: true,
+                    ..CodexAppOpenStatus::default()
+                }
+            ),
+            Some(CodexRelaunchMode::Normal)
         );
         assert_eq!(
             codex_relaunch_mode_for_app_open(
                 session_and_plugin,
                 CodexAppOpenStatus {
-                    session_sync_updated: false,
-                    cdp_launch_applied: true
+                    cdp_launch_applied: true,
+                    ..CodexAppOpenStatus::default()
                 }
             ),
             None
@@ -595,8 +821,20 @@ mod tests {
             codex_relaunch_mode_for_app_open(
                 session_and_plugin,
                 CodexAppOpenStatus {
-                    session_sync_updated: true,
-                    cdp_launch_applied: true
+                    session_sync_pending: true,
+                    cdp_launch_applied: true,
+                    ..CodexAppOpenStatus::default()
+                }
+            ),
+            Some(CodexRelaunchMode::Cdp(plugin_hooks))
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                session_and_plugin,
+                CodexAppOpenStatus {
+                    remote_control_runtime_pending: true,
+                    cdp_launch_applied: true,
+                    ..CodexAppOpenStatus::default()
                 }
             ),
             Some(CodexRelaunchMode::Cdp(plugin_hooks))
@@ -605,8 +843,8 @@ mod tests {
             codex_relaunch_mode_for_app_open(
                 session_disabled,
                 CodexAppOpenStatus {
-                    session_sync_updated: true,
-                    cdp_launch_applied: false
+                    session_sync_pending: true,
+                    ..CodexAppOpenStatus::default()
                 }
             ),
             None

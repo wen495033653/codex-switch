@@ -57,24 +57,3 @@ pub(crate) fn attach_ide_reopen(mut payload: Value, ide_reopen: Option<Value>) -
     }
     payload
 }
-
-pub(super) fn apply_pending_ide_auth(pending: &IdePending) -> Result<(), String> {
-    if pending.api_mode {
-        let settings = read_settings_value()?;
-        let profile = settings
-            .get("api_mode")
-            .cloned()
-            .unwrap_or_else(default_api_mode);
-        set_api_mode(&profile)?;
-        return Ok(());
-    }
-
-    if pending.account_id.trim().is_empty() {
-        return Ok(());
-    }
-    let account = find_store_account(&pending.account_id)?;
-    write_account_auth(&account)?;
-    set_subscription_mode()?;
-    let _ = mark_store_account_used(&pending.account_id)?;
-    Ok(())
-}

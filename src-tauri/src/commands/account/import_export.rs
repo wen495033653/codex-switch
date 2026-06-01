@@ -39,7 +39,6 @@ pub(super) fn import_accounts_impl(app: AppHandle) -> Result<Value, String> {
         _ => return Err("导入已取消".to_string()),
     }
 
-    set_subscription_mode()?;
     let payload = import_accounts_from_refresh_tokens(refresh_tokens, false)?;
     let _ = read_store_with_active_sync();
     Ok(payload)

@@ -27,6 +27,8 @@ const COMMAND_BINDINGS = {
   getAppVersion: ['get_app_version'],
   getDataDir: ['get_data_dir'],
   openDataDir: ['open_data_dir'],
+  openDevLogWindow: ['open_dev_log_window'],
+  hideDevLogWindow: ['hide_dev_log_window'],
   getRefreshAllStatus: ['get_refresh_all_status'],
   getSettings: ['get_settings'],
   updateSettings: ['update_settings', patch => ({ patch })],
@@ -38,7 +40,9 @@ const COMMAND_BINDINGS = {
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
   restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
-  setCodexRemoteControlHookEnabled: ['set_codex_remote_control_hook_enabled', payload => ({
+  getCodexRemoteControlStatus: ['get_codex_remote_control_status'],
+  setCodexRemoteControlAccountId: ['set_codex_remote_control_account_id', id => ({ id })],
+  setCodexRemoteControlEnabled: ['set_codex_remote_control_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled)
   })],
   setCodexProxyEnvEnabled: ['set_codex_proxy_env_enabled', payload => ({

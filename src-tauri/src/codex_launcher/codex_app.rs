@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_sync_diagnostics::log_session_sync_event;
 
 const CODEX_PROXY_ENV_NAMES: [&str; 4] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 const CODEX_NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1";
@@ -160,6 +161,7 @@ pub(crate) fn set_codex_proxy_env_enabled(
         patch["codex_proxy_url"] = Value::String(proxy_url.clone());
     }
     let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
+    let remote_control_runtime = sync_remote_control_runtime_after_proxy_change(&settings);
 
     Ok(json!({
         "ok": true,
@@ -170,6 +172,28 @@ pub(crate) fn set_codex_proxy_env_enabled(
         },
         "settings": settings,
         "env_path": codex_env_path()?.to_string_lossy().to_string(),
-        "proxy_url": proxy_url
+        "proxy_url": proxy_url,
+        "remoteControl": remote_control_runtime
     }))
+}
+
+fn sync_remote_control_runtime_after_proxy_change(settings: &Value) -> Value {
+    if !remote_control_enabled_from_settings(settings) {
+        return json!({ "changed": false });
+    }
+
+    match restart_remote_control_runtime_for_current_settings("set_codex_proxy_env_enabled") {
+        Ok(changed) => json!({ "changed": changed }),
+        Err(err) => {
+            let error = err.clone();
+            log_session_sync_event(
+                "codex_remote_control_helper_error",
+                json!({
+                    "context": "set_codex_proxy_env_enabled",
+                    "error": error
+                }),
+            );
+            json!({ "changed": false, "error": err })
+        }
+    }
 }

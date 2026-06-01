@@ -61,12 +61,20 @@ pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String>
     if let Some(parent) = path.parent() {
         command.current_dir(parent);
     }
+    sanitize_desktop_app_launch_env(&mut command);
     hide_command_window(&mut command);
 
     command
         .spawn()
         .map(|_| true)
         .map_err(|err| format!("重新打开应用失败 {}: {err}", path.display()))
+}
+
+pub(crate) fn sanitize_desktop_app_launch_env(command: &mut Command) {
+    // Codex Switch can be launched from Codex/VS Code, where Electron helper
+    // processes set this. Packaged desktop apps must start as Electron apps,
+    // not as Node entrypoints.
+    command.env_remove("ELECTRON_RUN_AS_NODE");
 }
 
 pub(crate) fn relaunch_executable_with_retry(executable_path: &str) -> Result<bool, String> {

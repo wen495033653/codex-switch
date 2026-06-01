@@ -71,6 +71,17 @@ fn main() {
             if let Err(err) = accounts::restore_api_mode_if_selected() {
                 eprintln!("恢复 Codex API 模式失败: {err}");
             }
+            if let Err(err) =
+                codex_launcher::sync_remote_control_runtime_for_current_settings("app_start")
+            {
+                session_sync_diagnostics::log_session_sync_event(
+                    "codex_remote_control_helper_error",
+                    json!({
+                        "context": "app_start",
+                        "error": err
+                    }),
+                );
+            }
             start_account_token_auto_refresher(app.handle().clone());
             start_active_quota_auto_refresher(app.handle().clone());
             start_background_quota_auto_refresher(
@@ -88,6 +99,8 @@ fn main() {
             commands::get_app_version,
             commands::get_data_dir,
             commands::open_data_dir,
+            desktop::open_dev_log_window,
+            desktop::hide_dev_log_window,
             commands::get_refresh_all_status,
             commands::get_settings,
             commands::update_settings,
@@ -97,7 +110,9 @@ fn main() {
             commands::switch_account,
             commands::switch_api_mode,
             codex_launcher::set_codex_proxy_env_enabled,
-            codex_launcher::set_codex_remote_control_hook_enabled,
+            codex_launcher::set_codex_remote_control_account_id,
+            codex_launcher::set_codex_remote_control_enabled,
+            codex_launcher::get_codex_remote_control_status,
             codex_launcher::get_current_codex_app_processes,
             codex_launcher::restart_current_codex_app_for_plugin_setting,
             codex_launcher::restart_current_codex_app_normal,

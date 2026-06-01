@@ -11,7 +11,6 @@ mod restart;
 pub(crate) use pending::{attach_ide_reopen, build_ide_reopen_payload};
 
 use detect::{build_ide_summary, normalize_ide_entries};
-use pending::apply_pending_ide_auth;
 use restart::restart_from_ide_snapshot;
 
 fn ide_summary_text(value: &Value) -> String {
@@ -86,7 +85,6 @@ pub(crate) fn restart_open_ides(
             "sessionSyncProvider": pending.session_sync_provider.clone()
         }),
     );
-    apply_pending_ide_auth(&pending)?;
     let session_sync_provider = pending.session_sync_provider.clone();
     let mut session_sync_warning = None;
     let result = restart_from_ide_snapshot(&pending.snapshot, || {
@@ -105,6 +103,7 @@ pub(crate) fn restart_open_ides(
                 }),
             );
         }
+        Ok(())
     })?;
     let target_text = ide_summary_text(&result);
     let message = if bool_field(&result, "restarted") {
@@ -142,7 +141,7 @@ pub(crate) fn discard_ide_snapshot(
             .remove(id)
         {
             log_session_sync_event(
-                "ide_reopen_discard_apply_auth_without_sync",
+                "ide_reopen_discard_without_config_apply",
                 json!({
                     "snapshotId": id,
                     "apiMode": pending.api_mode,
@@ -150,7 +149,6 @@ pub(crate) fn discard_ide_snapshot(
                     "sessionSyncProvider": pending.session_sync_provider.clone()
                 }),
             );
-            apply_pending_ide_auth(&pending)?;
         }
     }
     store_payload(Some("已忽略重启提示"))

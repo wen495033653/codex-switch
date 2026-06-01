@@ -5,10 +5,29 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, CloseRequestApi, Manager, PhysicalSize, Size, WebviewWindow, WindowEvent};
+use tauri::{
+    AppHandle, CloseRequestApi, Manager, PhysicalSize, Size, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
+};
 
 fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW_LABEL)
+}
+
+fn dev_log_window(app: &AppHandle) -> Option<WebviewWindow> {
+    app.get_webview_window("dev-log")
+}
+
+fn dev_log_webview_url(app: &AppHandle) -> WebviewUrl {
+    if cfg!(debug_assertions) {
+        if let Some(dev_url) = app.config().build.dev_url.as_ref() {
+            let mut url = dev_url.clone();
+            url.set_query(Some("window=dev-log"));
+            return WebviewUrl::External(url);
+        }
+    }
+
+    WebviewUrl::App("index.html".into())
 }
 
 pub(crate) fn focus_main_window(app: &AppHandle) {
@@ -20,6 +39,48 @@ pub(crate) fn focus_main_window(app: &AppHandle) {
     }
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+pub(crate) fn open_dev_log_window(app: AppHandle) -> Result<Value, String> {
+    if !cfg!(debug_assertions) {
+        return Ok(json!({
+            "ok": false,
+            "message": "开发日志仅在开发版本可用"
+        }));
+    }
+
+    if let Some(window) = dev_log_window(&app) {
+        if window.is_minimized().unwrap_or(false) {
+            let _ = window.unminimize();
+        }
+        window
+            .show()
+            .map_err(|err| format!("显示开发日志窗口失败: {err}"))?;
+        window
+            .set_focus()
+            .map_err(|err| format!("聚焦开发日志窗口失败: {err}"))?;
+        return Ok(json!({ "ok": true, "reused": true }));
+    }
+
+    WebviewWindowBuilder::new(&app, "dev-log", dev_log_webview_url(&app))
+        .title("开发日志")
+        .inner_size(920.0, 560.0)
+        .min_inner_size(520.0, 320.0)
+        .resizable(true)
+        .initialization_script("window.__CODEX_SWITCH_WINDOW_LABEL = 'dev-log';")
+        .build()
+        .map_err(|err| format!("打开开发日志窗口失败: {err}"))?;
+
+    Ok(json!({ "ok": true, "reused": false }))
+}
+
+pub(crate) fn hide_dev_log_window(app: AppHandle) -> Result<Value, String> {
+    if let Some(window) = dev_log_window(&app) {
+        window
+            .hide()
+            .map_err(|err| format!("隐藏开发日志窗口失败: {err}"))?;
+    }
+    Ok(json!({ "ok": true }))
 }
 
 pub(crate) fn restore_main_window_state(app: &AppHandle) -> Result<(), String> {

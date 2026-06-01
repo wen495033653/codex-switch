@@ -1,7 +1,7 @@
 use crate::{
     accounts::{
         account_from_exchange_syncing, add_account_to_store, build_oauth_auth_url, generate_pkce,
-        random_urlsafe, set_subscription_mode,
+        random_urlsafe,
     },
     events::emit_store_updated,
     json_util::string_field,
@@ -73,7 +73,6 @@ fn run_oauth_flow(
     canceled: Arc<AtomicBool>,
     manual_callbacks: Receiver<String>,
 ) -> Result<(), String> {
-    set_subscription_mode()?;
     let listener =
         TcpListener::bind(("127.0.0.1", OAUTH_CALLBACK_PORT)).map_err(|err| match err.kind() {
             std::io::ErrorKind::AddrInUse => format!(

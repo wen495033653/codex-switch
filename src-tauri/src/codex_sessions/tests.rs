@@ -174,6 +174,36 @@ fn sync_session_provider_updates_sessions_and_archived_sessions() {
 }
 
 #[test]
+fn preview_session_provider_counts_rollout_changes_without_writing() {
+    let root = unique_sessions_dir("preview-rollouts");
+    let sessions_dir = root.join("sessions");
+    let archived_dir = root.join("archived_sessions");
+    let sessions_file = sessions_dir.join("rollout-active.jsonl");
+    let archived_file = archived_dir.join("rollout-archived.jsonl");
+    write_rollout_file(&sessions_file, "openai", "E:\\Project\\active");
+    write_rollout_file(&archived_file, "api", "E:\\Project\\archived");
+    let before_sessions = fs::read_to_string(&sessions_file).unwrap();
+    let before_archived = fs::read_to_string(&archived_file).unwrap();
+
+    let updated = preview_codex_session_rollout_dirs_to_provider_with_diagnostics(
+        &[sessions_dir, archived_dir],
+        "api",
+        &[],
+        None,
+    )
+    .unwrap();
+
+    let after_sessions = fs::read_to_string(&sessions_file).unwrap();
+    let after_archived = fs::read_to_string(&archived_file).unwrap();
+
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(updated, 1);
+    assert_eq!(after_sessions, before_sessions);
+    assert_eq!(after_archived, before_archived);
+}
+
+#[test]
 fn sync_uses_combined_activity_time_limit() {
     let root = unique_sessions_dir("combined-activity-limit");
     let sessions_dir = root.join("sessions");
@@ -458,6 +488,41 @@ fn sync_state_provider_updates_all_threads_without_touching_cwd() {
                 "api".to_string(),
                 "D:\\Workspace\\openai".to_string()
             ),
+        ]
+    );
+}
+
+#[test]
+fn preview_state_provider_counts_changes_without_writing() {
+    let temp_dir = unique_sessions_dir("preview-state-db");
+    let state_db = temp_dir.join("state_5.sqlite");
+    create_state_db(&state_db);
+
+    let updated =
+        preview_codex_state_threads_to_provider_with_diagnostics(&state_db, "api", None).unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    let mut rows = connection
+        .prepare("SELECT id, model_provider FROM threads ORDER BY id")
+        .unwrap();
+    let threads = rows
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    drop(rows);
+    drop(connection);
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(updated, 2);
+    assert_eq!(
+        threads,
+        vec![
+            ("thread-api".to_string(), "api".to_string()),
+            ("thread-custom".to_string(), "custom-provider".to_string()),
+            ("thread-openai".to_string(), "openai".to_string()),
         ]
     );
 }

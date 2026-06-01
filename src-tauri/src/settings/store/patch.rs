@@ -95,10 +95,23 @@ pub(super) fn apply_settings_patch(
             Value::Bool(bool_field(patch, "codex_plugins_enabled")),
         );
     }
-    if has_key(patch, "codex_remote_control_hook_enabled") {
+    if has_key(patch, "codex_remote_control_enabled")
+        || has_key(patch, "codex_remote_control_hook_enabled")
+    {
+        let enabled = if has_key(patch, "codex_remote_control_enabled") {
+            bool_field(patch, "codex_remote_control_enabled")
+        } else {
+            bool_field(patch, "codex_remote_control_hook_enabled")
+        };
         object.insert(
-            "codex_remote_control_hook_enabled".to_string(),
-            Value::Bool(bool_field(patch, "codex_remote_control_hook_enabled")),
+            "codex_remote_control_enabled".to_string(),
+            Value::Bool(enabled),
+        );
+    }
+    if has_key(patch, "codex_remote_control_account_id") {
+        object.insert(
+            "codex_remote_control_account_id".to_string(),
+            Value::String(string_field(patch, "codex_remote_control_account_id")),
         );
     }
     if has_key(patch, "codex_session_sync_enabled") {
@@ -252,7 +265,27 @@ mod tests {
     }
 
     #[test]
-    fn apply_settings_patch_updates_codex_remote_control_hook_enabled() {
+    fn apply_settings_patch_updates_codex_remote_control_enabled() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_remote_control_enabled": true
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object
+                .get("codex_remote_control_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_accepts_legacy_codex_remote_control_hook_enabled() {
         let mut object = Map::new();
 
         apply_settings_patch(
@@ -265,9 +298,29 @@ mod tests {
 
         assert_eq!(
             object
-                .get("codex_remote_control_hook_enabled")
+                .get("codex_remote_control_enabled")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_codex_remote_control_account_id() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_remote_control_account_id": "acct-remote"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object
+                .get("codex_remote_control_account_id")
+                .and_then(Value::as_str),
+            Some("acct-remote")
         );
     }
 

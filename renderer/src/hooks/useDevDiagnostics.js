@@ -14,18 +14,39 @@ function formatDebugArg(value) {
     return String(value);
   }
 
-  try {
-    const seen = new WeakSet();
-    return JSON.stringify(value, (_key, item) => {
-      if (typeof item === 'object' && item !== null) {
-        if (seen.has(item)) return '[Circular]';
-        seen.add(item);
-      }
-      return item;
-    }, 2);
-  } catch (_err) {
-    return String(value);
+  return formatDebugObject(value);
+}
+
+function formatDebugObject(value, depth = 0, seen = new WeakSet()) {
+  if (value === undefined || value === null || typeof value !== 'object') {
+    return formatDebugArg(value);
   }
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '无';
+    return value
+      .map(item => {
+        if (item && typeof item === 'object') {
+          return formatDebugObject(item, depth + 1, seen).replace(/\n/g, '；');
+        }
+        return formatDebugArg(item);
+      })
+      .join('；');
+  }
+
+  const entries = Object.entries(value).filter(([_key, item]) => hasVisibleDetails(item));
+  if (entries.length === 0) return '无';
+  return entries
+    .map(([key, item]) => {
+      if (item && typeof item === 'object') {
+        const formatted = formatDebugObject(item, depth + 1, seen);
+        return depth === 0 ? `${key}: ${formatted}` : `${key}=${formatted.replace(/\n/g, '，')}`;
+      }
+      return depth === 0 ? `${key}: ${formatDebugArg(item)}` : `${key}=${formatDebugArg(item)}`;
+    })
+    .join(depth === 0 ? '\n' : '，');
 }
 
 function normalizeMessage(args) {

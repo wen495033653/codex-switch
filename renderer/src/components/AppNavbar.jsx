@@ -48,11 +48,10 @@ export default function AppNavbar({
           type="button"
           className={`dev-build-chip ${devErrorCount > 0 ? 'has-errors' : ''}`}
           onClick={onDevDiagnosticsToggle}
+          title={devErrorCount > 0 ? `${devErrorCount} 个错误，${devLogCount} 条日志` : `${devLogCount} 条日志`}
         >
-          <span className="dev-build-chip-main">DEV</span>
-          <span className="dev-build-chip-meta">
-            {devErrorCount > 0 ? `${devErrorCount} ERR` : `${devLogCount} LOG`}
-          </span>
+          <span className="dev-build-chip-main">开发日志</span>
+          {devErrorCount > 0 && <span className="dev-build-chip-dot" aria-hidden="true" />}
         </button>
       )}
       <div className={`current-mode-pill ${apiModeActive ? 'api' : subscriptionModeActive ? 'subscription' : 'unknown'}`}>

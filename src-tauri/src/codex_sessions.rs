@@ -39,7 +39,7 @@ fn global_state_path() -> Result<PathBuf, String> {
     Ok(codex_dir()?.join(GLOBAL_STATE_FILE_NAME))
 }
 
-fn current_session_provider() -> Result<String, String> {
+pub(crate) fn current_session_provider() -> Result<String, String> {
     restore_api_mode_if_selected()?;
     let state = get_codex_state_value();
     let model_provider = raw_string_field(&state, "model_provider");
@@ -83,9 +83,93 @@ pub(crate) fn sync_codex_sessions_to_current_mode_now_from(trigger: &str) -> Res
     sync_codex_sessions_to_provider_now_from(&target_provider, trigger)
 }
 
+pub(crate) fn preview_codex_sessions_to_current_mode_now_from(
+    trigger: &str,
+) -> Result<usize, String> {
+    log_session_sync_event(
+        "session_sync_preflight_current_mode_resolve_start",
+        json!({ "trigger": trigger }),
+    );
+    let target_provider = current_session_provider()?;
+    log_session_sync_event(
+        "session_sync_preflight_current_mode_resolved",
+        json!({
+            "trigger": trigger,
+            "targetProvider": target_provider
+        }),
+    );
+    preview_codex_sessions_to_provider_now_from(&target_provider, trigger)
+}
+
 #[allow(dead_code)]
 pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
     sync_codex_sessions_to_provider_now_from(target_provider, "explicit_provider")
+}
+
+pub(crate) fn preview_codex_sessions_to_provider_now_from(
+    target_provider: &str,
+    trigger: &str,
+) -> Result<usize, String> {
+    let target_provider = normalize_target_provider(target_provider)?;
+    log_session_sync_event(
+        "session_sync_preflight_start",
+        json!({
+            "trigger": trigger,
+            "targetProvider": target_provider
+        }),
+    );
+    let _guard = SESSION_SYNC_IO_LOCK
+        .lock()
+        .map_err(|_| "Codex 会话同步 I/O 状态已损坏".to_string())?;
+    let mut updated = 0;
+    let mut state_db_updated = 0;
+    let mut rollout_files_updated = 0;
+    let mut errors = Vec::new();
+
+    match preview_codex_state_threads_to_provider_if_exists(&target_provider, trigger) {
+        Ok(count) => {
+            state_db_updated = count;
+            updated += count;
+        }
+        Err(err) => errors.push(err),
+    }
+    match preview_codex_session_rollouts_to_provider_if_exists(&target_provider, trigger) {
+        Ok(count) => {
+            rollout_files_updated = count;
+            updated += count;
+        }
+        Err(err) => errors.push(err),
+    }
+
+    if errors.is_empty() {
+        log_session_sync_event(
+            "session_sync_preflight_finish",
+            json!({
+                "trigger": trigger,
+                "targetProvider": target_provider,
+                "stateDbUpdated": state_db_updated,
+                "rolloutFilesUpdated": rollout_files_updated,
+                "updated": updated
+            }),
+        );
+        Ok(updated)
+    } else {
+        log_session_sync_event(
+            "session_sync_preflight_error",
+            json!({
+                "trigger": trigger,
+                "targetProvider": target_provider,
+                "stateDbUpdated": state_db_updated,
+                "rolloutFilesUpdated": rollout_files_updated,
+                "updated": updated,
+                "errors": errors.clone()
+            }),
+        );
+        Err(format!(
+            "预检查 Codex 会话同步失败，预计更新 {updated} 项：{}",
+            errors.join("；")
+        ))
+    }
 }
 
 pub(crate) fn sync_codex_sessions_to_provider_now_from(
@@ -154,6 +238,18 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
     }
 }
 
+fn preview_codex_session_rollouts_to_provider_if_exists(
+    target_provider: &str,
+    trigger: &str,
+) -> Result<usize, String> {
+    preview_codex_session_rollout_dirs_to_provider_with_diagnostics(
+        &session_rollout_dir_paths()?,
+        target_provider,
+        &pinned_thread_rollout_paths_if_exists()?,
+        Some(trigger),
+    )
+}
+
 fn sync_codex_session_rollouts_to_provider_if_exists(
     target_provider: &str,
     trigger: &str,
@@ -172,6 +268,18 @@ fn sync_codex_state_threads_to_provider_if_exists(
 ) -> Result<usize, String> {
     let state_db = state_db_path()?;
     sync_codex_state_threads_to_provider_with_diagnostics(&state_db, target_provider, Some(trigger))
+}
+
+fn preview_codex_state_threads_to_provider_if_exists(
+    target_provider: &str,
+    trigger: &str,
+) -> Result<usize, String> {
+    let state_db = state_db_path()?;
+    preview_codex_state_threads_to_provider_with_diagnostics(
+        &state_db,
+        target_provider,
+        Some(trigger),
+    )
 }
 
 #[cfg(test)]
@@ -204,6 +312,21 @@ fn sync_codex_session_rollout_dirs_to_provider_with_diagnostics(
     extra_rollout_paths: &[PathBuf],
     trigger: Option<&str>,
 ) -> Result<usize, String> {
+    sync_codex_session_rollout_dirs_to_provider_with_diagnostics_limit(
+        rollout_dirs,
+        target_provider,
+        extra_rollout_paths,
+        trigger,
+        SESSION_SYNC_RECENT_ROLLOUT_LIMIT,
+    )
+}
+
+fn preview_codex_session_rollout_dirs_to_provider_with_diagnostics(
+    rollout_dirs: &[PathBuf],
+    target_provider: &str,
+    extra_rollout_paths: &[PathBuf],
+    trigger: Option<&str>,
+) -> Result<usize, String> {
     let rollout_files = collect_recent_rollout_files_from_dirs(
         rollout_dirs,
         SESSION_SYNC_RECENT_ROLLOUT_LIMIT,
@@ -211,28 +334,103 @@ fn sync_codex_session_rollout_dirs_to_provider_with_diagnostics(
     )?;
     if let Some(trigger) = trigger {
         log_session_sync_event(
+            "session_sync_preflight_rollout_selection",
+            json!({
+                "trigger": trigger,
+                "targetProvider": target_provider,
+                "selectedCount": rollout_files.len(),
+                "extraRolloutCount": extra_rollout_paths.len()
+            }),
+        );
+    }
+    preview_rollout_files_to_provider_with_diagnostics(rollout_files, target_provider, trigger)
+}
+
+pub(crate) fn collect_recent_codex_rollout_files_for_remote_control(
+    rollout_dirs: &[PathBuf],
+    limit: usize,
+) -> Result<Vec<PathBuf>, String> {
+    collect_recent_rollout_files_from_dirs(rollout_dirs, limit, &[])
+}
+
+pub(crate) fn sync_codex_rollout_files_to_provider_for_remote_control(
+    rollout_files: Vec<PathBuf>,
+    target_provider: &str,
+) -> Result<usize, String> {
+    sync_rollout_files_to_provider_with_diagnostics(rollout_files, target_provider, None)
+}
+
+fn sync_codex_session_rollout_dirs_to_provider_with_diagnostics_limit(
+    rollout_dirs: &[PathBuf],
+    target_provider: &str,
+    extra_rollout_paths: &[PathBuf],
+    trigger: Option<&str>,
+    limit: usize,
+) -> Result<usize, String> {
+    let rollout_files =
+        collect_recent_rollout_files_from_dirs(rollout_dirs, limit, extra_rollout_paths)?;
+    if let Some(trigger) = trigger {
+        log_session_sync_event(
             "session_sync_rollout_selection",
             json!({
                 "trigger": trigger,
                 "targetProvider": target_provider,
-                "scanDirs": rollout_dirs
-                    .iter()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .collect::<Vec<_>>(),
-                "recentLimit": SESSION_SYNC_RECENT_ROLLOUT_LIMIT,
-                "extraRolloutPaths": extra_rollout_paths
-                    .iter()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .collect::<Vec<_>>(),
                 "selectedCount": rollout_files.len(),
-                "selectedFiles": rollout_files
-                    .iter()
-                    .map(|path| rollout_file_log_summary(path))
-                    .collect::<Vec<_>>()
+                "extraRolloutCount": extra_rollout_paths.len()
             }),
         );
     }
     sync_rollout_files_to_provider_with_diagnostics(rollout_files, target_provider, trigger)
+}
+
+fn preview_rollout_files_to_provider_with_diagnostics(
+    rollout_files: Vec<PathBuf>,
+    target_provider: &str,
+    trigger: Option<&str>,
+) -> Result<usize, String> {
+    let mut updated = 0;
+    let mut errors = Vec::new();
+
+    for path in rollout_files {
+        match rollout_file_provider_would_change(&path, target_provider) {
+            Ok(true) => updated += 1,
+            Ok(false) => {}
+            Err(err) => {
+                if let Some(trigger) = trigger {
+                    log_session_sync_event(
+                        "session_sync_preflight_rollout_file_error",
+                        json!({
+                            "trigger": trigger,
+                            "targetProvider": target_provider,
+                            "path": path.to_string_lossy().to_string(),
+                            "error": err.clone()
+                        }),
+                    );
+                }
+                errors.push(err);
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_preflight_rollout_batch_finish",
+                json!({
+                    "trigger": trigger,
+                    "targetProvider": target_provider,
+                    "updatedFiles": updated
+                }),
+            );
+        }
+        Ok(updated)
+    } else {
+        Err(format!(
+            "预检查 Codex 会话失败，预计更新 {updated} 个文件，{} 个文件失败：{}",
+            errors.len(),
+            errors.join("；")
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -335,24 +533,6 @@ fn provider_change_counts_json(counts: &BTreeMap<String, usize>, target_provider
     )
 }
 
-fn rollout_file_log_summary(path: &Path) -> Value {
-    match fs::read_to_string(path) {
-        Ok(content) => {
-            let meta = rollout_content_session_meta_summary(&content);
-            json!({
-                "path": path.to_string_lossy().to_string(),
-                "sortKey": rollout_activity_sort_key(path),
-                "sessionMeta": meta
-            })
-        }
-        Err(err) => json!({
-            "path": path.to_string_lossy().to_string(),
-            "sortKey": rollout_activity_sort_key(path),
-            "readError": err.to_string()
-        }),
-    }
-}
-
 fn rollout_content_session_meta_summary(content: &str) -> Value {
     for line in content.lines() {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
@@ -402,7 +582,7 @@ fn rollout_meta_provider(meta: &Value) -> String {
 fn sync_rollout_file_provider_with_diagnostics(
     path: &Path,
     target_provider: &str,
-    trigger: Option<&str>,
+    _trigger: Option<&str>,
 ) -> Result<RolloutFileSyncOutcome, String> {
     let original_modified = fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -413,7 +593,6 @@ fn sync_rollout_file_provider_with_diagnostics(
     let from_provider = rollout_meta_provider(&before_meta);
     let mut updated_content = String::with_capacity(content.len());
     let mut changed = false;
-    let mut rewritten_lines = 0usize;
 
     for segment in content.split_inclusive('\n') {
         let (line, line_ending) = split_line_ending(segment);
@@ -422,7 +601,6 @@ fn sync_rollout_file_provider_with_diagnostics(
                 updated_content.push_str(&updated_line);
                 updated_content.push_str(line_ending);
                 changed = true;
-                rewritten_lines += 1;
             }
             None => updated_content.push_str(segment),
         }
@@ -438,38 +616,24 @@ fn sync_rollout_file_provider_with_diagnostics(
             .map_err(|err| format!("恢复 Codex session 修改时间失败 {}: {err}", path.display()))?;
     }
 
-    if let Some(trigger) = trigger {
-        log_session_sync_event(
-            "session_sync_rollout_file_processed",
-            json!({
-                "trigger": trigger,
-                "targetProvider": target_provider,
-                "path": path.to_string_lossy().to_string(),
-                "changed": changed,
-                "rewrittenLines": rewritten_lines,
-                "providerChange": if changed {
-                    json!({
-                        "fromProvider": from_provider.clone(),
-                        "toProvider": target_provider,
-                        "rewrittenLines": rewritten_lines
-                    })
-                } else {
-                    json!({ "unchanged": true })
-                },
-                "sessionMetaBefore": before_meta,
-                "sessionMetaAfter": if changed {
-                    json!({ "modelProvider": target_provider })
-                } else {
-                    json!({ "unchanged": true })
-                }
-            }),
-        );
-    }
-
     Ok(RolloutFileSyncOutcome {
         changed,
         from_provider: changed.then_some(from_provider),
     })
+}
+
+fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Result<bool, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
+
+    for segment in content.split_inclusive('\n') {
+        let (line, _line_ending) = split_line_ending(segment);
+        if update_rollout_provider_line(line, target_provider)?.is_some() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -833,14 +997,9 @@ fn sync_codex_state_threads_to_provider_with_diagnostics(
     connection
         .busy_timeout(Duration::from_millis(3000))
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
-    log_state_db_summary(
-        &connection,
-        state_db,
-        target_provider,
-        trigger,
-        "before",
-        None,
-    );
+    let before_summary = trigger
+        .map(|_| query_state_db_summary(&connection, target_provider))
+        .transpose();
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 会话同步事务失败: {err}"))?;
@@ -861,36 +1020,88 @@ fn sync_codex_state_threads_to_provider_with_diagnostics(
     transaction
         .commit()
         .map_err(|err| format!("保存 Codex state 会话同步结果失败: {err}"))?;
-    log_state_db_summary(
-        &connection,
-        state_db,
-        target_provider,
-        trigger,
-        "after",
-        Some(updated),
-    );
+    log_state_db_update_summary(state_db, target_provider, trigger, updated, before_summary);
     Ok(updated)
 }
 
-fn log_state_db_summary(
-    connection: &Connection,
+fn preview_codex_state_threads_to_provider_with_diagnostics(
     state_db: &Path,
     target_provider: &str,
     trigger: Option<&str>,
-    phase: &str,
-    updated: Option<usize>,
+) -> Result<usize, String> {
+    if !state_db.exists() {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_preflight_state_db_missing",
+                json!({
+                    "trigger": trigger,
+                    "targetProvider": target_provider,
+                    "stateDb": state_db.to_string_lossy().to_string()
+                }),
+            );
+        }
+        return Ok(0);
+    }
+    let connection = Connection::open_with_flags(
+        state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("打开 Codex state 数据库失败 {}: {err}", state_db.display()))?;
+    connection
+        .busy_timeout(Duration::from_millis(3000))
+        .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
+    let updated = connection
+        .query_row(
+            "SELECT COUNT(*) FROM threads
+             WHERE model_provider IS NULL
+                OR model_provider <> ?1",
+            [target_provider],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| {
+            format!(
+                "统计 Codex state 会话 provider 待同步数量失败 {}: {err}",
+                state_db.display()
+            )
+        })? as usize;
+    if let Some(trigger) = trigger {
+        log_session_sync_event(
+            "session_sync_preflight_state_db_summary",
+            json!({
+                "trigger": trigger,
+                "targetProvider": target_provider,
+                "stateDb": state_db.to_string_lossy().to_string(),
+                "updated": updated
+            }),
+        );
+    }
+    Ok(updated)
+}
+
+fn log_state_db_update_summary(
+    state_db: &Path,
+    target_provider: &str,
+    trigger: Option<&str>,
+    updated: usize,
+    summary: Result<Option<Value>, String>,
 ) {
     let Some(trigger) = trigger else {
         return;
     };
-    let summary = query_state_db_summary(connection, target_provider)
-        .unwrap_or_else(|err| json!({ "summaryError": err }));
+    let summary = match summary {
+        Ok(Some(summary)) => summary,
+        Ok(None) if updated == 0 => return,
+        Ok(None) => json!({}),
+        Err(err) => json!({ "summaryError": err }),
+    };
+    if updated == 0 && summary.get("summaryError").is_none() {
+        return;
+    }
     log_session_sync_event(
         "session_sync_state_db_summary",
         json!({
             "trigger": trigger,
             "targetProvider": target_provider,
-            "phase": phase,
             "stateDb": state_db.to_string_lossy().to_string(),
             "updated": updated,
             "summary": summary
@@ -963,45 +1174,12 @@ fn query_state_db_summary(connection: &Connection, target_provider: &str) -> Res
         .map_err(|err| format!("读取 Codex state provider 变更失败: {err}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("读取 Codex state provider 变更失败: {err}"))?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, cwd, model_provider, updated_at, rollout_path
-             FROM threads
-             WHERE model_provider IS NULL
-                OR model_provider <> ?1
-             ORDER BY updated_at DESC
-             LIMIT 20",
-        )
-        .map_err(|err| format!("读取 Codex state 待同步样本失败: {err}"))?;
-    let sample_rows = statement
-        .query_map([target_provider], |row| {
-            let id = row.get::<_, String>(0)?;
-            let cwd = row.get::<_, Option<String>>(1)?;
-            let model_provider =
-                provider_log_value(&row.get::<_, Option<String>>(2)?.unwrap_or_default());
-            let updated_at = row.get::<_, Option<i64>>(3)?;
-            let rollout_path = row.get::<_, Option<String>>(4)?;
-            Ok(json!({
-                "id": id,
-                "cwd": cwd.unwrap_or_default(),
-                "modelProvider": model_provider.clone(),
-                "fromProvider": model_provider,
-                "toProvider": target_provider,
-                "updatedAt": updated_at,
-                "rolloutPath": rollout_path.unwrap_or_default()
-            }))
-        })
-        .map_err(|err| format!("读取 Codex state 待同步样本失败: {err}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("读取 Codex state 待同步样本失败: {err}"))?;
-
     Ok(json!({
         "totalThreads": total_threads,
         "targetProviderThreads": target_threads,
         "wouldUpdateThreads": would_update,
         "providerCounts": provider_counts,
-        "providerChanges": provider_changes,
-        "sampleRows": sample_rows
+        "providerChanges": provider_changes
     }))
 }
 

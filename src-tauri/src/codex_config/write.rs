@@ -1,6 +1,6 @@
 use super::{
     io::{read_config_lines, write_config_lines},
-    parse::{find_root_table_index, read_table_config, root_assignment},
+    parse::{find_root_table_index, root_assignment},
 };
 use serde_json::Value;
 
@@ -66,64 +66,6 @@ pub(crate) fn set_table_config(table_name: &str, values: Vec<(&str, Value)>) -> 
     }
     table_lines.push(format!("[{table_name}]"));
     for (key, value) in values {
-        table_lines.push(format!("{key} = {}", format_toml_value(&value)));
-    }
-    table_lines.push(String::new());
-    lines.splice(insert_at..insert_at, table_lines);
-    write_config_lines(&lines)
-}
-
-pub(crate) fn set_table_config_values(
-    table_name: &str,
-    values: Vec<(&str, Value)>,
-) -> Result<(), String> {
-    let lines = read_config_lines()?;
-    let header = format!("[{table_name}]");
-    let mut pending: Vec<(String, Value)> = values
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value))
-        .collect();
-
-    if let Some((start, end)) = table_bounds(&lines, &header) {
-        let mut next_lines = Vec::with_capacity(lines.len() + pending.len());
-        for (index, line) in lines.iter().enumerate() {
-            if index > start && index < end {
-                if let Some((key, _value)) = root_assignment(line) {
-                    if let Some(pending_index) = pending
-                        .iter()
-                        .position(|(pending_key, _)| pending_key == &key)
-                    {
-                        let (_pending_key, pending_value) = pending.remove(pending_index);
-                        next_lines.push(format!("{key} = {}", format_toml_value(&pending_value)));
-                        continue;
-                    }
-                }
-            }
-            next_lines.push(line.clone());
-        }
-
-        if !pending.is_empty() {
-            let insert_lines = pending
-                .into_iter()
-                .map(|(key, value)| format!("{key} = {}", format_toml_value(&value)))
-                .collect::<Vec<_>>();
-            next_lines.splice(end..end, insert_lines);
-        }
-        return write_config_lines(&next_lines);
-    }
-
-    let mut lines = lines;
-    let insert_at = find_root_table_index(&lines).unwrap_or(lines.len());
-    let mut table_lines = Vec::new();
-    if insert_at > 0
-        && lines
-            .get(insert_at - 1)
-            .is_some_and(|line| !line.trim().is_empty())
-    {
-        table_lines.push(String::new());
-    }
-    table_lines.push(header);
-    for (key, value) in pending {
         table_lines.push(format!("{key} = {}", format_toml_value(&value)));
     }
     table_lines.push(String::new());
@@ -227,31 +169,6 @@ pub(crate) fn set_config_values(values: Vec<(&str, String)>) -> Result<(), Strin
         .map(|(key, value)| (key.to_string(), Value::String(value)))
         .collect();
     set_config_entries(values)
-}
-
-pub(crate) fn ensure_remote_control_enabled() -> Result<bool, String> {
-    let features = read_table_config(FEATURES_TABLE)?;
-    let remote_control_enabled = features
-        .get(REMOTE_CONTROL_CONFIG_KEY)
-        .and_then(Value::as_bool)
-        == Some(true);
-    let has_legacy_remote_connections = features.contains_key(LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY);
-
-    let mut changed = false;
-    if !remote_control_enabled {
-        set_table_config_values(
-            FEATURES_TABLE,
-            vec![(REMOTE_CONTROL_CONFIG_KEY, Value::Bool(true))],
-        )?;
-        changed = true;
-    }
-    if has_legacy_remote_connections {
-        changed =
-            remove_table_config_values(FEATURES_TABLE, &[LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY])?
-                || changed;
-    }
-
-    Ok(changed)
 }
 
 pub(crate) fn remove_remote_control_config() -> Result<bool, String> {

@@ -86,7 +86,9 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "codex_proxy_url": codex_proxy_url,
         "codex_proxy_env_enabled": bool_field(data, "codex_proxy_env_enabled"),
         "codex_plugins_enabled": bool_field(data, "codex_plugins_enabled"),
-        "codex_remote_control_hook_enabled": bool_field(data, "codex_remote_control_hook_enabled"),
+        "codex_remote_control_enabled": bool_field(data, "codex_remote_control_enabled")
+            || bool_field(data, "codex_remote_control_hook_enabled"),
+        "codex_remote_control_account_id": string_field(data, "codex_remote_control_account_id"),
         "codex_session_sync_enabled": data
             .get("codex_session_sync_enabled")
             .and_then(Value::as_bool)
@@ -182,28 +184,56 @@ mod tests {
     }
 
     #[test]
-    fn normalize_settings_disables_codex_remote_control_hook_by_default() {
+    fn normalize_settings_disables_codex_remote_control_by_default() {
         let settings = normalize_settings(&json!({}));
 
         assert_eq!(
             settings
-                .get("codex_remote_control_hook_enabled")
+                .get("codex_remote_control_enabled")
                 .and_then(Value::as_bool),
             Some(false)
         );
     }
 
     #[test]
-    fn normalize_settings_preserves_codex_remote_control_hook_enabled() {
+    fn normalize_settings_preserves_codex_remote_control_enabled() {
+        let settings = normalize_settings(&json!({
+            "codex_remote_control_enabled": true
+        }));
+
+        assert_eq!(
+            settings
+                .get("codex_remote_control_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_legacy_codex_remote_control_hook_enabled() {
         let settings = normalize_settings(&json!({
             "codex_remote_control_hook_enabled": true
         }));
 
         assert_eq!(
             settings
-                .get("codex_remote_control_hook_enabled")
+                .get("codex_remote_control_enabled")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_codex_remote_control_account_id() {
+        let settings = normalize_settings(&json!({
+            "codex_remote_control_account_id": "acct-remote"
+        }));
+
+        assert_eq!(
+            settings
+                .get("codex_remote_control_account_id")
+                .and_then(Value::as_str),
+            Some("acct-remote")
         );
     }
 

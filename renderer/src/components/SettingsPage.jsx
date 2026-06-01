@@ -11,16 +11,19 @@ export default function SettingsPage({
     setSettingsDraft,
     dataDir,
     appVersion,
+    accounts,
     checkingUpdate,
     codexSessionSyncEnabled,
+    maskAccountName,
     savingCodexProxyEnv,
-    savingCodexRemoteControlHook,
+    savingCodexRemoteControl,
     savingCodexSessionSync,
     savingProxySettings,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     setCodexProxyEnvEnabled,
-    setCodexRemoteControlHookEnabled,
+    setCodexRemoteControlAccountId,
+    setCodexRemoteControlEnabled,
     setCodexSessionSyncEnabled,
     switching,
     updateSettingsDraftAndSave,
@@ -73,16 +76,19 @@ export default function SettingsPage({
 
                     {settingsTab === 'proxy' && (
                         <ProxySettingsTab
+                            accounts={accounts}
                             codexSessionSyncEnabled={codexSessionSyncEnabled}
+                            maskAccountName={maskAccountName}
                             savingCodexProxyEnv={savingCodexProxyEnv}
-                            savingCodexRemoteControlHook={savingCodexRemoteControlHook}
+                            savingCodexRemoteControl={savingCodexRemoteControl}
                             savingCodexSessionSync={savingCodexSessionSync}
                             savingProxySettings={savingProxySettings}
                             restartingCodexApp={restartingCodexApp}
                             restartCurrentCodexAppNormal={restartCurrentCodexAppNormal}
                             setSettingsDraft={setSettingsDraft}
                             setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
-                            setCodexRemoteControlHookEnabled={setCodexRemoteControlHookEnabled}
+                            setCodexRemoteControlAccountId={setCodexRemoteControlAccountId}
+                            setCodexRemoteControlEnabled={setCodexRemoteControlEnabled}
                             setCodexSessionSyncEnabled={setCodexSessionSyncEnabled}
                             settingsDraft={settingsDraft}
                             switching={switching}

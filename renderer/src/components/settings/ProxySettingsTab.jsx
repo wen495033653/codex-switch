@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { getAccountId, isApiModeAccount } from '../../utils/auth/account';
+import { getAccountName, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 
 function normalizePids(value) {
     if (!Array.isArray(value)) return [];
@@ -7,17 +9,32 @@ function normalizePids(value) {
         .filter(pid => Number.isInteger(pid) && pid > 0);
 }
 
+function formatRemoteControlAccountLabel(account, maskAccountName) {
+    const accountId = getAccountId(account);
+    const name = getAccountName(account);
+    const displayName = maskAccountName ? maskAccountDisplayName(name) : name;
+    const info = parseAuthInfo(account);
+    const plan = info.planType ? info.planType.toUpperCase() : '';
+    const accountTag = accountId ? accountId.split('-')[0] : '';
+    const details = [plan, accountTag].filter(Boolean);
+    const label = displayName || accountId || '账号数据异常';
+    return details.length ? `${label} · ${details.join(' · ')}` : label;
+}
+
 export default function ProxySettingsTab({
+    accounts = [],
     codexSessionSyncEnabled,
+    maskAccountName,
     savingCodexProxyEnv,
-    savingCodexRemoteControlHook,
+    savingCodexRemoteControl,
     savingCodexSessionSync,
     savingProxySettings,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     setSettingsDraft,
     setCodexProxyEnvEnabled,
-    setCodexRemoteControlHookEnabled,
+    setCodexRemoteControlAccountId,
+    setCodexRemoteControlEnabled,
     setCodexSessionSyncEnabled,
     settingsDraft,
     switching,
@@ -26,7 +43,22 @@ export default function ProxySettingsTab({
 }) {
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
     const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
-    const codexRemoteControlHookEnabled = settingsDraft.codex_remote_control_hook_enabled === true;
+    const codexRemoteControlEnabled = settingsDraft.codex_remote_control_enabled === true;
+    const remoteControlAccountId = String(settingsDraft.codex_remote_control_account_id || '').trim();
+    const remoteControlAccounts = Array.isArray(accounts)
+        ? accounts.filter(account => !isApiModeAccount(account) && getAccountId(account))
+        : [];
+    const remoteControlAccount = remoteControlAccounts.find(account => getAccountId(account) === remoteControlAccountId) || null;
+    const remoteControlAccountLabel = remoteControlAccount
+        ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName)
+        : remoteControlAccountId
+            ? '账号不存在，请重新选择'
+            : '未选择';
+    const remoteControlAccountState = remoteControlAccountId && !remoteControlAccount
+        ? 'error'
+        : remoteControlAccount
+            ? 'active'
+            : 'muted';
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex app 或 VS Code 前同步会话列表。';
     const [codexAppProcessStatus, setCodexAppProcessStatus] = useState({
@@ -34,6 +66,14 @@ export default function ProxySettingsTab({
         error: '',
         pids: [],
         processCount: 0
+    });
+    const [remoteControlStatus, setRemoteControlStatus] = useState({
+        loading: false,
+        error: '',
+        backendError: null,
+        helperStatus: null,
+        backendEnvironment: null,
+        connectionStatus: null
     });
 
     useEffect(() => {
@@ -77,6 +117,64 @@ export default function ProxySettingsTab({
         };
     }, []);
 
+    useEffect(() => {
+        let disposed = false;
+
+        async function refreshRemoteControlStatus() {
+            if (!codexRemoteControlEnabled || !window.api || !window.api.getCodexRemoteControlStatus) {
+                if (!disposed) {
+                    setRemoteControlStatus({
+                        loading: false,
+                        error: '',
+                        backendError: null,
+                        helperStatus: null,
+                        backendEnvironment: null,
+                        connectionStatus: null
+                    });
+                }
+                return;
+            }
+
+            setRemoteControlStatus(prev => ({ ...prev, loading: true, error: '' }));
+            try {
+                const result = await window.api.getCodexRemoteControlStatus();
+                if (!disposed) {
+                    setRemoteControlStatus({
+                        loading: false,
+                        error: '',
+                        backendError: result && result.backendError ? result.backendError : null,
+                        helperStatus: result && result.helperStatus ? result.helperStatus : null,
+                        backendEnvironment: result && result.backendEnvironment ? result.backendEnvironment : null,
+                        connectionStatus: result && result.connectionStatus ? result.connectionStatus : null
+                    });
+                }
+            } catch (err) {
+                if (!disposed) {
+                    setRemoteControlStatus({
+                        loading: false,
+                        error: err && err.message ? err.message : '读取远程控制状态失败',
+                        backendError: null,
+                        helperStatus: null,
+                        backendEnvironment: null,
+                        connectionStatus: null
+                    });
+                }
+            }
+        }
+
+        refreshRemoteControlStatus();
+        if (!codexRemoteControlEnabled) {
+            return () => {
+                disposed = true;
+            };
+        }
+        const timer = window.setInterval(refreshRemoteControlStatus, 4000);
+        return () => {
+            disposed = true;
+            window.clearInterval(timer);
+        };
+    }, [codexRemoteControlEnabled, remoteControlAccountId]);
+
     const codexAppPidText = codexAppProcessStatus.loading
         ? '检测中'
         : codexAppProcessStatus.error || (codexAppProcessStatus.pids.length ? codexAppProcessStatus.pids.join(', ') : '未检测到');
@@ -92,6 +190,36 @@ export default function ProxySettingsTab({
         || codexAppProcessStatus.loading
         || Boolean(codexAppProcessStatus.error)
         || codexAppProcessStatus.pids.length === 0;
+    const remoteControlBackendError = remoteControlStatus.backendError;
+    const remoteControlHelperStatus = remoteControlStatus.helperStatus;
+    const remoteControlConnectionStatus = remoteControlStatus.connectionStatus;
+    const remoteControlStatusMessage = remoteControlStatus.error
+        || (remoteControlConnectionStatus && remoteControlConnectionStatus.message)
+        || (remoteControlBackendError && remoteControlBackendError.message)
+        || (remoteControlHelperStatus && remoteControlHelperStatus.message)
+        || '';
+    const remoteControlStatusState = remoteControlConnectionStatus && remoteControlConnectionStatus.state
+        ? remoteControlConnectionStatus.state
+        : (remoteControlBackendError || remoteControlStatus.error || (remoteControlHelperStatus && remoteControlHelperStatus.status === 'errored'))
+        ? 'error'
+        : 'muted';
+    const remoteControlDisplayStatus = !codexRemoteControlEnabled
+        ? '未启用'
+        : remoteControlStatus.loading && !remoteControlStatusMessage
+            ? '检测中'
+            : remoteControlStatusState === 'warning'
+                ? (
+                    remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
+                        ? '需要 MFA'
+                        : '等待登录'
+                )
+            : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, '');
+    const remoteControlStatusTitle = remoteControlStatusState === 'warning'
+        ? remoteControlDisplayStatus
+        : '';
+    const remoteControlToggleDisabled = savingCodexRemoteControl
+        || switching
+        || (!codexRemoteControlEnabled && !remoteControlAccount);
 
     return (
         <>
@@ -165,24 +293,73 @@ export default function ProxySettingsTab({
             </section>
 
             <section className="settings-section settings-app-card-section settings-remote-control-section">
-                <div className="settings-section-head">
-                    <div className="settings-section-title">开启远程控制（手机app）</div>
+                <div className="settings-remote-control-topbar">
+                    <div className="settings-remote-control-title-group">
+                        <div className="settings-section-title">app远程控制</div>
+                        <div
+                            className={`settings-remote-control-status-badge ${remoteControlStatusState}`}
+                            title={remoteControlStatusTitle || undefined}
+                        >
+                            <span className="settings-remote-control-status-dot" aria-hidden="true" />
+                            <span className="settings-remote-control-status-text">{remoteControlDisplayStatus}</span>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className={`settings-remote-control-switch ${codexRemoteControlEnabled ? 'active' : ''}`}
+                        aria-pressed={codexRemoteControlEnabled}
+                        aria-label={codexRemoteControlEnabled ? '关闭 app远程控制' : '开启 app远程控制'}
+                        disabled={remoteControlToggleDisabled}
+                        title={remoteControlToggleDisabled && !codexRemoteControlEnabled ? '请先选择 app远程控制账号' : ''}
+                        onClick={() => setCodexRemoteControlEnabled(!codexRemoteControlEnabled)}
+                    >
+                        <span className="settings-remote-control-switch-label">
+                            {codexRemoteControlEnabled ? '已启用' : '启用'}
+                        </span>
+                        <span className="settings-switch" aria-hidden="true">
+                            <span className="settings-switch-thumb" />
+                        </span>
+                    </button>
                 </div>
-                <button
-                    type="button"
-                    className={`settings-toggle-row ${codexRemoteControlHookEnabled ? 'active' : ''}`}
-                    aria-pressed={codexRemoteControlHookEnabled}
-                    aria-label={codexRemoteControlHookEnabled ? '关闭远程控制（手机app）' : '开启远程控制（手机app）'}
-                    disabled={savingCodexRemoteControlHook || switching}
-                    onClick={() => setCodexRemoteControlHookEnabled(!codexRemoteControlHookEnabled)}
-                >
-                    <span className="settings-toggle-copy">
-                        <span className="settings-toggle-title">启用</span>
-                    </span>
-                    <span className="settings-switch" aria-hidden="true">
-                        <span className="settings-switch-thumb" />
-                    </span>
-                </button>
+                <div className="settings-remote-control-account-grid">
+                    <label className="settings-remote-control-account-field">
+                        <span className="settings-inline-field-label">控制账号</span>
+                        <div className="settings-remote-control-account-select-wrap">
+                            <select
+                                className="settings-input settings-select settings-remote-control-account-select"
+                                value={remoteControlAccountId}
+                                disabled={savingCodexRemoteControl || switching || remoteControlAccounts.length === 0}
+                                onChange={e => setCodexRemoteControlAccountId(e.target.value)}
+                            >
+                                <option value="">未选择</option>
+                                {remoteControlAccountId && !remoteControlAccount && (
+                                    <option value={remoteControlAccountId}>账号不存在</option>
+                                )}
+                                {remoteControlAccounts.map(account => {
+                                    const accountId = getAccountId(account);
+                                    return (
+                                        <option key={accountId} value={accountId}>
+                                            {formatRemoteControlAccountLabel(account, maskAccountName)}
+                                        </option>
+                                    );
+                                })}
+                            </select>
+                            <span
+                                className="settings-remote-control-account-select-arrow"
+                                aria-hidden="true"
+                            />
+                        </div>
+                    </label>
+                    <div className="settings-remote-control-account-meta">
+                        <span className="settings-inline-field-label">当前账号</span>
+                        <div
+                            className={`settings-remote-control-account-current ${remoteControlAccountState}`}
+                            title={remoteControlAccountId || remoteControlAccountLabel}
+                        >
+                            {remoteControlAccountLabel}
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <section className="settings-section settings-app-card-section settings-session-sync-section">

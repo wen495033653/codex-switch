@@ -40,6 +40,10 @@
   border-color: rgba(148, 163, 184, 0.42);
 }
 
+.settings-select {
+  appearance: auto;
+}
+
 .settings-number-input {
   width: 96px;
   color: #60a5fa;

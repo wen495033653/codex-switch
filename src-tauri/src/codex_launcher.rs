@@ -1,12 +1,9 @@
 use crate::{
-    accounts::{
-        find_store_account, mark_store_account_used, random_urlsafe, set_api_mode,
-        set_subscription_mode, store_payload, write_account_auth,
-    },
+    accounts::{random_urlsafe, store_payload},
     json_util::{bool_field, raw_string_field, string_field, value_u64_field},
     paths::codex_dir,
     proxy_config::{normalize_proxy_display_url, normalize_proxy_url},
-    settings::{default_api_mode, read_settings_value, update_settings_value},
+    settings::update_settings_value,
     time_util::now_string,
 };
 use serde_json::{json, Value};

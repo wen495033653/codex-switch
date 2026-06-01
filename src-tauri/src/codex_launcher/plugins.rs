@@ -1,9 +1,9 @@
-use super::remote_control::CODEX_REMOTE_CONTROL_HOOK_SCRIPT;
 use super::*;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    path::Path,
 };
 use url::Url;
 
@@ -13,7 +13,6 @@ const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodexCdpLaunchHooks {
     pub(crate) plugin_unlock: bool,
-    pub(crate) remote_control_hook: bool,
 }
 
 struct CdpScript {
@@ -198,6 +197,7 @@ pub(crate) fn launch_codex_with_cdp_hooks(
         if let Some(parent) = executable_path.parent() {
             command.current_dir(parent);
         }
+        sanitize_desktop_app_launch_env(&mut command);
         hide_command_window(&mut command);
         command
             .spawn()
@@ -218,6 +218,7 @@ pub(crate) fn launch_codex_with_cdp_hooks(
     if let Some(parent) = executable_path.parent() {
         command.current_dir(parent);
     }
+    sanitize_desktop_app_launch_env(&mut command);
     hide_command_window(&mut command);
 
     let mut child = command
@@ -238,17 +239,11 @@ fn cdp_scripts_for_hooks(hooks: CodexCdpLaunchHooks) -> Vec<CdpScript> {
             source: CODEX_PLUGIN_UNLOCK_SCRIPT,
         });
     }
-    if hooks.remote_control_hook {
-        scripts.push(CdpScript {
-            name: "remote_control_hook",
-            source: CODEX_REMOTE_CONTROL_HOOK_SCRIPT,
-        });
-    }
     scripts
 }
 
 fn select_loopback_port(requested: u16) -> Result<u16, String> {
-    if TcpListener::bind(("127.0.0.1", requested)).is_ok() {
+    if requested != 0 && TcpListener::bind(("127.0.0.1", requested)).is_ok() {
         return Ok(requested);
     }
     let listener =
@@ -428,6 +423,13 @@ mod tests {
             r#""C:\Codex\codex.exe" --remote-debugging-port=9229"#
         ));
         assert!(!command_line_has_cdp_launch(r#""C:\Codex\codex.exe""#));
+    }
+
+    #[test]
+    fn select_loopback_port_zero_allocates_actual_port() {
+        let port = select_loopback_port(0).expect("ephemeral port should be allocated");
+
+        assert_ne!(port, 0);
     }
 }
 

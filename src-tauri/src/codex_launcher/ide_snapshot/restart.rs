@@ -11,7 +11,7 @@ pub(crate) fn restart_from_ide_snapshot<F>(
     before_relaunch: F,
 ) -> Result<Value, String>
 where
-    F: FnOnce(),
+    F: FnOnce() -> Result<(), String>,
 {
     let entries = normalize_ide_entries(
         snapshot
@@ -72,7 +72,7 @@ where
         ));
     }
 
-    before_relaunch();
+    before_relaunch()?;
 
     let mut restarted_paths = HashSet::new();
     for executable in executables {

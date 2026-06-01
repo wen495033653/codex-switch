@@ -24,3 +24,209 @@
   font-size: 13px;
   line-height: 1.6;
 }
+
+.settings-remote-control-section {
+  gap: 18px;
+}
+
+.settings-remote-control-topbar {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-remote-control-title-group {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px 12px;
+}
+
+.settings-remote-control-status-badge {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.settings-remote-control-status-badge.active {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.3);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.settings-remote-control-status-badge.error {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.28);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.settings-remote-control-status-badge.warning {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.28);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.settings-remote-control-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.settings-remote-control-status-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-remote-control-switch {
+  min-width: 118px;
+  height: 38px;
+  padding: 0 8px 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-app);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  transition: all 0.2s ease;
+}
+
+.settings-remote-control-switch:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: var(--bg-row-hover);
+}
+
+.settings-remote-control-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.settings-remote-control-switch.active {
+  border-color: rgba(51, 156, 255, 0.46);
+  background: rgba(51, 156, 255, 0.13);
+}
+
+.settings-remote-control-switch.active .settings-switch {
+  background: var(--accent);
+}
+
+.settings-remote-control-switch.active .settings-switch-thumb {
+  transform: translateX(20px);
+}
+
+.settings-remote-control-switch-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.settings-remote-control-account-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(180px, 0.65fr);
+  gap: 16px;
+  align-items: end;
+  min-width: 0;
+}
+
+.settings-remote-control-account-field,
+.settings-remote-control-account-meta {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-remote-control-account-select-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.settings-remote-control-account-select.settings-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 42px;
+}
+
+.settings-remote-control-account-select::-ms-expand {
+  display: none;
+}
+
+.settings-remote-control-account-select-arrow {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  color: var(--text-secondary);
+  opacity: 0.9;
+  transform: translateY(-60%) rotate(45deg);
+  pointer-events: none;
+}
+
+.settings-remote-control-account-select:disabled + .settings-remote-control-account-select-arrow {
+  opacity: 0.45;
+}
+
+.settings-remote-control-account-current {
+  min-height: 38px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-remote-control-account-current.active {
+  color: #bfdbfe;
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.settings-remote-control-account-current.error {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.28);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+@media (max-width: 720px) {
+  .settings-remote-control-topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-remote-control-switch {
+    width: 100%;
+  }
+
+  .settings-remote-control-account-grid {
+    grid-template-columns: 1fr;
+  }
+}

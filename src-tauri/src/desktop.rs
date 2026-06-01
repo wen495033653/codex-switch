@@ -14,3 +14,17 @@ pub(crate) use window::{
     apply_main_window_startup_behavior, focus_main_window, handle_main_window_event,
     restore_main_window_state,
 };
+
+#[tauri::command]
+pub(crate) async fn open_dev_log_window(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    window::open_dev_log_window(app)
+}
+
+#[tauri::command]
+pub(crate) async fn hide_dev_log_window(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    window::hide_dev_log_window(app)
+}

@@ -50,7 +50,11 @@ pub(crate) fn get_settings() -> Result<Value, String> {
 pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
     let should_sync_auto_start =
         has_key(&patch, "auto_start") || has_key(&patch, "auto_start_launch_mode");
+    let should_apply_api_mode = has_key(&patch, "api_mode");
     let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
+    if should_apply_api_mode {
+        apply_complete_api_mode_profile_if_active(&settings)?;
+    }
     if should_sync_auto_start {
         sync_system_auto_start(&app, bool_field(&settings, "auto_start"))?;
     }

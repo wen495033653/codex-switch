@@ -30,7 +30,6 @@ pub(crate) fn write_api_auth(api_key: &str) -> Result<(), String> {
 }
 
 pub(crate) fn write_account_auth(account: &Value) -> Result<(), String> {
-    set_subscription_mode()?;
     let tokens = account
         .get("tokens")
         .cloned()

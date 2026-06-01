@@ -40,7 +40,6 @@ pub(super) fn import_refresh_token_impl(app: AppHandle, token: String) -> Result
         return Err("refresh_token 不能为空".to_string());
     }
 
-    set_subscription_mode()?;
     update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let exchange = exchange_refresh_token(refresh_token)?;
     let account_id = string_field(&exchange, "account_id");
@@ -75,6 +74,7 @@ pub(super) fn switch_account_impl(
     let settings = read_settings_value()?;
     let account = find_store_account(account_id)?;
     write_account_auth(&account)?;
+    set_subscription_mode()?;
     update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
@@ -102,11 +102,10 @@ pub(super) fn switch_api_mode_impl(runtime: State<'_, Arc<IdeRuntime>>) -> Resul
         .get("api_mode")
         .cloned()
         .unwrap_or_else(default_api_mode);
-    set_api_mode(&profile)?;
-    let state = get_codex_state_value();
-    if raw_string_field(&state, "mode") != "api" {
-        return Err("切换失败：Codex 未进入 API 模式".to_string());
+    if string_field(&profile, "base_url").is_empty() {
+        return Err("API Base URL 不能为空".to_string());
     }
+    set_api_mode(&profile)?;
     update_settings_value(&json!({ "codex_active_mode": "api" }))?;
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(

@@ -59,6 +59,7 @@ pub(crate) async fn configure_gpt_pool_api() -> Result<Value, String> {
         }
     });
     let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
+    apply_complete_api_mode_profile_if_active(&settings)?;
 
     Ok(json!({
         "ok": true,

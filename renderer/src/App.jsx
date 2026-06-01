@@ -28,6 +28,50 @@ import {
 const IS_DEV_BUILD = import.meta.env.DEV;
 
 export default function App() {
+  if (IS_DEV_BUILD && isDevLogWindow()) {
+    return <DevLogWindow />;
+  }
+
+  return <MainApp />;
+}
+
+function isDevLogWindow() {
+  if (typeof window === 'undefined') return false;
+  if (window.__CODEX_SWITCH_WINDOW_LABEL === 'dev-log') return true;
+  const tauriWindowLabel = window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+  if (tauriWindowLabel === 'dev-log') return true;
+  return new URLSearchParams(window.location.search).get('window') === 'dev-log';
+}
+
+function DevLogWindow() {
+  const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
+  const hideDevLogWindow = async () => {
+    if (window.api && typeof window.api.hideDevLogWindow === 'function') {
+      try {
+        await window.api.hideDevLogWindow();
+        return;
+      } catch (_err) {
+        // Fall through to the browser close path in dev:renderer.
+      }
+    }
+    window.close();
+  };
+
+  return (
+    <div className="app dev-build dev-log-window">
+      <DevDiagnosticsPanel
+        entries={devDiagnostics.entries}
+        errorCount={devDiagnostics.errorCount}
+        isOpen
+        onClear={devDiagnostics.clear}
+        onToggle={hideDevLogWindow}
+        warningCount={devDiagnostics.warningCount}
+      />
+    </div>
+  );
+}
+
+function MainApp() {
   const [store, setStore] = useState({ accounts: [], active_id: '' });
   const [codexState, setCodexState] = useState(DEFAULT_CODEX_STATE);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -46,6 +90,17 @@ export default function App() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
+  const openDevLogWindow = async () => {
+    if (!window.api || typeof window.api.openDevLogWindow !== 'function') {
+      toast('开发日志窗口需要在桌面应用中打开', 5000);
+      return;
+    }
+    try {
+      await window.api.openDevLogWindow();
+    } catch (err) {
+      toastError(err, '打开开发日志失败', 7000);
+    }
+  };
   const {
     closeRefreshAllModal,
     handleRefreshAll,
@@ -253,10 +308,11 @@ export default function App() {
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
-    savingCodexRemoteControlHook,
+    savingCodexRemoteControl,
     savingProxySettings,
     setCodexProxyEnvEnabled,
-    setCodexRemoteControlHookEnabled,
+    setCodexRemoteControlAccountId,
+    setCodexRemoteControlEnabled,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   } = useSettingsActions({
@@ -368,7 +424,7 @@ export default function App() {
         devErrorCount={devDiagnostics.errorCount}
         devLogCount={devDiagnostics.totalCount}
         isDevBuild={IS_DEV_BUILD}
-        onDevDiagnosticsToggle={devDiagnostics.toggle}
+        onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
         onSettingsClick={openSettingsPage}
@@ -386,16 +442,19 @@ export default function App() {
             setSettingsDraft,
             dataDir,
             appVersion,
+            accounts: store.accounts,
             checkingUpdate,
             codexSessionSyncEnabled,
+            maskAccountName,
             savingCodexProxyEnv,
-            savingCodexRemoteControlHook,
+            savingCodexRemoteControl,
             savingCodexSessionSync,
             savingProxySettings,
             restartingCodexApp,
             restartCurrentCodexAppNormal,
             setCodexProxyEnvEnabled,
-            setCodexRemoteControlHookEnabled,
+            setCodexRemoteControlAccountId,
+            setCodexRemoteControlEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
             switching,
             updateSettingsDraftAndSave,
@@ -510,16 +569,6 @@ export default function App() {
             onConfirm: confirmUpdateAction
           }}
         />
-        {IS_DEV_BUILD && (
-          <DevDiagnosticsPanel
-            entries={devDiagnostics.entries}
-            errorCount={devDiagnostics.errorCount}
-            isOpen={devDiagnostics.isOpen}
-            onClear={devDiagnostics.clear}
-            onToggle={devDiagnostics.toggle}
-            warningCount={devDiagnostics.warningCount}
-          />
-        )}
       </div>
     </div>
   );
