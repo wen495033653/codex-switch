@@ -2,6 +2,16 @@ import { getAccountId, isApiModeAccount } from './account';
 import { safeParseJwt } from './jwt';
 import { getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
 
+const PLAN_TYPE_ALIASES = {
+    self_serve_business_usage_based: 'team'
+};
+
+function normalizePlanType(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw || raw === 'unknown') return '';
+    return PLAN_TYPE_ALIASES[raw.toLowerCase()] || raw;
+}
+
 export function parseAuthInfo(account) {
     if (isApiModeAccount(account)) {
         const api = account.api && typeof account.api === 'object' ? account.api : {};
@@ -55,8 +65,7 @@ export function parseAuthInfo(account) {
     const auth = claims['https://api.openai.com/auth'] || {};
 
     const accountId = getAccountId(account);
-    const rawPlanType = auth.chatgpt_plan_type || '';
-    const planType = rawPlanType === 'unknown' ? '' : rawPlanType;
+    const planType = normalizePlanType(auth.chatgpt_plan_type);
     const isFreePlan = planType.toLowerCase() === 'free';
     const expiresAt = auth.chatgpt_subscription_active_until || '';
 
