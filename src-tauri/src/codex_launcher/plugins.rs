@@ -294,25 +294,8 @@ pub(crate) fn launch_codex_with_cdp_hooks(
         ));
     }
 
-    let scripts = cdp_scripts_for_hooks(hooks);
-    if scripts.is_empty() {
-        let mut command = Command::new(executable_path);
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Some(parent) = executable_path.parent() {
-            command.current_dir(parent);
-        }
-        sanitize_desktop_app_launch_env(&mut command);
-        hide_command_window(&mut command);
-        command
-            .spawn()
-            .map_err(|err| format!("启动 Codex app 失败: {err}"))?;
-        return Ok(());
-    }
-
     let debug_port = select_loopback_port(CODEX_PLUGIN_DEBUG_PORT)?;
+    let scripts = cdp_scripts_for_hooks(hooks);
     let mut command = Command::new(executable_path);
     command
         .arg(format!("--remote-debugging-port={debug_port}"))

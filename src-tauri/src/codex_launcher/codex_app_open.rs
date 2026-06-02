@@ -138,11 +138,9 @@ fn codex_relaunch_mode_for_app_open(
 ) -> Option<CodexRelaunchMode> {
     let cdp_hooks = codex_cdp_launch_hooks_for_actions(actions);
     if actions.session_sync_enabled && status.session_sync_pending {
-        return Some(if let Some(hooks) = cdp_hooks {
-            CodexRelaunchMode::Cdp(hooks)
-        } else {
-            CodexRelaunchMode::Normal
-        });
+        return Some(CodexRelaunchMode::Cdp(
+            codex_cdp_launch_hooks_for_watch_open(actions),
+        ));
     }
     if let Some(hooks) = cdp_hooks {
         if !status.cdp_launch_applied {
@@ -157,6 +155,13 @@ fn codex_relaunch_mode_for_actions(actions: CodexAppOpenActions) -> CodexRelaunc
         CodexRelaunchMode::Cdp(hooks)
     } else {
         CodexRelaunchMode::Normal
+    }
+}
+
+fn codex_cdp_launch_hooks_for_watch_open(actions: CodexAppOpenActions) -> CodexCdpLaunchHooks {
+    CodexCdpLaunchHooks {
+        plugin_unlock: actions.plugin_unlock_enabled,
+        codex_mobile_no_replace: actions.remote_control_enabled,
     }
 }
 
@@ -797,6 +802,11 @@ mod tests {
             "codex_remote_control_enabled": true,
             "codex_session_sync_enabled": false
         }));
+        let session_and_remote_control = CodexAppOpenActions::from_settings(&json!({
+            "codex_plugins_enabled": false,
+            "codex_remote_control_enabled": true,
+            "codex_session_sync_enabled": true
+        }));
         let session_and_plugin = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": true,
             "codex_session_sync_enabled": true
@@ -809,6 +819,14 @@ mod tests {
         let plugin_hooks = CodexCdpLaunchHooks {
             plugin_unlock: true,
             codex_mobile_no_replace: false,
+        };
+        let cdp_only_hooks = CodexCdpLaunchHooks {
+            plugin_unlock: false,
+            codex_mobile_no_replace: false,
+        };
+        let mobile_no_replace_hooks = CodexCdpLaunchHooks {
+            plugin_unlock: false,
+            codex_mobile_no_replace: true,
         };
         let plugin_remote_control_hooks = CodexCdpLaunchHooks {
             plugin_unlock: true,
@@ -823,7 +841,7 @@ mod tests {
                     ..CodexAppOpenStatus::default()
                 }
             ),
-            Some(CodexRelaunchMode::Normal)
+            Some(CodexRelaunchMode::Cdp(cdp_only_hooks))
         );
         assert_eq!(
             codex_relaunch_mode_for_app_open(session_only, CodexAppOpenStatus::default()),
@@ -856,6 +874,16 @@ mod tests {
                 }
             ),
             None
+        );
+        assert_eq!(
+            codex_relaunch_mode_for_app_open(
+                session_and_remote_control,
+                CodexAppOpenStatus {
+                    session_sync_pending: true,
+                    ..CodexAppOpenStatus::default()
+                }
+            ),
+            Some(CodexRelaunchMode::Cdp(mobile_no_replace_hooks))
         );
         assert_eq!(
             codex_relaunch_mode_for_app_open(
