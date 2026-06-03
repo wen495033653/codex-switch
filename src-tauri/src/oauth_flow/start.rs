@@ -1,7 +1,7 @@
 use crate::{
     accounts::{
         account_from_exchange_syncing, add_account_to_store, build_oauth_auth_url, generate_pkce,
-        random_urlsafe,
+        random_urlsafe, sync_auth_file_if_active,
     },
     events::emit_store_updated,
     json_util::string_field,
@@ -117,6 +117,7 @@ fn run_oauth_flow(
     let access_token = string_field(&exchange, "access_token");
     let account = account_from_exchange_syncing(&exchange, None)?;
     let store = add_account_to_store(account, false)?;
+    sync_auth_file_if_active(&account_id)?;
     emit_store_updated(&app, store);
     emit_oauth_update(
         &app,

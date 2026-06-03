@@ -46,6 +46,7 @@ pub(super) fn import_refresh_token_impl(app: AppHandle, token: String) -> Result
     let access_token = string_field(&exchange, "access_token");
     let account = account_from_exchange_syncing(&exchange, None)?;
     let store = add_account_to_store(account, false)?;
+    sync_auth_file_if_active(&account_id)?;
     sync_account_usage_in_background(app, account_id, access_token);
     Ok(store_payload_from_store(
         store,
