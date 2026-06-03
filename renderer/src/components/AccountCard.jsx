@@ -36,7 +36,7 @@ function getAuthErrorLabel(info) {
         return '登录已失效';
     }
 
-    return '登录刷新失败';
+    return '刷新失败';
 }
 
 function getAuthBadge(info) {
