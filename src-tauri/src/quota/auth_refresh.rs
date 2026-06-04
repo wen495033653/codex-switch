@@ -2,7 +2,8 @@ use crate::{
     accounts::{
         account_from_exchange_preserve_usage, account_id_from_account, add_account_to_store,
         exchange_refresh_token, find_store_account, mark_account_auth_error, normalize_custom,
-        normalize_tokens, read_store_value, set_auth_state, sync_auth_file_if_active,
+        normalize_tokens, profile_id_from_account, read_store_value, set_auth_state,
+        sync_auth_file_if_active,
     },
     events::emit_store_updated,
     json_util::{raw_string_field, string_field},
@@ -41,8 +42,8 @@ fn should_auto_refresh_account(account: &Value) -> bool {
     true
 }
 
-fn mark_account_auth_refreshing(account_id: &str, message: &str) -> Result<Value, String> {
-    let account = find_store_account(account_id)?;
+fn mark_account_auth_refreshing(profile_id: &str, message: &str) -> Result<Value, String> {
+    let account = find_store_account(profile_id)?;
     let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
     let custom = set_auth_state(
         account.get("custom"),
@@ -55,8 +56,9 @@ fn mark_account_auth_refreshing(account_id: &str, message: &str) -> Result<Value
     add_account_to_store(json!({ "tokens": tokens, "custom": custom }), false)
 }
 
-pub(crate) fn refresh_stored_account_tokens(account_id: &str) -> Result<Value, String> {
-    let account = find_store_account(account_id)?;
+pub(crate) fn refresh_stored_account_tokens(profile_id: &str) -> Result<Value, String> {
+    let account = find_store_account(profile_id)?;
+    let expected_account_id = account_id_from_account(&account)?;
     let previous_refresh_token = account
         .get("tokens")
         .and_then(|tokens| tokens.get("refresh_token"))
@@ -68,14 +70,14 @@ pub(crate) fn refresh_stored_account_tokens(account_id: &str) -> Result<Value, S
     if refreshed_account_id.is_empty() {
         return Err("刷新结果缺少 account_id".to_string());
     }
-    if refreshed_account_id != account_id {
+    if refreshed_account_id != expected_account_id {
         return Err("刷新后账号标识不一致".to_string());
     }
 
-    let latest = find_store_account(account_id).unwrap_or(account);
+    let latest = find_store_account(profile_id).unwrap_or(account);
     let next_account = account_from_exchange_preserve_usage(&exchange, latest.get("custom"))?;
     let store = add_account_to_store(next_account, false)?;
-    sync_auth_file_if_active(account_id)?;
+    sync_auth_file_if_active(profile_id)?;
     Ok(store)
 }
 
@@ -93,23 +95,23 @@ fn refresh_due_account_tokens_once(app: &AppHandle) -> Result<Value, String> {
     let mut updated = 0_u64;
     let mut failed = 0_u64;
     for account in due_accounts {
-        let Ok(account_id) = account_id_from_account(&account) else {
+        let Ok(profile_id) = profile_id_from_account(&account) else {
             continue;
         };
 
-        if let Ok(store) = mark_account_auth_refreshing(&account_id, "认证刷新中，请稍候...")
+        if let Ok(store) = mark_account_auth_refreshing(&profile_id, "认证刷新中，请稍候...")
         {
             emit_store_updated(app, store);
         }
 
-        match refresh_stored_account_tokens(&account_id) {
+        match refresh_stored_account_tokens(&profile_id) {
             Ok(store) => {
                 updated += 1;
                 emit_store_updated(app, store);
             }
             Err(err) => {
                 failed += 1;
-                if let Ok(store) = mark_account_auth_error(&account_id, &err) {
+                if let Ok(store) = mark_account_auth_error(&profile_id, &err) {
                     emit_store_updated(app, store);
                 }
             }

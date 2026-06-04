@@ -2,7 +2,10 @@ mod account;
 mod store;
 mod tokens;
 
-use crate::{accounts::STORE_VERSION, json_util::raw_string_field};
+use crate::{
+    accounts::{decode_jwt_payload, STORE_VERSION},
+    json_util::{raw_string_field, string_field},
+};
 use serde_json::{json, Value};
 
 use account::StoreAccount;
@@ -11,6 +14,7 @@ use tokens::AccountTokens;
 
 const TOKENS_FIELD: &str = "tokens";
 const CUSTOM_FIELD: &str = "custom";
+const PROFILE_ID_FIELD: &str = "profile_id";
 const ACCOUNT_ID_FIELD: &str = "account_id";
 const ID_TOKEN_FIELD: &str = "id_token";
 const ACCESS_TOKEN_FIELD: &str = "access_token";
@@ -28,6 +32,31 @@ pub(crate) fn normalize_tokens(value: Option<&Value>) -> Result<Value, String> {
 
 pub(crate) fn account_id_from_account(account: &Value) -> Result<String, String> {
     AccountTokens::from_account_value(account).map(|tokens| tokens.account_id().to_string())
+}
+
+pub(crate) fn profile_id_from_account(account: &Value) -> Result<String, String> {
+    let raw_profile_id = raw_string_field(account, PROFILE_ID_FIELD);
+    if !raw_profile_id.is_empty() {
+        return Ok(raw_profile_id);
+    }
+
+    AccountTokens::from_account_value(account).map(|tokens| profile_id_from_tokens(&tokens))
+}
+
+pub(crate) fn profile_id_from_tokens_value(value: Option<&Value>) -> Result<String, String> {
+    AccountTokens::from_value(value).map(|tokens| profile_id_from_tokens(&tokens))
+}
+
+fn profile_id_from_tokens(tokens: &AccountTokens) -> String {
+    let email = decode_jwt_payload(tokens.id_token())
+        .ok()
+        .map(|claims| string_field(&claims, "email").trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if email.is_empty() {
+        tokens.account_id().to_string()
+    } else {
+        format!("{}:{email}", tokens.account_id())
+    }
 }
 
 pub(crate) fn normalize_account(value: &Value) -> Result<Value, String> {
@@ -84,6 +113,17 @@ mod tests {
             .unwrap()
     }
 
+    fn profile_ids(store: &Value) -> Vec<String> {
+        store
+            .get("accounts")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(profile_id_from_account)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
     #[test]
     fn normalize_store_deduplicates_by_account_id_and_keeps_last_item() {
         let store = normalize_store_data(&json!({
@@ -106,6 +146,44 @@ mod tests {
             .map(|tokens| raw_string_field(tokens, REFRESH_TOKEN_FIELD))
             .unwrap();
         assert_eq!(first_refresh_token, "new-token");
+    }
+
+    #[test]
+    fn normalize_store_keeps_same_chatgpt_account_for_different_emails() {
+        use base64::{engine::general_purpose, Engine as _};
+
+        fn account_with_email(email: &str) -> Value {
+            let payload =
+                general_purpose::URL_SAFE_NO_PAD.encode(format!(r#"{{"email":"{email}"}}"#));
+            json!({
+                "tokens": {
+                    "id_token": format!("header.{payload}.sig"),
+                    "access_token": format!("access-{email}"),
+                    "refresh_token": format!("refresh-{email}"),
+                    "account_id": "team-account"
+                },
+                "custom": {
+                    "created_at": "2026-05-05T00:00:00Z",
+                    "last_used_at": "2026-05-05T00:00:00Z"
+                }
+            })
+        }
+
+        let store = normalize_store_data(&json!({
+            "version": STORE_VERSION,
+            "active_id": "",
+            "accounts": [
+                account_with_email("2@llm-run.com"),
+                account_with_email("3@llm-run.com")
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            profile_ids(&store),
+            vec!["team-account:2@llm-run.com", "team-account:3@llm-run.com"]
+        );
+        assert_eq!(account_ids(&store), vec!["team-account", "team-account"]);
     }
 
     #[test]

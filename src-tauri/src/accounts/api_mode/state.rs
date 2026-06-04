@@ -56,6 +56,7 @@ pub(crate) fn get_codex_state_value() -> Value {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let profile_id = profile_id_from_tokens_value(auth.get("tokens")).unwrap_or_default();
 
     let api_provider_ready = model_provider == API_PROVIDER_ID && !provider_base_url.is_empty();
     let api_credentials_ready = auth_mode == "apikey"
@@ -83,6 +84,7 @@ pub(crate) fn get_codex_state_value() -> Value {
         "openai_base_url": openai_base_url,
         "api_key_present": api_key_present,
         "api_provider_ready": api_provider_ready,
-        "account_id": account_id
+        "account_id": account_id,
+        "profile_id": profile_id
     })
 }

@@ -12,13 +12,19 @@ const AUTO_QUOTA_TIMEOUT_MS: u64 = 10_000;
 
 pub(crate) fn sync_account_usage_in_background(
     app: AppHandle,
+    profile_id: String,
     account_id: String,
     access_token: String,
 ) {
     thread::spawn(move || {
-        let usage_result =
-            get_usage_with_auth_retry(&app, &account_id, &access_token, AUTO_QUOTA_TIMEOUT_MS);
-        let Ok(account) = find_store_account(&account_id) else {
+        let usage_result = get_usage_with_auth_retry(
+            &app,
+            &profile_id,
+            &account_id,
+            &access_token,
+            AUTO_QUOTA_TIMEOUT_MS,
+        );
+        let Ok(account) = find_store_account(&profile_id) else {
             return;
         };
         let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);

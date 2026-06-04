@@ -3,7 +3,10 @@ mod operations;
 mod payload;
 mod persistence;
 
-pub(crate) use model::{account_id_from_account, normalize_tokens, sort_accounts_by_last_used};
+pub(crate) use model::{
+    account_id_from_account, normalize_tokens, profile_id_from_account,
+    profile_id_from_tokens_value, sort_accounts_by_last_used,
+};
 pub(crate) use operations::{
     add_account_to_store, find_store_account, import_store_accounts, mark_account_auth_error,
     mark_store_account_used, remove_store_account, sync_auth_file_if_active,

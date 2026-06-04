@@ -1,6 +1,6 @@
 use super::usage_store::update_active_account_usage_result;
 use crate::{
-    accounts::{account_id_from_account, get_codex_state_value, read_store_with_active_sync},
+    accounts::{get_codex_state_value, profile_id_from_account, read_store_with_active_sync},
     codex_session_usage,
     events::emit_store_updated,
     json_util::raw_string_field,
@@ -13,7 +13,7 @@ use tauri::AppHandle;
 const ACTIVE_QUOTA_INTERVAL_SECONDS: u64 = 60;
 
 struct ActiveQuotaTarget {
-    account_id: String,
+    profile_id: String,
     min_fetched_at: Option<i64>,
 }
 
@@ -35,13 +35,13 @@ fn active_quota_refresh_target() -> Result<Option<ActiveQuotaTarget>, String> {
     if raw_string_field(&state, "mode") != "chatgpt" {
         return Ok(None);
     }
-    let active_account_id = raw_string_field(&state, "account_id");
-    if active_account_id.is_empty() {
+    let active_profile_id = raw_string_field(&state, "profile_id");
+    if active_profile_id.is_empty() {
         return Ok(None);
     }
 
     let store = read_store_with_active_sync()?;
-    if raw_string_field(&store, "active_id") != active_account_id {
+    if raw_string_field(&store, "active_id") != active_profile_id {
         return Ok(None);
     }
 
@@ -50,7 +50,7 @@ fn active_quota_refresh_target() -> Result<Option<ActiveQuotaTarget>, String> {
         .and_then(Value::as_array)
         .and_then(|accounts| {
             accounts.iter().find(|account| {
-                account_id_from_account(account).unwrap_or_default() == active_account_id
+                profile_id_from_account(account).unwrap_or_default() == active_profile_id
             })
         });
     let Some(account) = account else {
@@ -58,7 +58,7 @@ fn active_quota_refresh_target() -> Result<Option<ActiveQuotaTarget>, String> {
     };
 
     Ok(Some(ActiveQuotaTarget {
-        account_id: active_account_id,
+        profile_id: active_profile_id,
         min_fetched_at: account_usage_min_fetched_at(account),
     }))
 }
@@ -92,7 +92,7 @@ fn refresh_active_account_usage_once(app: &AppHandle) -> Result<Value, String> {
         }
     }
 
-    match update_active_account_usage_result(&target.account_id, Ok(usage_info))? {
+    match update_active_account_usage_result(&target.profile_id, Ok(usage_info))? {
         Some(store) => {
             emit_store_updated(app, store);
             Ok(json!({

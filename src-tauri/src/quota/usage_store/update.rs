@@ -1,6 +1,6 @@
 use crate::{
     accounts::{
-        account_id_from_account, read_store_value, set_usage_state, sort_accounts_by_last_used,
+        profile_id_from_account, read_store_value, set_usage_state, sort_accounts_by_last_used,
         write_store_value,
     },
     json_util::raw_string_field,
@@ -28,7 +28,7 @@ fn is_limit_window_changed(old_usage: &Value, new_usage: &Value) -> bool {
 
 fn update_account_usage_result_in_store(
     mut store: Value,
-    account_id: &str,
+    profile_id: &str,
     usage_result: Result<Value, Value>,
 ) -> Result<Value, String> {
     let accounts = store
@@ -37,7 +37,7 @@ fn update_account_usage_result_in_store(
         .ok_or_else(|| "accounts.json 数据结构无效".to_string())?;
     let index = accounts
         .iter()
-        .position(|account| account_id_from_account(account).unwrap_or_default() == account_id)
+        .position(|account| profile_id_from_account(account).unwrap_or_default() == profile_id)
         .ok_or_else(|| "账号不存在".to_string())?;
 
     let old_usage = accounts[index]
@@ -86,19 +86,19 @@ fn update_account_usage_result_in_store(
 }
 
 pub(crate) fn update_account_usage_result(
-    account_id: &str,
+    profile_id: &str,
     usage_result: Result<Value, Value>,
 ) -> Result<Value, String> {
-    update_account_usage_result_in_store(read_store_value()?, account_id, usage_result)
+    update_account_usage_result_in_store(read_store_value()?, profile_id, usage_result)
 }
 
 pub(crate) fn update_active_account_usage_result(
-    account_id: &str,
+    profile_id: &str,
     usage_result: Result<Value, Value>,
 ) -> Result<Option<Value>, String> {
     let store = read_store_value()?;
-    if raw_string_field(&store, "active_id") != account_id {
+    if raw_string_field(&store, "active_id") != profile_id {
         return Ok(None);
     }
-    update_account_usage_result_in_store(store, account_id, usage_result).map(Some)
+    update_account_usage_result_in_store(store, profile_id, usage_result).map(Some)
 }

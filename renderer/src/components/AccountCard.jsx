@@ -1,5 +1,5 @@
 import QuotaItem from './QuotaItem';
-import { parseAuthInfo, getAccountName, getAccountId, maskAccountDisplayName } from '../utils/auth';
+import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, maskAccountDisplayName } from '../utils/auth';
 
 const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
 
@@ -67,7 +67,8 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
     const name = getAccountName(acc);
     const displayName = maskAccountName ? maskAccountDisplayName(name) : name;
     const accountId = getAccountId(acc);
-    const accountTag = accountId ? accountId.split('-')[0] : '';
+    const chatgptAccountId = getChatgptAccountId(acc);
+    const accountTag = chatgptAccountId ? chatgptAccountId.split('-')[0] : '';
     const usageNoticeTitle = info.usageNotice
         ? (info.usageNotice.detail || info.usageNotice.message)
         : '';
@@ -90,8 +91,8 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
                             {authBadge.label}
                         </span>
                     )}
-                    {showAccountTag(accountId) && accountTag && (
-                        <span className="account-id-badge" title={`账号ID: ${accountId}`}>
+                    {showAccountTag(chatgptAccountId) && accountTag && (
+                        <span className="account-id-badge" title={`账号ID: ${chatgptAccountId}`}>
                             {accountTag}
                         </span>
                     )}

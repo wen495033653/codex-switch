@@ -1,9 +1,13 @@
-use crate::{accounts::account_id_from_account, time_util::parse_rfc3339_seconds};
+use crate::{
+    accounts::{account_id_from_account, profile_id_from_account},
+    time_util::parse_rfc3339_seconds,
+};
 use serde_json::Value;
 use time::OffsetDateTime;
 
 #[derive(Clone)]
 pub(super) struct RefreshTarget {
+    pub(super) profile_id: String,
     pub(super) account_id: String,
     pub(super) access_token: String,
 }
@@ -16,6 +20,7 @@ pub(super) fn refresh_targets_from_store(store: &Value) -> Vec<RefreshTarget> {
             accounts
                 .iter()
                 .filter_map(|account| {
+                    let profile_id = profile_id_from_account(account).ok()?;
                     let account_id = account_id_from_account(account).ok()?;
                     let access_token = account
                         .get("tokens")
@@ -23,10 +28,11 @@ pub(super) fn refresh_targets_from_store(store: &Value) -> Vec<RefreshTarget> {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
-                    if account_id.is_empty() || access_token.is_empty() {
+                    if profile_id.is_empty() || account_id.is_empty() || access_token.is_empty() {
                         return None;
                     }
                     Some(RefreshTarget {
+                        profile_id,
                         account_id,
                         access_token,
                     })
@@ -37,6 +43,7 @@ pub(super) fn refresh_targets_from_store(store: &Value) -> Vec<RefreshTarget> {
 }
 
 fn quota_refresh_target(account: &Value) -> bool {
+    let profile_id = profile_id_from_account(account).unwrap_or_default();
     let account_id = account_id_from_account(account).unwrap_or_default();
     let access_token = account
         .get("tokens")
@@ -44,7 +51,7 @@ fn quota_refresh_target(account: &Value) -> bool {
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim();
-    !account_id.is_empty() && !access_token.is_empty()
+    !profile_id.is_empty() && !account_id.is_empty() && !access_token.is_empty()
 }
 
 fn quota_refresh_timestamp_seconds(account: &Value) -> Option<i64> {

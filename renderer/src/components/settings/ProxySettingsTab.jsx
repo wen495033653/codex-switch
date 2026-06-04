@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getAccountId, isApiModeAccount } from '../../utils/auth/account';
+import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
 import { getAccountName, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 
 function normalizePids(value) {
@@ -15,7 +15,8 @@ function formatRemoteControlAccountLabel(account, maskAccountName) {
     const displayName = maskAccountName ? maskAccountDisplayName(name) : name;
     const info = parseAuthInfo(account);
     const plan = info.planType ? info.planType.toUpperCase() : '';
-    const accountTag = accountId ? accountId.split('-')[0] : '';
+    const chatgptAccountId = getChatgptAccountId(account);
+    const accountTag = chatgptAccountId ? chatgptAccountId.split('-')[0] : '';
     const details = [plan, accountTag].filter(Boolean);
     const label = displayName || accountId || '账号数据异常';
     return details.length ? `${label} · ${details.join(' · ')}` : label;
@@ -49,7 +50,13 @@ export default function ProxySettingsTab({
     const remoteControlAccounts = Array.isArray(accounts)
         ? accounts.filter(account => !isApiModeAccount(account) && getAccountId(account))
         : [];
-    const remoteControlAccount = remoteControlAccounts.find(account => getAccountId(account) === remoteControlAccountId) || null;
+    const remoteControlLegacyMatches = remoteControlAccounts
+        .filter(account => getChatgptAccountId(account) === remoteControlAccountId);
+    const remoteControlAccount = remoteControlAccounts.find(account => getAccountId(account) === remoteControlAccountId)
+        || (remoteControlLegacyMatches.length === 1 ? remoteControlLegacyMatches[0] : null);
+    const remoteControlSelectedAccountId = remoteControlAccount
+        ? getAccountId(remoteControlAccount)
+        : remoteControlAccountId;
     const remoteControlAccountLabel = remoteControlAccount
         ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName)
         : remoteControlAccountId
@@ -341,7 +348,7 @@ export default function ProxySettingsTab({
                         <div className="settings-remote-control-account-select-wrap">
                             <select
                                 className="settings-input settings-select settings-remote-control-account-select"
-                                value={remoteControlAccountId}
+                                value={remoteControlSelectedAccountId}
                                 disabled={savingCodexRemoteControl || switching || remoteControlAccounts.length === 0}
                                 onChange={e => setCodexRemoteControlAccountId(e.target.value)}
                             >

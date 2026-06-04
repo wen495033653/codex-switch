@@ -1,4 +1,4 @@
-use super::model::{account_id_from_account, empty_store, normalize_store_data};
+use super::model::{empty_store, normalize_store_data, profile_id_from_account};
 use crate::{
     accounts::get_codex_state_value,
     json_file::{read_json_file, write_json_file},
@@ -28,19 +28,19 @@ pub(crate) fn write_store_value(store: &Value) -> Result<(), String> {
 pub(crate) fn read_store_with_active_sync() -> Result<Value, String> {
     let mut store = read_store_value()?;
     let state = get_codex_state_value();
-    let account_id = raw_string_field(&state, "account_id");
+    let profile_id = raw_string_field(&state, "profile_id");
     if raw_string_field(&state, "mode") == "chatgpt"
-        && !account_id.is_empty()
+        && !profile_id.is_empty()
         && store
             .get("accounts")
             .and_then(Value::as_array)
             .is_some_and(|accounts| {
                 accounts.iter().any(|account| {
-                    account_id_from_account(account).unwrap_or_default() == account_id
+                    profile_id_from_account(account).unwrap_or_default() == profile_id
                 })
             })
     {
-        store["active_id"] = Value::String(account_id);
+        store["active_id"] = Value::String(profile_id);
         write_store_value(&store)?;
     }
     Ok(store)

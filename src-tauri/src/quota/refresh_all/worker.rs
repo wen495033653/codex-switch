@@ -31,10 +31,15 @@ pub(super) fn start_refresh_all_quotas_in_background(
         }
 
         for target in targets {
-            let usage_result =
-                get_usage_with_auth_retry(&app, &target.account_id, &target.access_token, 30_000);
+            let usage_result = get_usage_with_auth_retry(
+                &app,
+                &target.profile_id,
+                &target.account_id,
+                &target.access_token,
+                30_000,
+            );
             let usage_ok = usage_result.is_ok();
-            let store_result = update_account_usage_result(&target.account_id, usage_result);
+            let store_result = update_account_usage_result(&target.profile_id, usage_result);
             let store_update_ok = store_result.is_ok();
             if let Ok(store) = store_result {
                 emit_store_updated(&app, store);

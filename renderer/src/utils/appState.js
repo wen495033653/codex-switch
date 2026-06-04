@@ -58,7 +58,8 @@ export const DEFAULT_CODEX_STATE = {
   openai_base_url: '',
   api_key_present: false,
   api_provider_ready: false,
-  account_id: ''
+  account_id: '',
+  profile_id: ''
 };
 
 export const REPOSITORY_URL = 'https://github.com/wen495033653/codex-switch';

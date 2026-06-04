@@ -38,7 +38,7 @@ impl AccountStore {
             let account = StoreAccount::normalize(&item)?;
             if let Some(index) = accounts
                 .iter()
-                .position(|existing| existing.account_id() == account.account_id())
+                .position(|existing| existing.profile_id() == account.profile_id())
             {
                 accounts[index] = account;
             } else {
@@ -46,6 +46,19 @@ impl AccountStore {
             }
         }
         accounts.sort_by(|a, b| b.last_used_at().cmp(a.last_used_at()));
+        let active_id = if active_id.is_empty()
+            || accounts
+                .iter()
+                .any(|account| account.profile_id() == active_id)
+        {
+            active_id
+        } else {
+            accounts
+                .iter()
+                .find(|account| account.account_id() == active_id)
+                .map(|account| account.profile_id().to_string())
+                .unwrap_or(active_id)
+        };
         Ok(Self {
             active_id,
             accounts,

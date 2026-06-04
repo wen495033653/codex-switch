@@ -13,6 +13,7 @@ fn is_auth_retryable_usage_error(error: &Value) -> bool {
 
 pub(crate) fn get_usage_with_auth_retry(
     app: &AppHandle,
+    profile_id: &str,
     account_id: &str,
     access_token: &str,
     timeout_ms: u64,
@@ -20,10 +21,10 @@ pub(crate) fn get_usage_with_auth_retry(
     match get_usage(access_token, account_id, timeout_ms) {
         Ok(usage_info) => Ok(usage_info),
         Err(error) if is_auth_retryable_usage_error(&error) => {
-            match refresh_stored_account_tokens(account_id) {
+            match refresh_stored_account_tokens(profile_id) {
                 Ok(store) => {
                     emit_store_updated(app, store);
-                    let refreshed = find_store_account(account_id)
+                    let refreshed = find_store_account(profile_id)
                         .map_err(|err| build_error_state(&err, "auth_refresh_failed", "", 0, ""))?;
                     let refreshed_access_token = refreshed
                         .get("tokens")
@@ -33,7 +34,7 @@ pub(crate) fn get_usage_with_auth_retry(
                     get_usage(refreshed_access_token, account_id, timeout_ms)
                 }
                 Err(refresh_err) => {
-                    if let Ok(store) = mark_account_auth_error(account_id, &refresh_err) {
+                    if let Ok(store) = mark_account_auth_error(profile_id, &refresh_err) {
                         emit_store_updated(app, store);
                     }
                     Err(error)

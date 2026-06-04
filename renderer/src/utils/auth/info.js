@@ -1,4 +1,4 @@
-import { getAccountId, isApiModeAccount } from './account';
+import { getChatgptAccountId, isApiModeAccount } from './account';
 import { safeParseJwt } from './jwt';
 import { getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
 
@@ -64,7 +64,7 @@ export function parseAuthInfo(account) {
     const claims = parsed.claims;
     const auth = claims['https://api.openai.com/auth'] || {};
 
-    const accountId = getAccountId(account);
+    const accountId = getChatgptAccountId(account);
     const planType = normalizePlanType(auth.chatgpt_plan_type);
     const isFreePlan = planType.toLowerCase() === 'free';
     const expiresAt = auth.chatgpt_subscription_active_until || '';

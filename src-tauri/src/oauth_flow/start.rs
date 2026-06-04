@@ -1,7 +1,7 @@
 use crate::{
     accounts::{
         account_from_exchange_syncing, add_account_to_store, build_oauth_auth_url, generate_pkce,
-        random_urlsafe, sync_auth_file_if_active,
+        profile_id_from_account, random_urlsafe, sync_auth_file_if_active,
     },
     events::emit_store_updated,
     json_util::string_field,
@@ -116,8 +116,9 @@ fn run_oauth_flow(
     let account_id = string_field(&exchange, "account_id");
     let access_token = string_field(&exchange, "access_token");
     let account = account_from_exchange_syncing(&exchange, None)?;
+    let profile_id = profile_id_from_account(&account)?;
     let store = add_account_to_store(account, false)?;
-    sync_auth_file_if_active(&account_id)?;
+    sync_auth_file_if_active(&profile_id)?;
     emit_store_updated(&app, store);
     emit_oauth_update(
         &app,
@@ -130,7 +131,7 @@ fn run_oauth_flow(
             "message": "账号已添加，正在同步配额"
         }),
     );
-    sync_account_usage_in_background(app.clone(), account_id, access_token);
+    sync_account_usage_in_background(app.clone(), profile_id, account_id, access_token);
     Ok(())
 }
 

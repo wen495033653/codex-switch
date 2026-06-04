@@ -49,6 +49,7 @@ fn update_account_usage_preserve_tokens(
 pub(super) struct AccountRefreshContext {
     pub(super) account: Value,
     pub(super) exchange: Value,
+    pub(super) profile_id: String,
     pub(super) account_id: String,
     pub(super) previous_refresh_token: String,
 }
@@ -59,11 +60,12 @@ pub(super) enum AccountRefreshStart {
 }
 
 fn prepare_account_refresh(id: String) -> Result<AccountRefreshStart, String> {
-    let target_id = id.trim();
-    if target_id.is_empty() {
+    let target_profile_id = id.trim();
+    if target_profile_id.is_empty() {
         return Err("account_id 无效".to_string());
     }
-    let account = find_store_account(target_id)?;
+    let account = find_store_account(target_profile_id)?;
+    let expected_account_id = account_id_from_account(&account)?;
     let previous_refresh_token = account
         .get("tokens")
         .and_then(|tokens| tokens.get("refresh_token"))
@@ -74,28 +76,31 @@ fn prepare_account_refresh(id: String) -> Result<AccountRefreshStart, String> {
         Ok(value) => value,
         Err(err) => {
             return Ok(AccountRefreshStart::Failed(auth_error_payload(
-                target_id, &err,
+                target_profile_id,
+                &err,
             )?))
         }
     };
     let account_id = string_field(&exchange, "account_id");
-    if account_id != target_id {
+    if account_id != expected_account_id {
         let message = "刷新后账号标识不一致";
         return Ok(AccountRefreshStart::Failed(auth_error_payload(
-            target_id, message,
+            target_profile_id,
+            message,
         )?));
     }
 
     Ok(AccountRefreshStart::Ready(AccountRefreshContext {
         account,
         exchange,
+        profile_id: target_profile_id.to_string(),
         account_id,
         previous_refresh_token,
     }))
 }
 
-fn auth_error_payload(target_id: &str, message: &str) -> Result<Value, String> {
-    let store = mark_account_auth_error(target_id, message)?;
+fn auth_error_payload(profile_id: &str, message: &str) -> Result<Value, String> {
+    let store = mark_account_auth_error(profile_id, message)?;
     Ok(json!({
         "ok": false,
         "message": message,
@@ -105,12 +110,13 @@ fn auth_error_payload(target_id: &str, message: &str) -> Result<Value, String> {
 }
 
 pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
-    let target_id = id.trim();
-    if target_id.is_empty() {
+    let target_profile_id = id.trim();
+    if target_profile_id.is_empty() {
         return Err("account_id 无效".to_string());
     }
 
-    let account = find_store_account(target_id)?;
+    let account = find_store_account(target_profile_id)?;
+    let account_id = account_id_from_account(&account)?;
     let access_token = account
         .get("tokens")
         .and_then(|tokens| tokens.get("access_token"))
@@ -120,7 +126,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
         .to_string();
 
     if !access_token.is_empty() {
-        match get_usage(&access_token, target_id, MANUAL_QUOTA_TIMEOUT_MS) {
+        match get_usage(&access_token, &account_id, MANUAL_QUOTA_TIMEOUT_MS) {
             Ok(usage_info) => {
                 let store = update_account_usage_preserve_tokens(&account, Ok(usage_info))?;
                 return Ok(json!({
@@ -144,7 +150,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
         }
     }
 
-    refresh_account_with_token_refresh(target_id.to_string())
+    refresh_account_with_token_refresh(target_profile_id.to_string())
 }
 
 fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
@@ -171,7 +177,7 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
         usage_result,
     )?;
     let store = add_account_to_store(next_account, false)?;
-    sync_auth_file_if_active(&context.account_id)?;
+    sync_auth_file_if_active(&context.profile_id)?;
 
     if let Some(error) = usage_error {
         let message = usage_error_message(&error, "Usage refresh failed");
@@ -183,7 +189,7 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
         }));
     }
 
-    let new_account = find_store_account(&context.account_id)?;
+    let new_account = find_store_account(&context.profile_id)?;
     let new_usage = new_account
         .get("custom")
         .and_then(|custom| custom.get("usage_info"))
@@ -211,7 +217,7 @@ pub(super) fn refresh_account_token_impl(id: String) -> Result<Value, String> {
     let next_account =
         account_from_exchange_preserve_usage(&context.exchange, context.account.get("custom"))?;
     let store = add_account_to_store(next_account, false)?;
-    sync_auth_file_if_active(&context.account_id)?;
+    sync_auth_file_if_active(&context.profile_id)?;
     Ok(json!({
         "ok": true,
         "message": "Refresh Token 已刷新",

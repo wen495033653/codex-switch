@@ -45,9 +45,10 @@ pub(super) fn import_refresh_token_impl(app: AppHandle, token: String) -> Result
     let account_id = string_field(&exchange, "account_id");
     let access_token = string_field(&exchange, "access_token");
     let account = account_from_exchange_syncing(&exchange, None)?;
+    let profile_id = profile_id_from_account(&account)?;
     let store = add_account_to_store(account, false)?;
-    sync_auth_file_if_active(&account_id)?;
-    sync_account_usage_in_background(app, account_id, access_token);
+    sync_auth_file_if_active(&profile_id)?;
+    sync_account_usage_in_background(app, profile_id, account_id, access_token);
     Ok(store_payload_from_store(
         store,
         Some("已通过 refresh_token 导入账号，正在同步配额"),
@@ -55,11 +56,11 @@ pub(super) fn import_refresh_token_impl(app: AppHandle, token: String) -> Result
 }
 
 pub(super) fn delete_account_impl(id: String) -> Result<Value, String> {
-    let account_id = id.trim();
-    if account_id.is_empty() {
+    let profile_id = id.trim();
+    if profile_id.is_empty() {
         return Err("account_id 无效".to_string());
     }
-    let store = remove_store_account(account_id)?;
+    let store = remove_store_account(profile_id)?;
     Ok(store_payload_from_store(store, Some("已删除")))
 }
 
@@ -68,19 +69,19 @@ pub(super) fn switch_account_impl(
     id: String,
     runtime: State<'_, Arc<IdeRuntime>>,
 ) -> Result<Value, String> {
-    let account_id = id.trim();
-    if account_id.is_empty() {
+    let profile_id = id.trim();
+    if profile_id.is_empty() {
         return Err("account_id 无效".to_string());
     }
     let settings = read_settings_value()?;
-    let account = find_store_account(account_id)?;
+    let account = find_store_account(profile_id)?;
     write_account_auth(&account)?;
     set_subscription_mode()?;
     update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
         runtime.inner().as_ref(),
-        account_id.to_string(),
+        profile_id.to_string(),
         false,
         session_sync_enabled.then(|| "openai".to_string()),
     );
@@ -89,7 +90,7 @@ pub(super) fn switch_account_impl(
     } else {
         "已切换到订阅模式".to_string()
     };
-    let store = mark_store_account_used(account_id)?;
+    let store = mark_store_account_used(profile_id)?;
     refresh_active_account_usage_in_background(app);
     Ok(attach_ide_reopen(
         store_payload_from_store(store, Some(&message)),

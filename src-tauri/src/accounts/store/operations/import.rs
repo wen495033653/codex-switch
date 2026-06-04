@@ -1,5 +1,5 @@
 use super::super::{
-    model::{account_id_from_account, normalize_store_data, sort_accounts_by_last_used},
+    model::{normalize_store_data, profile_id_from_account, sort_accounts_by_last_used},
     persistence::{read_store_value, write_store_value},
 };
 use crate::accounts::STORE_VERSION;
@@ -30,8 +30,8 @@ pub(crate) fn import_store_accounts(
         .cloned()
         .unwrap_or_default()
     {
-        if let Ok(account_id) = account_id_from_account(&account) {
-            merged.insert(account_id, account);
+        if let Ok(profile_id) = profile_id_from_account(&account) {
+            merged.insert(profile_id, account);
         }
     }
 
@@ -41,8 +41,8 @@ pub(crate) fn import_store_accounts(
         .cloned()
         .unwrap_or_default()
     {
-        if let Ok(account_id) = account_id_from_account(&account) {
-            merged.insert(account_id, account);
+        if let Ok(profile_id) = profile_id_from_account(&account) {
+            merged.insert(profile_id, account);
         }
     }
 

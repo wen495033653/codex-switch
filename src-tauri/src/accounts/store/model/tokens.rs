@@ -45,6 +45,10 @@ impl AccountTokens {
         &self.account_id
     }
 
+    pub(super) fn id_token(&self) -> &str {
+        &self.id_token
+    }
+
     pub(super) fn to_value(&self) -> Value {
         json!({
             ID_TOKEN_FIELD: self.id_token,
