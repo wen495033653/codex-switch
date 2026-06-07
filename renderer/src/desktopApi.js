@@ -36,7 +36,7 @@ const COMMAND_BINDINGS = {
   importRefreshToken: ['import_refresh_token', token => ({ token })],
   deleteAccount: ['delete_account', id => ({ id })],
   switchAccount: ['switch_account', id => ({ id })],
-  switchApiMode: ['switch_api_mode'],
+  switchApiMode: ['switch_api_mode', profileId => ({ profileId: profileId || null })],
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
   restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
@@ -66,6 +66,41 @@ const COMMAND_BINDINGS = {
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
   getDevLogEntries: ['get_dev_log_entries'],
+  scanSessions: ['session_manager_scan', root => ({ root })],
+  previewSession: ['session_manager_preview', payload => ({
+    root: payload.root,
+    relativePath: payload.relativePath
+  })],
+  previewDeletedSession: ['session_manager_preview_deleted', deleteId => ({ deleteId })],
+  selectSessionRoot: ['session_manager_select_root'],
+  selectSessionWorkdir: ['session_manager_select_workdir'],
+  exportSessions: ['session_manager_export', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths
+  })],
+  importSessions: ['session_manager_import', root => ({ root })],
+  deleteSessions: ['session_manager_delete', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths
+  })],
+  listDeletedSessions: ['session_manager_list_deleted'],
+  restoreDeletedSessions: ['session_manager_restore_deleted', payload => ({
+    root: payload.root,
+    deleteIds: payload.deleteIds,
+    conflictStrategy: payload.conflictStrategy
+  })],
+  purgeDeletedSessions: ['session_manager_purge_deleted', deleteIds => ({ deleteIds })],
+  setSessionStatus: ['session_manager_set_status', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths,
+    status: payload.status,
+    conflictStrategy: payload.conflictStrategy
+  })],
+  updateSessionCwd: ['session_manager_update_cwd', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths,
+    cwd: payload.cwd
+  })],
   startOauth: ['oauth_start', payload => ({ payload })],
   cancelOauth: ['oauth_cancel'],
   submitOauthCallback: ['oauth_submit_callback', callbackUrl => ({ callbackUrl })]

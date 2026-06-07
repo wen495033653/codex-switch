@@ -19,6 +19,7 @@ mod oauth_flow;
 mod paths;
 mod proxy_config;
 mod quota;
+mod session_manager;
 mod session_sync_diagnostics;
 mod settings;
 mod time_util;
@@ -133,6 +134,19 @@ fn main() {
             commands::open_external_url,
             commands::open_codex_config_toml,
             commands::list_brand_voice_files,
+            session_manager::session_manager_scan,
+            session_manager::session_manager_preview,
+            session_manager::session_manager_preview_deleted,
+            session_manager::session_manager_select_root,
+            session_manager::session_manager_select_workdir,
+            session_manager::session_manager_export,
+            session_manager::session_manager_import,
+            session_manager::session_manager_delete,
+            session_manager::session_manager_list_deleted,
+            session_manager::session_manager_restore_deleted,
+            session_manager::session_manager_purge_deleted,
+            session_manager::session_manager_set_status,
+            session_manager::session_manager_update_cwd,
             oauth_flow::oauth_start,
             oauth_flow::oauth_cancel,
             oauth_flow::oauth_submit_callback

@@ -4,6 +4,8 @@ import {
   DEFAULT_CODEX_STATE,
   DEFAULT_SETTINGS,
   GPT_POOL_URL,
+  getActiveApiProfile,
+  normalizeApiProfiles,
   normalizeBackgroundRefreshInterval,
   OAUTH_TIMEOUT_HINT
 } from './utils/appState';
@@ -132,16 +134,22 @@ function MainApp() {
     const rawSettings = res.settings && typeof res.settings === 'object'
       ? res.settings
       : {};
+    const nextApiProfiles = normalizeApiProfiles(rawSettings.api_profiles, rawSettings.api_mode);
+    const nextActiveApiProfile = getActiveApiProfile({
+      ...rawSettings,
+      api_profiles: nextApiProfiles
+    });
     const nextSettings = {
       ...DEFAULT_SETTINGS,
       ...rawSettings,
-      api_mode: {
-        ...DEFAULT_SETTINGS.api_mode,
-        ...((rawSettings.api_mode && typeof rawSettings.api_mode === 'object') ? rawSettings.api_mode : {})
-      }
+      active_api_profile_id: nextActiveApiProfile.id,
+      api_profiles: nextApiProfiles,
+      api_mode: nextActiveApiProfile
     };
     setSettings(nextSettings);
     setSettingsDraft(nextSettings);
+    setApiProfiles(nextSettings.api_profiles || DEFAULT_SETTINGS.api_profiles);
+    setActiveApiProfileId(nextSettings.active_api_profile_id || DEFAULT_SETTINGS.active_api_profile_id);
     setApiDraft(nextSettings.api_mode || DEFAULT_SETTINGS.api_mode);
     setSettingsLoaded(true);
     return nextSettings;
@@ -155,15 +163,27 @@ function MainApp() {
   };
 
   const {
+    activeApiProfileId,
+    addApiProfile,
     apiDraft,
+    apiProfileDeleteModal,
+    apiProfileModal,
+    apiProfiles,
     clearApiAutoSaveTimer,
+    closeApiProfileModal,
+    closeDeleteApiProfileModal,
+    confirmDeleteApiProfile,
+    editApiProfile,
+    openDeleteApiProfileModal,
+    saveApiProfileModal,
+    savingApiProfile,
+    setActiveApiProfileId,
     setApiDraft,
-    updateApiPageDraft
+    setApiProfiles,
+    updateApiProfileModalDraft
   } = useApiModeDraft({
     applySettings,
-    settings,
-    toastError,
-    viewMode
+    toastError
   });
 
   const {
@@ -184,7 +204,6 @@ function MainApp() {
   });
 
   const {
-    apiConfigComplete,
     apiModeActive,
     currentAccountId,
     currentModeDetail,
@@ -232,7 +251,9 @@ function MainApp() {
     switching,
     switchToApiModeFromPage
   } = useModeSwitching({
+    activeApiProfileId,
     apiDraft,
+    apiProfiles,
     applySettings,
     clearApiAutoSaveTimer,
     handleRes,
@@ -416,6 +437,8 @@ function MainApp() {
     toastError
   });
 
+  const apiProfileBusy = savingApiMode || savingApiProfile;
+
   return (
     <div className={`app ${IS_DEV_BUILD ? 'dev-build' : ''}`}>
       <AppNavbar
@@ -428,6 +451,7 @@ function MainApp() {
         onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
+        onSessionsClick={() => setViewMode('sessions')}
         onSettingsClick={openSettingsPage}
         subscriptionModeActive={subscriptionModeActive}
         viewMode={viewMode}
@@ -467,18 +491,23 @@ function MainApp() {
             handleCheckUpdate
           }}
           apiModePageProps={{
-            apiConfigComplete,
-            apiDraft,
+            activeApiProfileId,
             apiPromoBarOpen: settingsDraft.api_promo_bar_open === true,
-            apiModeActive,
+            apiProfiles,
+            onAddApiProfile: addApiProfile,
             onConfigureGptPoolApi: openGptPoolAutoConfigModal,
+            onDeleteApiProfile: openDeleteApiProfileModal,
+            onEditApiProfile: editApiProfile,
             onOpenCodexConfigToml: openCodexConfigToml,
             onOpenGptPool: openGptPoolLanding,
             onSetApiPromoBarOpen: setApiPromoBarOpen,
             onSwitchToApiMode: switchToApiModeFromPage,
-            onUpdateApiDraft: updateApiPageDraft,
-            savingApiMode,
+            savingApiMode: apiProfileBusy,
             switching
+          }}
+          sessionManagerPageProps={{
+            toast,
+            toastError
           }}
           accountsPageProps={{
             accountGridRef,
@@ -512,6 +541,16 @@ function MainApp() {
 
         <AppDialogs
           message={message}
+          apiProfile={{
+            modal: apiProfileModal,
+            deleteModal: apiProfileDeleteModal,
+            saving: apiProfileBusy || switching,
+            onClose: closeApiProfileModal,
+            onCancelDelete: closeDeleteApiProfileModal,
+            onConfirmDelete: confirmDeleteApiProfile,
+            onSave: saveApiProfileModal,
+            onUpdate: updateApiProfileModalDraft
+          }}
           addAccount={{
             visible: addModal,
             oauth,

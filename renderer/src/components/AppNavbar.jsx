@@ -10,6 +10,7 @@ export default function AppNavbar({
   onDevDiagnosticsToggle,
   onAccountsClick,
   onApiClick,
+  onSessionsClick,
   onSettingsClick,
   subscriptionModeActive,
   viewMode
@@ -34,6 +35,13 @@ export default function AppNavbar({
           onClick={onApiClick}
         >
           API
+        </button>
+        <button
+          type="button"
+          className={`top-nav-item ${viewMode === 'sessions' ? 'active' : ''}`}
+          onClick={onSessionsClick}
+        >
+          会话
         </button>
         <button
           type="button"

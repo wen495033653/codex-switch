@@ -162,20 +162,23 @@
     flex: 1 1 140px;
   }
 
-  .api-mode-field {
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 16px;
-  }
-
   .api-promo-banner {
     grid-template-columns: 1fr;
     gap: 8px;
     padding-right: 54px;
   }
 
-  .api-mode-current {
-    flex-direction: column;
+  .api-promo-link {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .api-profile-add-button {
+    width: 100%;
+  }
+
+  .api-profile-grid {
+    grid-template-columns: 1fr;
   }
 }
 

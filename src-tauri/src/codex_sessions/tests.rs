@@ -411,6 +411,20 @@ fn sync_rollout_provider_preserves_modified_time() {
 }
 
 #[test]
+fn sync_writer_does_not_recreate_missing_rollout_file() {
+    let sessions_dir = unique_sessions_dir("missing-before-write");
+    let path = sessions_dir.join("rollout-missing-before-write.jsonl");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let wrote = write_existing_file(&path, "{\"type\":\"session_meta\"}\n", "测试写入").unwrap();
+
+    assert!(!wrote);
+    assert!(!path.exists());
+
+    fs::remove_dir_all(&sessions_dir).unwrap();
+}
+
+#[test]
 fn sync_rollout_provider_only_updates_latest_activity_files() {
     let sessions_dir = unique_sessions_dir("latest-limit");
     let mut paths = Vec::new();

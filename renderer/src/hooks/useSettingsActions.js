@@ -42,9 +42,14 @@ export function useSettingsActions({
 
   const updateSettingsDraftAndSave = async (patch) => {
     const pluginEnabledBeforeSave = settingsDraft.codex_plugins_enabled === true;
-    const shouldCheckPluginRestartNotice = Object.prototype.hasOwnProperty.call(patch, 'codex_plugins_enabled')
+    const deleteButtonEnabledBeforeSave = settingsDraft.codex_delete_button_enabled === true;
+    const enablesPlugin = Object.prototype.hasOwnProperty.call(patch, 'codex_plugins_enabled')
       && pluginEnabledBeforeSave === false
       && patch.codex_plugins_enabled === true;
+    const enablesDeleteButton = Object.prototype.hasOwnProperty.call(patch, 'codex_delete_button_enabled')
+      && deleteButtonEnabledBeforeSave === false
+      && patch.codex_delete_button_enabled === true;
+    const shouldCheckPluginRestartNotice = enablesPlugin || enablesDeleteButton;
     setSettingsDraft(prev => ({ ...prev, ...patch }));
     try {
       const res = await window.api.updateSettings(patch);
