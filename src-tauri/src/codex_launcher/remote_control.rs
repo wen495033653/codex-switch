@@ -2448,6 +2448,12 @@ mod tests {
             .unwrap();
     }
 
+    fn path_text_starts_with_home(path_text: &str, home: &Path) -> bool {
+        let normalized_path = path_text.replace('\\', "/");
+        let normalized_home = home.to_string_lossy().replace('\\', "/");
+        normalized_path.starts_with(&normalized_home)
+    }
+
     #[test]
     fn remote_control_runtime_rebuild_is_not_pending_when_enabled_runtime_is_current() {
         let pending = remote_control_runtime_needs_rebuild(true, true, false, true, true, false);
@@ -2914,13 +2920,9 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
         fs::remove_dir_all(&remote).unwrap();
 
-        assert!(source_row
-            .0
-            .starts_with(&remote.to_string_lossy().to_string()));
+        assert!(path_text_starts_with_home(&source_row.0, &remote));
         assert_eq!(source_row.1, "api");
-        assert!(remote_row
-            .0
-            .starts_with(&remote.to_string_lossy().to_string()));
+        assert!(path_text_starts_with_home(&remote_row.0, &remote));
         assert_eq!(remote_row.1, "api");
         assert_eq!(remote_row.2, "remote");
         assert_eq!(enrollments, 1);
@@ -2988,7 +2990,7 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
         fs::remove_dir_all(&remote).unwrap();
 
-        assert!(row.0.starts_with(&remote.to_string_lossy().to_string()));
+        assert!(path_text_starts_with_home(&row.0, &remote));
         assert_eq!(row.1, "api");
         assert_eq!(row.2, "source newer");
         assert_eq!(row.3, 2000);
@@ -3056,7 +3058,7 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
         fs::remove_dir_all(&remote).unwrap();
 
-        assert!(row.0.starts_with(&remote.to_string_lossy().to_string()));
+        assert!(path_text_starts_with_home(&row.0, &remote));
         assert_eq!(row.1, "api");
         assert_eq!(row.2, "target newer");
         assert_eq!(row.3, 2000);
@@ -3188,9 +3190,7 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
         fs::remove_dir_all(&remote).unwrap();
 
-        assert!(source_row
-            .0
-            .starts_with(&remote.to_string_lossy().to_string()));
+        assert!(path_text_starts_with_home(&source_row.0, &remote));
         assert_eq!(source_row.1, "api");
     }
 }
