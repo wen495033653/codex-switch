@@ -217,17 +217,16 @@ export default function ProxySettingsTab({
         : codexRemoteControlPendingEnabled === false
             ? '关闭中'
             : '';
+    const remoteControlWarningStatus = remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
+        ? '需要 MFA'
+        : (remoteControlStatusMessage || '需要重新登录').replace(/[。.]$/, '');
     const remoteControlDisplayStatus = remoteControlPendingStatus || (!codexRemoteControlEnabled
         ? '未启用'
         : remoteControlStatus.loading && !remoteControlStatusMessage
             ? '检测中'
             : remoteControlStatusState === 'warning'
-                ? (
-                    remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
-                        ? '需要 MFA'
-                        : '等待登录'
-                )
-            : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
+                ? remoteControlWarningStatus
+                : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
     const remoteControlStatusTitle = remoteControlStatusState === 'warning'
         ? remoteControlDisplayStatus
         : '';

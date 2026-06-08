@@ -2316,7 +2316,7 @@ fn remote_control_backend_error_message(
     let text = raw_text.to_ascii_lowercase();
     match marker_kind {
         Some("mfa_required") => Some(("mfa_required", "需要先为当前账号完成 MFA 认证。")),
-        Some("login_expired") => Some(("login_expired", "等待登录。")),
+        Some("login_expired") => Some(("login_expired", "控制账号登录已过期，请重新登录。")),
         Some("enrollment_failed") => Some(("enrollment_failed", "app远程控制 enrollment 失败。")),
         _ if text.contains("multi-factor authentication required") => {
             Some(("mfa_required", "需要先为当前账号完成 MFA 认证。"))
@@ -2325,7 +2325,7 @@ fn remote_control_backend_error_message(
             || text.contains("refresh token has already been used")
             || text.contains("please log out and sign in again") =>
         {
-            Some(("login_expired", "等待登录。"))
+            Some(("login_expired", "控制账号登录已过期，请重新登录。"))
         }
         _ if text.contains("remote control server enrollment failed")
             || text.contains("enrollment failed")
@@ -2712,7 +2712,7 @@ mod tests {
     fn remote_control_connection_status_reports_login_expired_as_warning() {
         let backend_error = json!({
             "kind": "login_expired",
-            "message": "等待登录。"
+            "message": "控制账号登录已过期，请重新登录。"
         });
 
         let status = remote_control_connection_status(true, Some(&backend_error), None, None);
@@ -2724,7 +2724,7 @@ mod tests {
         assert_eq!(status.get("state").and_then(Value::as_str), Some("warning"));
         assert_eq!(
             status.get("message").and_then(Value::as_str),
-            Some("等待登录。")
+            Some("控制账号登录已过期，请重新登录。")
         );
     }
 
