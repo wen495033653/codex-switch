@@ -66,6 +66,7 @@
 
 .session-filterbar {
   justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .session-search {
@@ -88,6 +89,21 @@
   margin-left: 4px;
   opacity: 0.56;
   font-size: 11px;
+}
+
+.session-batch-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.session-batch-actions .btn {
+  height: 34px;
+  padding: 0 12px;
 }
 
 .session-notice {
@@ -135,15 +151,15 @@
 .session-list-header,
 .session-row {
   display: grid;
-  grid-template-columns: 34px minmax(190px, 1fr) 76px 118px 70px;
+  grid-template-columns: 30px minmax(120px, 1fr) 68px minmax(92px, 108px) 56px;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .session-list-header {
   height: 42px;
-  padding: 0 12px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-app);
   color: var(--text-tertiary);
   font-size: 12px;
@@ -159,7 +175,7 @@
 .session-row {
   width: 100%;
   min-height: 78px;
-  padding: 10px 12px;
+  padding: 10px;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
   background: transparent;
@@ -172,6 +188,11 @@
 .session-row:hover,
 .session-row.active {
   background: var(--bg-row-hover);
+}
+
+.session-row:focus-visible {
+  outline: 2px solid rgba(51, 156, 255, 0.55);
+  outline-offset: -2px;
 }
 
 .session-checkbox {
@@ -671,6 +692,11 @@ html[data-theme="light"] .session-delete-summary span {
   }
 
   .session-actions {
+    justify-content: flex-start;
+  }
+
+  .session-batch-actions {
+    margin-left: 0;
     justify-content: flex-start;
   }
 

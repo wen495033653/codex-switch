@@ -1,6 +1,6 @@
 import AccountsPage from './AccountsPage';
 import ApiModePage from './ApiModePage';
-import SessionManagerPage from './SessionManagerPage';
+import SessionManagerPage, { useSessionManagerState } from './SessionManagerPage';
 import SettingsPage from './SettingsPage';
 
 export default function AppMainView({
@@ -10,6 +10,8 @@ export default function AppMainView({
   settingsPageProps,
   viewMode
 }) {
+  const sessionManagerState = useSessionManagerState();
+
   if (viewMode === 'settings') {
     return <SettingsPage {...settingsPageProps} />;
   }
@@ -19,7 +21,7 @@ export default function AppMainView({
   }
 
   if (viewMode === 'sessions') {
-    return <SessionManagerPage {...sessionManagerPageProps} />;
+    return <SessionManagerPage {...sessionManagerPageProps} sessionState={sessionManagerState} />;
   }
 
   return <AccountsPage {...accountsPageProps} />;

@@ -30,6 +30,10 @@ function statusLabel(status) {
   return '进行中';
 }
 
+function statusActionLabel(status) {
+  return status === 'archived' ? '归档' : '移回进行中';
+}
+
 function lower(value) {
   return String(value || '').toLowerCase();
 }
@@ -51,7 +55,7 @@ function deletedPreviewConversation(item) {
   };
 }
 
-export default function SessionManagerPage({ toast, toastError }) {
+export function useSessionManagerState() {
   const [rootPath, setRootPath] = useState('');
   const [conversations, setConversations] = useState([]);
   const [deletedSessions, setDeletedSessions] = useState([]);
@@ -64,6 +68,7 @@ export default function SessionManagerPage({ toast, toastError }) {
   const [activePath, setActivePath] = useState('');
   const [preview, setPreview] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [purgeConfirm, setPurgeConfirm] = useState(null);
   const [conflictConfirm, setConflictConfirm] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -72,6 +77,97 @@ export default function SessionManagerPage({ toast, toastError }) {
   const [previewWidth, setPreviewWidth] = useState(0);
   const previewRef = useRef(null);
   const previewRequestRef = useRef(0);
+  const hasAutoLoadedRef = useRef(false);
+
+  return {
+    rootPath,
+    setRootPath,
+    conversations,
+    setConversations,
+    deletedSessions,
+    setDeletedSessions,
+    search,
+    setSearch,
+    statusFilter,
+    setStatusFilter,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    selected,
+    setSelected,
+    selectedDeleted,
+    setSelectedDeleted,
+    activePath,
+    setActivePath,
+    preview,
+    setPreview,
+    contextMenu,
+    setContextMenu,
+    deleteConfirm,
+    setDeleteConfirm,
+    purgeConfirm,
+    setPurgeConfirm,
+    conflictConfirm,
+    setConflictConfirm,
+    loading,
+    setLoading,
+    previewLoading,
+    setPreviewLoading,
+    actionLoading,
+    setActionLoading,
+    previewWidth,
+    setPreviewWidth,
+    previewRef,
+    previewRequestRef,
+    hasAutoLoadedRef
+  };
+}
+
+export default function SessionManagerPage({ toast, toastError, sessionState }) {
+  const {
+    rootPath,
+    setRootPath,
+    conversations,
+    setConversations,
+    deletedSessions,
+    setDeletedSessions,
+    search,
+    setSearch,
+    statusFilter,
+    setStatusFilter,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    selected,
+    setSelected,
+    selectedDeleted,
+    setSelectedDeleted,
+    activePath,
+    setActivePath,
+    preview,
+    setPreview,
+    contextMenu,
+    setContextMenu,
+    deleteConfirm,
+    setDeleteConfirm,
+    purgeConfirm,
+    setPurgeConfirm,
+    conflictConfirm,
+    setConflictConfirm,
+    loading,
+    setLoading,
+    previewLoading,
+    setPreviewLoading,
+    actionLoading,
+    setActionLoading,
+    previewWidth,
+    setPreviewWidth,
+    previewRef,
+    previewRequestRef,
+    hasAutoLoadedRef
+  } = sessionState;
 
   const isDeletedView = statusFilter === 'deleted';
 
@@ -113,6 +209,15 @@ export default function SessionManagerPage({ toast, toastError }) {
     const selectedSet = new Set(selectedPaths);
     return conversations.filter(item => selectedSet.has(item.relative_path));
   }, [conversations, selectedPaths]);
+
+  const selectedActivePaths = useMemo(
+    () => selectedItems.filter(item => item.status === 'active').map(item => item.relative_path),
+    [selectedItems]
+  );
+  const selectedArchivedPaths = useMemo(
+    () => selectedItems.filter(item => item.status === 'archived').map(item => item.relative_path),
+    [selectedItems]
+  );
 
   const selectedDeletedItems = useMemo(() => {
     const selectedSet = new Set(selectedDeletedIds);
@@ -227,6 +332,8 @@ export default function SessionManagerPage({ toast, toastError }) {
   };
 
   useEffect(() => {
+    if (hasAutoLoadedRef.current) return;
+    hasAutoLoadedRef.current = true;
     refreshSessions('');
   }, []);
 
@@ -259,6 +366,8 @@ export default function SessionManagerPage({ toast, toastError }) {
       window.removeEventListener('keydown', close);
     };
   }, [contextMenu]);
+
+  useEffect(() => () => setContextMenu(null), []);
 
   const handleSelectRoot = async () => {
     try {
@@ -347,6 +456,65 @@ export default function SessionManagerPage({ toast, toastError }) {
 
   const handleImport = () => {
     runAction(() => window.api.importSessions(rootPath), '导入会话完成', '导入会话失败');
+  };
+
+  const handleSetStatus = (paths, targetStatus, conflictStrategy = 'ask') => {
+    const nextPaths = Array.from(new Set(paths));
+    if (nextPaths.length === 0) {
+      toast(targetStatus === 'archived' ? '请先选择要归档的会话' : '请先选择要移回进行中的会话');
+      return;
+    }
+    runAction(
+      () => window.api.setSessionStatus({
+        root: rootPath,
+        relativePaths: nextPaths,
+        status: targetStatus,
+        conflictStrategy
+      }),
+      statusActionLabel(targetStatus) + '完成',
+      statusActionLabel(targetStatus) + '失败'
+    ).then(res => {
+      if (res && res.report && res.report.conflict_action_required) {
+        openConflictDialog({
+          title: statusActionLabel(targetStatus) + '存在冲突',
+          message: '目标位置已有同名会话文件，请选择这批冲突的处理方式。',
+          conflicts: res.report.conflicts,
+          onResolve: strategy => handleSetStatus(nextPaths, targetStatus, strategy)
+        });
+      }
+    });
+  };
+
+  const handleDeleteSessions = (paths = selectedPaths) => {
+    const nextPaths = Array.from(new Set(paths));
+    if (nextPaths.length === 0) {
+      toast('请先选择要删除的会话');
+      return;
+    }
+    const pathSet = new Set(nextPaths);
+    const items = conversations.filter(item => pathSet.has(item.relative_path));
+    setDeleteConfirm({
+      paths: nextPaths,
+      items,
+      totalSize: items.reduce((sum, item) => sum + (Number(item.size_bytes) || 0), 0)
+    });
+  };
+
+  const cancelDeleteSessions = () => {
+    if (!actionLoading) setDeleteConfirm(null);
+  };
+
+  const confirmDeleteSessions = () => {
+    if (!deleteConfirm || actionLoading) return;
+    const paths = deleteConfirm.paths;
+    runAction(
+      () => window.api.deleteSessions({ root: rootPath, relativePaths: paths }),
+      '删除会话完成',
+      '删除会话失败'
+    ).then(res => {
+      if (res) setSelected(prev => new Set(Array.from(prev).filter(path => !paths.includes(path))));
+      setDeleteConfirm(null);
+    });
   };
 
   const openConflictDialog = ({ title, message, conflicts, onResolve }) => {
@@ -460,6 +628,12 @@ export default function SessionManagerPage({ toast, toastError }) {
     });
   };
 
+  const handleRowKeyDown = (event, item) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    loadPreview(item);
+  };
+
   const activeConversation = preview && preview.conversation ? preview.conversation : null;
   const messages = preview && Array.isArray(preview.messages) ? preview.messages : [];
   const bubbleMaxWidth = previewWidth > 0
@@ -480,27 +654,10 @@ export default function SessionManagerPage({ toast, toastError }) {
           <button type="button" className="btn btn-secondary" onClick={() => refreshSessions(rootPath)} disabled={loading || actionLoading}>
             {loading ? '刷新中...' : '刷新'}
           </button>
-          {isDeletedView ? (
-            <>
-              <button type="button" className="btn btn-secondary" onClick={() => handleRestoreDeleted()} disabled={selectedDeletedIds.length === 0 || actionLoading}>
-                恢复
-              </button>
-              <button type="button" className="btn btn-danger" onClick={() => handlePurgeDeleted()} disabled={selectedDeletedIds.length === 0 || actionLoading}>
-                彻底删除
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn btn-secondary" onClick={handleImport} disabled={!rootPath || actionLoading}>
-                导入
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => handleExport()} disabled={selectedPaths.length === 0 || actionLoading}>
-                导出
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => handleUpdateCwd()} disabled={selectedPaths.length === 0 || actionLoading}>
-                修改工作目录
-              </button>
-            </>
+          {!isDeletedView && (
+            <button type="button" className="btn btn-secondary" onClick={handleImport} disabled={!rootPath || actionLoading}>
+              导入
+            </button>
           )}
         </div>
       </div>
@@ -534,9 +691,45 @@ export default function SessionManagerPage({ toast, toastError }) {
             );
           })}
         </div>
-        <button type="button" className="btn btn-secondary" onClick={clearSelection} disabled={selectedCount === 0}>
-          清空选择
-        </button>
+        {selectedCount > 0 && (
+          <div className="session-batch-actions">
+            {isDeletedView ? (
+              <>
+                <button type="button" className="btn btn-secondary" onClick={() => handleRestoreDeleted()} disabled={actionLoading}>
+                  恢复
+                </button>
+                <button type="button" className="btn btn-danger" onClick={() => handlePurgeDeleted()} disabled={actionLoading}>
+                  彻底删除
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="btn btn-secondary" onClick={() => handleExport()} disabled={actionLoading}>
+                  导出
+                </button>
+                {selectedActivePaths.length > 0 && (
+                  <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedActivePaths, 'archived')} disabled={actionLoading}>
+                    归档
+                  </button>
+                )}
+                {selectedArchivedPaths.length > 0 && (
+                  <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedArchivedPaths, 'active')} disabled={actionLoading}>
+                    移回进行中
+                  </button>
+                )}
+                <button type="button" className="btn btn-secondary" onClick={() => handleUpdateCwd()} disabled={actionLoading}>
+                  修改工作目录
+                </button>
+                <button type="button" className="btn btn-danger" onClick={() => handleDeleteSessions()} disabled={actionLoading}>
+                  删除
+                </button>
+              </>
+            )}
+            <button type="button" className="btn btn-secondary" onClick={clearSelection} disabled={actionLoading}>
+              清空选择
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="session-workspace">
@@ -560,11 +753,13 @@ export default function SessionManagerPage({ toast, toastError }) {
               const activeKey = isDeletedView ? deletedActiveKey(item) : item.relative_path;
               const isSelected = isDeletedView ? selectedDeleted.has(item.delete_id) : selected.has(item.relative_path);
               return (
-                <button
+                <div
                   key={rowKey}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   className={`session-row ${activePath === activeKey ? 'active' : ''}`}
                   onClick={() => loadPreview(item)}
+                  onKeyDown={event => handleRowKeyDown(event, item)}
                   onContextMenu={event => openContextMenu(event, item)}
                 >
                   <span className="session-checkbox" onClick={event => event.stopPropagation()}>
@@ -582,7 +777,7 @@ export default function SessionManagerPage({ toast, toastError }) {
                   <span className={`session-status-pill ${item.status}`}>{statusLabel(item.status)}</span>
                   <span className="session-muted">{formatTime(isDeletedView ? item.deleted_at : item.updated_at)}</span>
                   <span className="session-muted">{formatSize(item.size_bytes)}</span>
-                </button>
+                </div>
               );
             })}
             {visibleItems.length === 0 && (
@@ -686,6 +881,20 @@ export default function SessionManagerPage({ toast, toastError }) {
             </>
           ) : (
             <>
+              {contextMenu.item.status === 'active' && (
+                <button type="button" onClick={() => {
+                  const item = contextMenu.item;
+                  setContextMenu(null);
+                  handleSetStatus([item.relative_path], 'archived');
+                }}>归档</button>
+              )}
+              {contextMenu.item.status === 'archived' && (
+                <button type="button" onClick={() => {
+                  const item = contextMenu.item;
+                  setContextMenu(null);
+                  handleSetStatus([item.relative_path], 'active');
+                }}>移回进行中</button>
+              )}
               <button type="button" onClick={() => {
                 const item = contextMenu.item;
                 setContextMenu(null);
@@ -696,6 +905,11 @@ export default function SessionManagerPage({ toast, toastError }) {
                 setContextMenu(null);
                 handleUpdateCwd([item.relative_path]);
               }}>修改工作目录</button>
+              <button type="button" className="danger" onClick={() => {
+                const item = contextMenu.item;
+                setContextMenu(null);
+                handleDeleteSessions([item.relative_path]);
+              }}>删除</button>
             </>
           )}
         </div>
@@ -732,6 +946,36 @@ export default function SessionManagerPage({ toast, toastError }) {
             </div>
           </div>
         </div>
+      )}
+
+      {deleteConfirm && (
+        <ConfirmDialog
+          title="确认删除会话"
+          width="460px"
+          confirmText="删除"
+          loadingText="删除中..."
+          confirmVariant="danger"
+          isLoading={actionLoading}
+          onCancel={cancelDeleteSessions}
+          onConfirm={confirmDeleteSessions}
+          content={(
+            <div className="session-delete-confirm">
+              <p>将 {deleteConfirm.paths.length} 个会话移入已删除，可在已删除列表中恢复。</p>
+              <div className="session-delete-summary">
+                <span>数量：{deleteConfirm.paths.length}</span>
+                <span>总大小：{formatSize(deleteConfirm.totalSize)}</span>
+              </div>
+              <div className="session-delete-list">
+                {deleteConfirm.items.map(item => (
+                  <div key={item.relative_path} className="session-delete-item">
+                    <strong title={item.title}>{item.title}</strong>
+                    <span>{statusLabel(item.status)} · {formatTime(item.updated_at)} · {formatSize(item.size_bytes)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        />
       )}
 
       {purgeConfirm && (
