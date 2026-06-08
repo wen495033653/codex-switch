@@ -15,6 +15,7 @@ export default function AboutSettingsTab({
     appVersion,
     checkingUpdate,
     handleCheckUpdate,
+    onOpenGptPool,
     openRepository
 }) {
     const [supportVisible, setSupportVisible] = useState(false);
@@ -40,6 +41,16 @@ export default function AboutSettingsTab({
                     </span>
                     <span className="settings-about-card-kicker">开源地址</span>
                     <span className="settings-about-card-title">查看代码 <span aria-hidden="true">↗</span></span>
+                </button>
+
+                <button type="button" className="settings-about-card" onClick={onOpenGptPool}>
+                    <span className="settings-about-card-icon relay" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" role="img">
+                            <path d="M4.75 6.5A2.75 2.75 0 0 1 7.5 3.75h9A2.75 2.75 0 0 1 19.25 6.5v11A2.75 2.75 0 0 1 16.5 20.25h-9A2.75 2.75 0 0 1 4.75 17.5v-11Zm2.75-1.25c-.69 0-1.25.56-1.25 1.25v11c0 .69.56 1.25 1.25 1.25h9c.69 0 1.25-.56 1.25-1.25v-11c0-.69-.56-1.25-1.25-1.25h-9Zm1.75 3.5a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75Zm0 3.25a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75Zm0 3.25a.75.75 0 0 1 .75-.75h2.4a.75.75 0 0 1 0 1.5H10a.75.75 0 0 1-.75-.75Z" />
+                        </svg>
+                    </span>
+                    <span className="settings-about-card-kicker">中转站</span>
+                    <span className="settings-about-card-title">访问站点</span>
                 </button>
 
                 <button type="button" className="settings-about-card" onClick={() => setSupportVisible(true)}>

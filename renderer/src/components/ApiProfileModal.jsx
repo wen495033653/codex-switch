@@ -36,7 +36,7 @@ export default function ApiProfileModal({
             required
             aria-invalid={Boolean(modal.error && !String(draft.name || '').trim())}
             value={draft.name || ''}
-            placeholder="例如 GPT Pool"
+            placeholder="例如 OpenAI"
             onChange={event => onUpdate({ name: event.target.value })}
           />
         </label>

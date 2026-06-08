@@ -20,7 +20,6 @@ use tauri_plugin_dialog::{
 
 mod account;
 mod general;
-mod gpt_pool;
 mod quota;
 
 fn apply_complete_api_mode_profile_if_active(settings: &Value) -> Result<(), String> {
@@ -44,5 +43,4 @@ fn apply_complete_api_mode_profile_if_active(settings: &Value) -> Result<(), Str
 
 pub(crate) use account::*;
 pub(crate) use general::*;
-pub(crate) use gpt_pool::*;
 pub(crate) use quota::*;

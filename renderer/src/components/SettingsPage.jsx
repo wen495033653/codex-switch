@@ -32,7 +32,8 @@ export default function SettingsPage({
     openDataDir,
     updateCodexProxySettings,
     openRepository,
-    handleCheckUpdate
+    handleCheckUpdate,
+    onOpenGptPool
 }) {
     return (
         <div className="settings-page">
@@ -104,6 +105,7 @@ export default function SettingsPage({
                             appVersion={appVersion}
                             checkingUpdate={checkingUpdate}
                             handleCheckUpdate={handleCheckUpdate}
+                            onOpenGptPool={onOpenGptPool}
                             openRepository={openRepository}
                         />
                     )}

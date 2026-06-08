@@ -162,17 +162,6 @@
     flex: 1 1 140px;
   }
 
-  .api-promo-banner {
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding-right: 54px;
-  }
-
-  .api-promo-link {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-
   .api-profile-add-button {
     width: 100%;
   }

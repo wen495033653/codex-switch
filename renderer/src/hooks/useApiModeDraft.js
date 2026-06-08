@@ -3,6 +3,7 @@ import {
   buildApiProfilePayload,
   buildApiSettingsPayload,
   DEFAULT_SETTINGS,
+  normalizeApiBaseUrlInput,
   normalizeApiProfiles,
   upsertApiProfile
 } from '../utils/appState';
@@ -124,10 +125,21 @@ export function useApiModeDraft({
       return null;
     }
 
+    let normalizedBaseUrl = '';
+    try {
+      normalizedBaseUrl = normalizeApiBaseUrlInput(baseUrl);
+    } catch (err) {
+      setApiProfileModal(prev => ({
+        ...prev,
+        error: getErrorMessage(err, 'API Base URL 格式无效')
+      }));
+      return null;
+    }
+
     return buildApiProfilePayload({
       ...draft,
       name,
-      base_url: baseUrl,
+      base_url: normalizedBaseUrl,
       api_key: apiKey
     }, apiProfileModal.profileId);
   };

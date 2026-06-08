@@ -218,12 +218,6 @@ pub(super) fn apply_settings_patch(
             Value::String(value.to_string()),
         );
     }
-    if has_key(patch, "api_promo_bar_open") {
-        object.insert(
-            "api_promo_bar_open".to_string(),
-            Value::Bool(bool_field(patch, "api_promo_bar_open")),
-        );
-    }
     if has_key(patch, "mask_account_name") {
         object.insert(
             "mask_account_name".to_string(),
@@ -575,24 +569,6 @@ mod tests {
         assert_eq!(
             object.get("codex_active_mode").and_then(Value::as_str),
             Some("api")
-        );
-    }
-
-    #[test]
-    fn apply_settings_patch_updates_api_promo_bar_state() {
-        let mut object = Map::new();
-
-        apply_settings_patch(
-            &mut object,
-            &json!({
-                "api_promo_bar_open": true
-            }),
-        )
-        .unwrap();
-
-        assert_eq!(
-            object.get("api_promo_bar_open").and_then(Value::as_bool),
-            Some(true)
         );
     }
 }

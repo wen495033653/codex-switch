@@ -1,9 +1,13 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri as detectTauriRuntime } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 function isTauriRuntime() {
   return typeof window !== 'undefined'
-    && (Boolean(window.__TAURI_INTERNALS__) || Boolean(window.__TAURI__));
+    && (
+      detectTauriRuntime()
+      || Boolean(window.__TAURI_INTERNALS__)
+      || Boolean(window.__TAURI__)
+    );
 }
 
 function subscribe(eventName, handler) {
@@ -61,7 +65,10 @@ const COMMAND_BINDINGS = {
   downloadUpdate: ['download_update'],
   installUpdate: ['install_update'],
   dismissUpdateVersion: ['dismiss_update_version', version => ({ version })],
-  configureGptPoolApi: ['configure_gpt_pool_api'],
+  testApiBaseUrl: ['test_api_base_url', payload => ({
+    baseUrl: payload && payload.baseUrl ? payload.baseUrl : '',
+    apiKey: payload && payload.apiKey ? payload.apiKey : ''
+  })],
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],

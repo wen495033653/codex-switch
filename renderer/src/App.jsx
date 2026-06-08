@@ -84,10 +84,6 @@ function MainApp() {
   const [settingsTab, setSettingsTab] = useState('general');
   const [appVersion, setAppVersion] = useState('');
   const [dataDir, setDataDir] = useState('');
-  const [gptPoolAutoConfigModal, setGptPoolAutoConfigModal] = useState({
-    visible: false,
-    loading: false
-  });
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
@@ -386,46 +382,6 @@ function MainApp() {
     }
   };
 
-  const openGptPoolAutoConfigModal = () => {
-    setGptPoolAutoConfigModal(() => ({
-      visible: true,
-      loading: false
-    }));
-  };
-
-  const cancelGptPoolAutoConfig = () => {
-    setGptPoolAutoConfigModal(prev => (
-      prev.loading
-        ? prev
-        : { visible: false, loading: false }
-    ));
-  };
-
-  const confirmGptPoolAutoConfig = async () => {
-    if (gptPoolAutoConfigModal.loading) return;
-    setGptPoolAutoConfigModal({
-      visible: true,
-      loading: true
-    });
-    try {
-      const res = await window.api.configureGptPoolApi();
-      applySettings(res);
-      toast((res && res.message) || 'GPT Pool API 已配置');
-      setGptPoolAutoConfigModal({
-        visible: false,
-        loading: false
-      });
-    } catch (err) {
-      toastError(err, '自动配置 GPT Pool API 失败', 9000);
-      setGptPoolAutoConfigModal({
-        visible: false,
-        loading: false
-      });
-    }
-  };
-
-  const setApiPromoBarOpen = (open) => updateSettingsDraftAndSave({ api_promo_bar_open: open });
-
   const {
     codexSessionSyncEnabled,
     savingCodexSessionSync,
@@ -488,19 +444,16 @@ function MainApp() {
             openDataDir,
             updateCodexProxySettings,
             openRepository,
-            handleCheckUpdate
+            handleCheckUpdate,
+            onOpenGptPool: openGptPoolLanding
           }}
           apiModePageProps={{
             activeApiProfileId,
-            apiPromoBarOpen: settingsDraft.api_promo_bar_open === true,
             apiProfiles,
             onAddApiProfile: addApiProfile,
-            onConfigureGptPoolApi: openGptPoolAutoConfigModal,
             onDeleteApiProfile: openDeleteApiProfileModal,
             onEditApiProfile: editApiProfile,
             onOpenCodexConfigToml: openCodexConfigToml,
-            onOpenGptPool: openGptPoolLanding,
-            onSetApiPromoBarOpen: setApiPromoBarOpen,
             onSwitchToApiMode: switchToApiModeFromPage,
             savingApiMode: apiProfileBusy,
             switching
@@ -584,12 +537,6 @@ function MainApp() {
             modal: deleteAccountModal,
             onCancel: closeDeleteAccountModal,
             onConfirm: confirmDeleteAccount
-          }}
-          gptPoolAutoConfig={{
-            visible: gptPoolAutoConfigModal.visible,
-            loading: gptPoolAutoConfigModal.loading,
-            onCancel: cancelGptPoolAutoConfig,
-            onConfirm: confirmGptPoolAutoConfig
           }}
           pluginRestartNotice={pluginRestartNotice}
           refreshAll={{

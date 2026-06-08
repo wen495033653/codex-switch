@@ -50,7 +50,6 @@ pub(crate) fn default_settings() -> Value {
         "codex_delete_button_enabled": false,
         "codex_session_sync_enabled": true,
         "codex_active_mode": "",
-        "api_promo_bar_open": false,
         "mask_account_name": false,
         "ui_theme": "light",
         "active_api_profile_id": DEFAULT_API_PROFILE_ID,

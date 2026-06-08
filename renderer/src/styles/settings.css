@@ -129,7 +129,7 @@
 
 .settings-about-card-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -179,6 +179,11 @@ button.settings-about-card:hover {
   background: rgba(59, 130, 246, 0.1);
 }
 
+.settings-about-card-icon.relay {
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.12);
+}
+
 .settings-about-card-icon.support {
   color: #fb5ca8;
   background: rgba(236, 72, 153, 0.12);
@@ -197,7 +202,7 @@ button.settings-about-card:hover {
 
 .settings-about-card-title {
   color: #f8fafc;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 800;
   line-height: 1.2;
 }

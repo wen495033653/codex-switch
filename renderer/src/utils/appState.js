@@ -45,7 +45,6 @@ export const DEFAULT_SETTINGS = {
   codex_delete_button_enabled: false,
   codex_session_sync_enabled: true,
   codex_active_mode: '',
-  api_promo_bar_open: false,
   mask_account_name: false,
   ui_theme: 'light',
   active_api_profile_id: DEFAULT_API_PROFILE_ID,
@@ -71,7 +70,6 @@ export const DEFAULT_CODEX_STATE = {
 
 export const REPOSITORY_URL = 'https://github.com/wen495033653/codex-switch';
 export const GPT_POOL_URL = 'https://gpt-pool.com';
-export const API_PROMO_CONFIG_URL = 'https://raw.githubusercontent.com/wen495033653/codex-switch/main/renderer/public/ad-config.json';
 
 export const getFallbackPageSize = (viewportHeight) => {
   if (viewportHeight < 660) return 4;
@@ -104,6 +102,33 @@ export const buildApiProfilePayload = (source, fallbackId = DEFAULT_API_PROFILE_
     base_url: raw.base_url ? String(raw.base_url) : '',
     api_key: raw.api_key ? String(raw.api_key) : ''
   };
+};
+
+export const normalizeApiBaseUrlInput = (baseUrl) => {
+  const raw = String(baseUrl || '').trim();
+  if (!raw) throw new Error('API Base URL 不能为空');
+
+  const value = raw.includes('://') ? raw : `https://${raw}`;
+  let url;
+  try {
+    url = new URL(value);
+  } catch (err) {
+    throw new Error(`API Base URL 格式无效：${err.message}`);
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('API Base URL 仅支持 http 或 https');
+  }
+  if (!url.hostname) {
+    throw new Error('API Base URL 缺少 host');
+  }
+  if (url.search || url.hash) {
+    throw new Error('API Base URL 不能包含 query 或 fragment');
+  }
+
+  const path = url.pathname.replace(/\/+$/, '');
+  url.pathname = path && path !== '/' ? path : '/v1';
+  return url.toString().replace(/\/+$/, '');
 };
 
 export const normalizeApiProfiles = (profiles, activeProfile = DEFAULT_API_PROFILE) => {

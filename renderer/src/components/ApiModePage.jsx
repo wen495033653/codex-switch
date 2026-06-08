@@ -1,23 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useApiProfilePagination } from '../hooks';
-import { API_PROMO_CONFIG_URL } from '../utils/appState';
+import { getErrorMessage } from '../utils/errors';
+import { normalizeApiBaseUrlInput } from '../utils/appState';
 
 export default function ApiModePage({
   activeApiProfileId,
   apiProfiles,
-  apiPromoBarOpen,
   onAddApiProfile,
-  onConfigureGptPoolApi,
   onDeleteApiProfile,
   onEditApiProfile,
   onOpenCodexConfigToml,
-  onOpenGptPool,
-  onSetApiPromoBarOpen,
   onSwitchToApiMode,
   savingApiMode,
   switching
 }) {
-  const [apiPromoEnabled, setApiPromoEnabled] = useState(true);
+  const [baseUrlTests, setBaseUrlTests] = useState({});
   const profiles = Array.isArray(apiProfiles) && apiProfiles.length > 0
     ? apiProfiles
     : [];
@@ -34,84 +31,68 @@ export default function ApiModePage({
     activeId: activeApiProfileId,
     profiles
   });
+  const handleTestBaseUrl = async (profile, profileId) => {
+    if (baseUrlTests[profileId]?.loading) return;
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadApiPromoConfig = async () => {
-      try {
-        const response = await fetch(`${API_PROMO_CONFIG_URL}?t=${Date.now()}`, {
-          cache: 'no-store'
-        });
-        if (!response.ok) return;
-
-        const config = await response.json();
-        if (!cancelled && config && config.apiPromo && config.apiPromo.enabled === false) {
-          setApiPromoEnabled(false);
+    let normalizedBaseUrl = '';
+    try {
+      normalizedBaseUrl = normalizeApiBaseUrlInput(profile.base_url);
+    } catch (err) {
+      setBaseUrlTests(prev => ({
+        ...prev,
+        [profileId]: {
+          baseUrl: profile.base_url || '',
+          apiKeyPresent: Boolean(profile.api_key),
+          loading: false,
+          ok: false,
+          message: getErrorMessage(err, 'API Base URL 格式无效')
         }
-      } catch (_err) {
-        // Keep the bundled promo unless the remote config explicitly disables it.
+      }));
+      return;
+    }
+
+    setBaseUrlTests(prev => ({
+      ...prev,
+      [profileId]: {
+        baseUrl: normalizedBaseUrl,
+        apiKeyPresent: Boolean(profile.api_key),
+        loading: true,
+        ok: false,
+        message: '正在测试 Base URL'
       }
-    };
-
-    loadApiPromoConfig();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    }));
+    try {
+      const res = await window.api.testApiBaseUrl({
+        baseUrl: normalizedBaseUrl,
+        apiKey: profile.api_key || ''
+      });
+      setBaseUrlTests(prev => ({
+        ...prev,
+        [profileId]: {
+          baseUrl: normalizedBaseUrl,
+          apiKeyPresent: Boolean(profile.api_key),
+          loading: false,
+          ok: Boolean(res && res.ok),
+          message: (res && res.message) || 'Base URL 测试完成'
+        }
+      }));
+    } catch (err) {
+      setBaseUrlTests(prev => ({
+        ...prev,
+        [profileId]: {
+          baseUrl: normalizedBaseUrl,
+          apiKeyPresent: Boolean(profile.api_key),
+          loading: false,
+          ok: false,
+          message: getErrorMessage(err, 'Base URL 测试失败')
+        }
+      }));
+    }
+  };
 
   return (
     <div className="api-mode-page">
       <div className="api-console-grid">
-        {apiPromoEnabled && (
-          <div className={`api-promo-shell ${apiPromoBarOpen ? '' : 'minimized'}`}>
-            {apiPromoBarOpen ? (
-              <>
-                <div className="api-promo-banner">
-                  <button
-                    type="button"
-                    className="api-promo-link"
-                    aria-label="打开 GPT Pool 网站"
-                    title="打开 GPT Pool 网站"
-                    onClick={onOpenGptPool}
-                  >
-                    <span className="api-promo-ad-label">广告</span>
-                    <span className="api-promo-brand">GPT Pool</span>
-                    <span className="api-promo-title">公益站点，注册免费获取10$额度</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="api-promo-action"
-                    onClick={onConfigureGptPoolApi}
-                  >
-                    自动配置
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  className="api-promo-close"
-                  aria-label="关闭广告"
-                  title="关闭广告"
-                  onClick={() => onSetApiPromoBarOpen(false)}
-                >
-                  ×
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="api-promo-mini-window"
-                aria-label="展开公益站点广告"
-                title="展开公益站点广告"
-                onClick={() => onSetApiPromoBarOpen(true)}
-              >
-                <span className="api-promo-mini-label">广告</span>
-              </button>
-            )}
-          </div>
-        )}
-
         <div className="api-config-stack">
           <div className="api-config-cluster">
             <div className="api-page-actions">
@@ -140,6 +121,25 @@ export default function ApiModePage({
                   const active = profileId === activeApiProfileId;
                   const profileName = profile.name || `API ${startIdx + index + 1}`;
                   const baseUrl = profile.base_url || '';
+                  const apiKey = profile.api_key || '';
+                  const rawTestForThisProfile = baseUrlTests[profileId] || null;
+                  const testForThisProfile = rawTestForThisProfile
+                    && rawTestForThisProfile.baseUrl === baseUrl
+                    && rawTestForThisProfile.apiKeyPresent === Boolean(apiKey)
+                    ? rawTestForThisProfile
+                    : null;
+                  const testLoading = Boolean(testForThisProfile && testForThisProfile.loading);
+                  const testMessage = testForThisProfile && testForThisProfile.message ? testForThisProfile.message : '';
+                  const testResultState = testForThisProfile
+                    ? (testLoading ? 'loading' : (testForThisProfile.ok ? 'success' : 'error'))
+                    : 'idle';
+                  const testTagText = testLoading
+                    ? '测试中'
+                    : (testForThisProfile ? (testForThisProfile.ok ? '可用' : '不可用') : '');
+                  const testButtonTitle = !baseUrl
+                    ? '未配置 Base URL'
+                    : (!apiKey ? '未配置 API Key' : '测试 Base URL');
+                  const testDisabled = !baseUrl || !apiKey || testLoading;
                   const deleteTitle = active
                     ? '当前正在使用，不能删除'
                     : profiles.length <= 1
@@ -156,12 +156,12 @@ export default function ApiModePage({
                         <div className="account-card-name-row">
                           <div className="account-card-name" title={profileName}>{profileName}</div>
                           {active && <span className="current-badge">当前</span>}
-                        </div>
-                        <div className="account-badges account-card-badges">
-                          <span className="plan-badge plan-api">API</span>
-                          <span className={`status-badge ${configured ? 'api-status-ready' : 'auth-error'}`}>
-                            {configured ? '已配置' : '未完整'}
-                          </span>
+                          {testForThisProfile && (
+                            <span className={`api-profile-test-tag ${testResultState}`} title={testMessage}>
+                              {testLoading && <span className="api-profile-test-spinner" aria-hidden="true" />}
+                              <span>{testTagText}</span>
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -176,17 +176,23 @@ export default function ApiModePage({
                               {baseUrl || '未配置 Base URL'}
                             </span>
                           </div>
-                          <div className="api-profile-card-info-row">
-                            <span className="api-profile-card-label">API Key</span>
-                            <span className={`api-profile-card-value ${profile.api_key ? '' : 'muted'}`}>
-                              {profile.api_key ? '已保存' : '未配置'}
-                            </span>
-                          </div>
                         </div>
                       </div>
 
                       <div className="account-card-footer">
                         <div className="action-btns">
+                          <button
+                            type="button"
+                            className={`api-profile-card-test-button ${testLoading ? 'is-loading' : ''}`}
+                            title={testButtonTitle}
+                            aria-label="测试 Base URL"
+                            aria-busy={testLoading}
+                            disabled={testDisabled}
+                            onClick={() => handleTestBaseUrl(profile, profileId)}
+                          >
+                            {testLoading && <span className="api-profile-test-spinner" aria-hidden="true" />}
+                            <span>{testLoading ? '测试中' : '测试 Base URL'}</span>
+                          </button>
                           <button
                             type="button"
                             className="icon-btn"
@@ -209,9 +215,7 @@ export default function ApiModePage({
                               disabled={!configured || savingApiMode || switching}
                               onClick={() => onSwitchToApiMode(profileId)}
                             >
-                              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m13 3-8 10h6l-1 8 9-11h-6l0-7Z" />
-                              </svg>
+                              ⚡
                             </button>
                           )}
                           <button
@@ -240,7 +244,7 @@ export default function ApiModePage({
                 <div className="footer-info">
                   显示第 {total === 0 ? 0 : startIdx + 1} 到 {Math.min(startIdx + pageSize, total)} 条，共 {total} 条
                 </div>
-                {totalPages > 0 && (
+                {totalPages > 1 && (
                   <div className="pagination">
                     <button className="page-btn" disabled={page === 1} onClick={() => setPage(Math.max(1, page - 1))}>
                       &lt;

@@ -180,7 +180,6 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
             .and_then(Value::as_bool)
             .unwrap_or(true),
         "codex_active_mode": normalize_codex_active_mode(data),
-        "api_promo_bar_open": bool_field(data, "api_promo_bar_open"),
         "mask_account_name": bool_field(data, "mask_account_name"),
         "ui_theme": ui_theme,
         "active_api_profile_id": api_profiles_state.active_id,
@@ -472,28 +471,6 @@ mod tests {
         assert_eq!(
             settings.get("codex_active_mode").and_then(Value::as_str),
             Some("api")
-        );
-    }
-
-    #[test]
-    fn normalize_settings_closes_api_promo_bar_by_default() {
-        let settings = normalize_settings(&json!({}));
-
-        assert_eq!(
-            settings.get("api_promo_bar_open").and_then(Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn normalize_settings_preserves_api_promo_bar_state() {
-        let settings = normalize_settings(&json!({
-            "api_promo_bar_open": true
-        }));
-
-        assert_eq!(
-            settings.get("api_promo_bar_open").and_then(Value::as_bool),
-            Some(true)
         );
     }
 
