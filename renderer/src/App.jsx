@@ -28,6 +28,20 @@ import {
 } from './hooks';
 
 const IS_DEV_BUILD = import.meta.env.DEV;
+const DEV_APPEARANCE_STORAGE_KEY = 'codex-switch-dev-appearance-mode';
+
+function normalizeDevAppearanceMode(value) {
+  return value === 'release' ? 'release' : 'dev';
+}
+
+function readDevAppearanceMode() {
+  if (!IS_DEV_BUILD || typeof window === 'undefined') return 'dev';
+  try {
+    return normalizeDevAppearanceMode(window.localStorage.getItem(DEV_APPEARANCE_STORAGE_KEY));
+  } catch (_err) {
+    return 'dev';
+  }
+}
 
 export default function App() {
   if (IS_DEV_BUILD && isDevLogWindow()) {
@@ -83,10 +97,15 @@ function MainApp() {
   const [viewMode, setViewMode] = useState('accounts');
   const [settingsTab, setSettingsTab] = useState('general');
   const [appVersion, setAppVersion] = useState('');
+  const [devAppearanceMode, setDevAppearanceMode] = useState(readDevAppearanceMode);
   const [dataDir, setDataDir] = useState('');
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
+  const devBuildAppearanceActive = IS_DEV_BUILD && devAppearanceMode !== 'release';
+  const displayAppVersion = IS_DEV_BUILD && devAppearanceMode === 'release'
+    ? appVersion.replace(/-dev$/, '')
+    : appVersion;
   const { message, toast, toastError } = useToast();
   const openDevLogWindow = async () => {
     if (!window.api || typeof window.api.openDevLogWindow !== 'function') {
@@ -363,16 +382,27 @@ function MainApp() {
 
   useEffect(() => {
     if (!IS_DEV_BUILD) return undefined;
-    const previousTitle = document.title;
-    document.title = previousTitle.startsWith('[DEV]')
-      ? previousTitle
-      : `[DEV] ${previousTitle || 'Codex Switch'}`;
-    document.documentElement.dataset.build = 'dev';
+    const baseTitle = (document.title || 'Codex Switch').replace(/^\[DEV\]\s*/, '') || 'Codex Switch';
+    document.title = devBuildAppearanceActive ? `[DEV] ${baseTitle}` : baseTitle;
+    if (devBuildAppearanceActive) {
+      document.documentElement.dataset.build = 'dev';
+    } else {
+      delete document.documentElement.dataset.build;
+    }
     return () => {
-      document.title = previousTitle;
+      document.title = baseTitle;
       delete document.documentElement.dataset.build;
     };
-  }, []);
+  }, [devBuildAppearanceActive]);
+
+  useEffect(() => {
+    if (!IS_DEV_BUILD) return;
+    try {
+      window.localStorage.setItem(DEV_APPEARANCE_STORAGE_KEY, devAppearanceMode);
+    } catch (_err) {
+      // Ignore storage failures; this switch is only a dev-only view preference.
+    }
+  }, [devAppearanceMode]);
 
   const openGptPoolLanding = async () => {
     try {
@@ -396,14 +426,14 @@ function MainApp() {
   const apiProfileBusy = savingApiMode || savingApiProfile;
 
   return (
-    <div className={`app ${IS_DEV_BUILD ? 'dev-build' : ''}`}>
+    <div className={`app${devBuildAppearanceActive ? ' dev-build' : ''}`}>
       <AppNavbar
         apiModeActive={apiModeActive}
         currentModeDetail={currentModeDetail}
         currentModeLabel={currentModeLabel}
         devErrorCount={devDiagnostics.errorCount}
         devLogCount={devDiagnostics.totalCount}
-        isDevBuild={IS_DEV_BUILD}
+        isDevBuild={devBuildAppearanceActive}
         onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
@@ -422,10 +452,12 @@ function MainApp() {
             settingsDraft,
             setSettingsDraft,
             dataDir,
-            appVersion,
+            appVersion: displayAppVersion,
             accounts: store.accounts,
             checkingUpdate,
             codexSessionSyncEnabled,
+            devAppearanceMode,
+            isDevBuild: IS_DEV_BUILD,
             maskAccountName,
             savingCodexProxyEnv,
             savingCodexRemoteControl,
@@ -438,6 +470,7 @@ function MainApp() {
             setCodexRemoteControlAccountId,
             setCodexRemoteControlEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
+            setDevAppearanceMode: mode => setDevAppearanceMode(normalizeDevAppearanceMode(mode)),
             switching,
             updateSettingsDraftAndSave,
             normalizeBackgroundRefreshInterval,

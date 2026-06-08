@@ -122,13 +122,9 @@ pub(super) fn apply_settings_patch(
         );
     }
     if has_key(patch, "auto_start_launch_mode") {
-        let value = match string_field(patch, "auto_start_launch_mode").as_str() {
-            "window" => "window",
-            _ => "tray",
-        };
         object.insert(
             "auto_start_launch_mode".to_string(),
-            Value::String(value.to_string()),
+            Value::String("tray".to_string()),
         );
     }
     if has_key(patch, "auto_check_updates") {
@@ -537,13 +533,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_settings_patch_normalizes_unknown_auto_start_launch_mode_to_tray() {
+    fn apply_settings_patch_normalizes_auto_start_launch_mode_to_tray() {
         let mut object = Map::new();
 
         apply_settings_patch(
             &mut object,
             &json!({
-                "auto_start_launch_mode": "hidden"
+                "auto_start_launch_mode": "window"
             }),
         )
         .unwrap();

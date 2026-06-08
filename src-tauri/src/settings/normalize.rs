@@ -114,11 +114,8 @@ fn normalize_codex_active_mode(data: &Value) -> String {
     }
 }
 
-fn normalize_auto_start_launch_mode(data: &Value) -> String {
-    match string_field(data, "auto_start_launch_mode").as_str() {
-        "window" => "window".to_string(),
-        _ => "tray".to_string(),
-    }
+fn normalize_auto_start_launch_mode() -> String {
+    "tray".to_string()
 }
 
 pub(crate) fn normalize_settings(data: &Value) -> Value {
@@ -158,7 +155,7 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
             .get("auto_start")
             .and_then(Value::as_bool)
             .unwrap_or(true),
-        "auto_start_launch_mode": normalize_auto_start_launch_mode(data),
+        "auto_start_launch_mode": normalize_auto_start_launch_mode(),
         "auto_check_updates": data
             .get("auto_check_updates")
             .and_then(Value::as_bool)
@@ -452,6 +449,20 @@ mod tests {
     fn normalize_settings_preserves_tray_auto_start_launch_mode() {
         let settings = normalize_settings(&json!({
             "auto_start_launch_mode": "tray"
+        }));
+
+        assert_eq!(
+            settings
+                .get("auto_start_launch_mode")
+                .and_then(Value::as_str),
+            Some("tray")
+        );
+    }
+
+    #[test]
+    fn normalize_settings_normalizes_window_auto_start_launch_mode_to_tray() {
+        let settings = normalize_settings(&json!({
+            "auto_start_launch_mode": "window"
         }));
 
         assert_eq!(

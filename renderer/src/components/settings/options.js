@@ -1,5 +1,6 @@
 export const DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES = 30;
 export const DEFAULT_UI_THEME = 'light';
+export const DEFAULT_DEV_APPEARANCE_MODE = 'dev';
 
 export const ACCOUNT_NAME_DISPLAY_OPTIONS = [
     {
@@ -17,24 +18,13 @@ export const ACCOUNT_NAME_DISPLAY_OPTIONS = [
 export const AUTO_START_OPTIONS = [
     {
         value: true,
-        title: '开启'
+        title: '开启',
+        desc: '开机后自动启动并收起到托盘。'
     },
     {
         value: false,
-        title: '禁止'
-    }
-];
-
-export const DEFAULT_AUTO_START_LAUNCH_MODE = 'tray';
-
-export const AUTO_START_LAUNCH_OPTIONS = [
-    {
-        value: 'window',
-        title: '打开主窗口'
-    },
-    {
-        value: 'tray',
-        title: '收起到托盘'
+        title: '禁止',
+        desc: '不开机自动启动。'
     }
 ];
 
@@ -48,6 +38,19 @@ export const UI_THEME_OPTIONS = [
         value: 'light',
         title: '白色模式',
         desc: '切换为浅色界面。'
+    }
+];
+
+export const DEV_APPEARANCE_OPTIONS = [
+    {
+        value: 'release',
+        title: '正式版外观',
+        desc: '隐藏 DEV 水印和开发日志入口。'
+    },
+    {
+        value: 'dev',
+        title: 'Dev 版外观',
+        desc: '显示 DEV 水印和开发日志入口。'
     }
 ];
 
