@@ -293,14 +293,14 @@ export default function ProxySettingsTab({
 
             <section className="settings-section settings-app-card-section settings-plugin-section">
                 <div className="settings-section-head">
-                    <div className="settings-section-title">解锁 Plugin</div>
-                    <div className="settings-section-desc">API 模式下可用 Plugin 功能</div>
+                    <div className="settings-section-title">Plugin 支持</div>
+                    <div className="settings-section-desc">API 模式下显示 Plugin 入口，并允许安装可用项</div>
                 </div>
                 <button
                     type="button"
                     className={`settings-toggle-row ${codexPluginsEnabled ? 'active' : ''}`}
                     aria-pressed={codexPluginsEnabled}
-                    aria-label={codexPluginsEnabled ? '关闭 Plugin 解锁' : '开启 Plugin 解锁'}
+                    aria-label={codexPluginsEnabled ? '关闭 Plugin 支持' : '开启 Plugin 支持'}
                     disabled={switching}
                     onClick={() => updateSettingsDraftAndSave({ codex_plugins_enabled: !codexPluginsEnabled })}
                 >
@@ -385,14 +385,14 @@ export default function ProxySettingsTab({
 
             <section className="settings-section settings-app-card-section settings-plugin-section">
                 <div className="settings-section-head">
-                    <div className="settings-section-title">Codex 删除按钮</div>
-                    <div className="settings-section-desc">在 Codex 会话行的归档按钮左侧显示删除</div>
+                    <div className="settings-section-title">会话删除</div>
+                    <div className="settings-section-desc">在 Codex 会话列表增加删除入口，删除后可恢复</div>
                 </div>
                 <button
                     type="button"
                     className={`settings-toggle-row ${codexDeleteButtonEnabled ? 'active' : ''}`}
                     aria-pressed={codexDeleteButtonEnabled}
-                    aria-label={codexDeleteButtonEnabled ? '关闭 Codex 删除按钮' : '开启 Codex 删除按钮'}
+                    aria-label={codexDeleteButtonEnabled ? '关闭会话删除入口' : '开启会话删除入口'}
                     disabled={switching}
                     onClick={() => updateSettingsDraftAndSave({ codex_delete_button_enabled: !codexDeleteButtonEnabled })}
                 >
@@ -408,7 +408,7 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-session-sync-section">
                 <div className="settings-section-head">
                     <div className="settings-section-title">会话同步</div>
-                    <div className="settings-section-desc">订阅/API 模式下会话列表保持同步</div>
+                    <div className="settings-section-desc">切换订阅/API 后同步历史会话的 provider、工作目录和列表索引</div>
                 </div>
                 <button
                     type="button"

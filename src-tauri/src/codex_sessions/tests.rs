@@ -37,6 +37,32 @@ fn write_rollout_file_with_timestamp(path: &Path, provider: &str, cwd: &str, tim
     .unwrap();
 }
 
+fn write_rollout_file_with_user_event(path: &Path, provider: &str, cwd: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let session_meta = json!({
+        "timestamp": "2026-05-07T00:00:00.000Z",
+        "type": "session_meta",
+        "payload": {
+            "id": "session-id",
+            "cwd": cwd,
+            "model_provider": provider
+        }
+    });
+    fs::write(
+        path,
+        format!(
+            "{session_meta}\n{}\n",
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "user_message": "hello"
+                }
+            })
+        ),
+    )
+    .unwrap();
+}
+
 fn create_state_db(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();
@@ -507,6 +533,99 @@ fn sync_state_provider_updates_all_threads_without_touching_cwd() {
 }
 
 #[test]
+fn sync_state_provider_updates_cwd_and_user_event_from_rollouts() {
+    let temp_dir = unique_sessions_dir("state-db-metadata");
+    let state_db = temp_dir.join("state_5.sqlite");
+    let rollout_with_user = temp_dir.join("sessions").join("rollout-user.jsonl");
+    let rollout_without_user = temp_dir.join("sessions").join("rollout-no-user.jsonl");
+    write_rollout_file_with_user_event(&rollout_with_user, "openai", r"\\?\C:\work");
+    write_rollout_file(&rollout_without_user, "openai", "D:\\stable");
+
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    connection
+        .execute(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                has_user_event INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                "thread-user",
+                rollout_with_user.to_string_lossy().to_string(),
+                "api",
+                "old-cwd",
+                0,
+            ),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                "thread-no-user",
+                rollout_without_user.to_string_lossy().to_string(),
+                "openai",
+                "D:\\stable",
+                0,
+            ),
+        )
+        .unwrap();
+    drop(connection);
+
+    let updated = sync_codex_state_threads_to_provider(&state_db, "api").unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    let mut rows = connection
+        .prepare("SELECT id, model_provider, cwd, has_user_event FROM threads ORDER BY id")
+        .unwrap();
+    let threads = rows
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    drop(rows);
+    drop(connection);
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(updated, 3);
+    assert_eq!(
+        threads,
+        vec![
+            (
+                "thread-no-user".to_string(),
+                "api".to_string(),
+                "D:\\stable".to_string(),
+                0
+            ),
+            (
+                "thread-user".to_string(),
+                "api".to_string(),
+                "C:/work".to_string(),
+                1
+            ),
+        ]
+    );
+}
+
+#[test]
 fn preview_state_provider_counts_changes_without_writing() {
     let temp_dir = unique_sessions_dir("preview-state-db");
     let state_db = temp_dir.join("state_5.sqlite");
@@ -573,6 +692,51 @@ fn missing_state_db_is_ignored() {
     let updated = sync_codex_state_threads_to_provider(&state_db, "api").unwrap();
 
     assert_eq!(updated, 0);
+}
+
+#[test]
+fn sync_global_state_normalizes_workspace_roots() {
+    let temp_dir = unique_sessions_dir("global-state");
+    let global_state = temp_dir.join(GLOBAL_STATE_FILE_NAME);
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(
+        &global_state,
+        serde_json::to_string_pretty(&json!({
+            "electron-saved-workspace-roots": [r"\\?\C:\work", "C:/work"],
+            "project-order": [r"\\?\C:\work"],
+            "active-workspace-roots": r"\\?\C:\work",
+            "electron-workspace-root-labels": {
+                r"\\?\C:\work": "Work"
+            },
+            "open-in-target-preferences": {
+                "default": "current",
+                "perPath": {
+                    r"\\?\C:\work": "new-window"
+                }
+            },
+            "other": true
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let preview = preview_global_state_workspace_roots(&global_state).unwrap();
+    let updated = sync_global_state_workspace_roots(&global_state).unwrap();
+    let value: Value = serde_json::from_str(&fs::read_to_string(&global_state).unwrap()).unwrap();
+
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(preview, 5);
+    assert_eq!(updated, 5);
+    assert_eq!(value["electron-saved-workspace-roots"], json!(["C:/work"]));
+    assert_eq!(value["project-order"], json!(["C:/work"]));
+    assert_eq!(value["active-workspace-roots"], json!("C:/work"));
+    assert_eq!(value["electron-workspace-root-labels"]["C:/work"], "Work");
+    assert_eq!(
+        value["open-in-target-preferences"]["perPath"]["C:/work"],
+        "new-window"
+    );
+    assert_eq!(value["other"], true);
 }
 
 #[test]

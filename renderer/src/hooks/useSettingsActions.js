@@ -25,7 +25,7 @@ export function useSettingsActions({
   const [codexRemoteControlPendingEnabled, setCodexRemoteControlPendingEnabled] = useState(null);
   const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
   const [pluginRestartNoticeMessage, setPluginRestartNoticeMessage] = useState(
-    'Plugin 解锁设置已保存，重启 Codex app 后生效。'
+    'Codex app 增强设置已保存，重启 Codex app 后生效。'
   );
   const [pluginRestartNoticeLoading, setPluginRestartNoticeLoading] = useState(false);
   const [restartingCodexApp, setRestartingCodexApp] = useState(false);
@@ -63,7 +63,7 @@ export function useSettingsActions({
           return;
         }
         if (!hasRunningCodexApp(processStatus)) return;
-        setPluginRestartNoticeMessage('Plugin 解锁设置已保存，重启 Codex app 后生效。');
+        setPluginRestartNoticeMessage('Codex app 增强设置已保存，重启 Codex app 后生效。');
         setPluginRestartNoticeVisible(true);
       }
     } catch (err) {

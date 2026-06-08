@@ -442,7 +442,7 @@ const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
       showToast("删除失败：未找到会话 ID");
       return;
     }
-    if (!window.confirm(`确定删除会话“${ref.title || ref.session_id}”？`)) return;
+    if (!window.confirm(`删除后可在 Codex Switch 的“已删除”中恢复。\n\n确定删除会话“${ref.title || ref.session_id}”？`)) return;
     button.disabled = true;
     button.dataset.codexSwitchDeleteBusy = "true";
     try {
@@ -450,7 +450,7 @@ const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
       if (result.status === "local_deleted") {
         const shouldReload = isCurrentSessionRow(row, ref);
         row.remove();
-        showToast(result.message || "删除成功");
+        showToast(result.message || "已删除，可在 Codex Switch 的“已删除”中恢复");
         if (shouldReload) window.location.reload();
       } else {
         showToast(result.message || "删除失败");
@@ -767,10 +767,7 @@ fn handle_delete_bridge_request(payload: DeleteBridgeRequest) -> Value {
                 json!({
                     "status": "local_deleted",
                     "session_id": payload.session_id,
-                    "message": value
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("删除成功"),
+                    "message": "已删除，可在 Codex Switch 的“已删除”中恢复",
                     "report": value.get("report").cloned().unwrap_or(Value::Null)
                 })
             } else {

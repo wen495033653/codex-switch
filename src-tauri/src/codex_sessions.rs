@@ -6,7 +6,7 @@ use crate::{
     session_sync_diagnostics::log_session_sync_event,
 };
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
@@ -22,6 +22,31 @@ const GLOBAL_STATE_FILE_NAME: &str = ".codex-global-state.json";
 const OPENAI_PROVIDER_ID: &str = "openai";
 
 static CODEX_SESSION_IO_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, Default)]
+struct StateThreadSyncMetadata {
+    user_event_thread_ids: HashSet<String>,
+    cwd_by_thread_id: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StateThreadUpdateCounts {
+    provider_rows: usize,
+    user_event_rows: usize,
+    cwd_rows: usize,
+}
+
+impl StateThreadUpdateCounts {
+    fn total(self) -> usize {
+        self.provider_rows + self.user_event_rows + self.cwd_rows
+    }
+}
+
+#[derive(Debug, Default)]
+struct RolloutThreadMetadata {
+    cwd: Option<String>,
+    has_user_event: bool,
+}
 
 pub(crate) fn lock_codex_session_io(action: &str) -> Result<MutexGuard<'static, ()>, String> {
     CODEX_SESSION_IO_LOCK
@@ -128,6 +153,7 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
     let mut updated = 0;
     let mut state_db_updated = 0;
     let mut rollout_files_updated = 0;
+    let mut global_state_updated = 0;
     let mut errors = Vec::new();
 
     match preview_codex_state_threads_to_provider_if_exists(&target_provider, trigger) {
@@ -144,6 +170,13 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
         }
         Err(err) => errors.push(err),
     }
+    match preview_codex_global_state_workspace_roots_if_exists(trigger) {
+        Ok(count) => {
+            global_state_updated = count;
+            updated += count;
+        }
+        Err(err) => errors.push(err),
+    }
 
     if errors.is_empty() {
         log_session_sync_event(
@@ -153,6 +186,7 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
                 "targetProvider": target_provider,
                 "stateDbUpdated": state_db_updated,
                 "rolloutFilesUpdated": rollout_files_updated,
+                "globalStateUpdated": global_state_updated,
                 "updated": updated
             }),
         );
@@ -165,6 +199,7 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
                 "targetProvider": target_provider,
                 "stateDbUpdated": state_db_updated,
                 "rolloutFilesUpdated": rollout_files_updated,
+                "globalStateUpdated": global_state_updated,
                 "updated": updated,
                 "errors": errors.clone()
             }),
@@ -192,6 +227,7 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
     let mut updated = 0;
     let mut state_db_updated = 0;
     let mut rollout_files_updated = 0;
+    let mut global_state_updated = 0;
     let mut errors = Vec::new();
 
     match sync_codex_state_threads_to_provider_if_exists(&target_provider, trigger) {
@@ -208,6 +244,13 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
         }
         Err(err) => errors.push(err),
     }
+    match sync_codex_global_state_workspace_roots_if_exists(trigger) {
+        Ok(count) => {
+            global_state_updated = count;
+            updated += count;
+        }
+        Err(err) => errors.push(err),
+    }
 
     if errors.is_empty() {
         log_session_sync_event(
@@ -217,6 +260,7 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
                 "targetProvider": target_provider,
                 "stateDbUpdated": state_db_updated,
                 "rolloutFilesUpdated": rollout_files_updated,
+                "globalStateUpdated": global_state_updated,
                 "updated": updated
             }),
         );
@@ -229,6 +273,7 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
                 "targetProvider": target_provider,
                 "stateDbUpdated": state_db_updated,
                 "rolloutFilesUpdated": rollout_files_updated,
+                "globalStateUpdated": global_state_updated,
                 "updated": updated,
                 "errors": errors.clone()
             }),
@@ -282,6 +327,16 @@ fn preview_codex_state_threads_to_provider_if_exists(
         target_provider,
         Some(trigger),
     )
+}
+
+fn sync_codex_global_state_workspace_roots_if_exists(trigger: &str) -> Result<usize, String> {
+    let path = global_state_path()?;
+    sync_global_state_workspace_roots_with_diagnostics(&path, Some(trigger))
+}
+
+fn preview_codex_global_state_workspace_roots_if_exists(trigger: &str) -> Result<usize, String> {
+    let path = global_state_path()?;
+    preview_global_state_workspace_roots_with_diagnostics(&path, Some(trigger))
 }
 
 #[cfg(test)]
@@ -980,6 +1035,152 @@ fn pinned_thread_rollout_paths(
     Ok(paths)
 }
 
+fn state_threads_columns(connection: &Connection) -> Result<Option<HashSet<String>>, String> {
+    let exists = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'threads')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("检查 Codex state threads 表失败: {err}"))?;
+    if exists == 0 {
+        return Ok(None);
+    }
+
+    let mut statement = connection
+        .prepare("PRAGMA table_info(threads)")
+        .map_err(|err| format!("读取 Codex state threads 表结构失败: {err}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| format!("读取 Codex state threads 表结构失败: {err}"))?;
+    let mut columns = HashSet::new();
+    for row in rows {
+        columns.insert(row.map_err(|err| format!("读取 Codex state threads 列失败: {err}"))?);
+    }
+    Ok(Some(columns))
+}
+
+fn collect_state_thread_sync_metadata(
+    connection: &Connection,
+    state_db: &Path,
+    columns: &HashSet<String>,
+) -> Result<StateThreadSyncMetadata, String> {
+    let wants_user_event = columns.contains("has_user_event");
+    let wants_cwd = columns.contains("cwd");
+    if !wants_user_event && !wants_cwd {
+        return Ok(StateThreadSyncMetadata::default());
+    }
+    if !columns.contains("id") || !columns.contains("rollout_path") {
+        return Ok(StateThreadSyncMetadata::default());
+    }
+
+    let mut statement = connection
+        .prepare(
+            "SELECT id, rollout_path
+             FROM threads
+             WHERE COALESCE(rollout_path, '') <> ''",
+        )
+        .map_err(|err| format!("查询 Codex state 会话 rollout 路径失败: {err}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|err| format!("读取 Codex state 会话 rollout 路径失败: {err}"))?;
+
+    let mut metadata = StateThreadSyncMetadata::default();
+    let root = state_db.parent().unwrap_or_else(|| Path::new(""));
+    for row in rows {
+        let (thread_id, rollout_path) =
+            row.map_err(|err| format!("读取 Codex state 会话 rollout 路径失败: {err}"))?;
+        let thread_id = thread_id.trim();
+        let Some(rollout_path) = rollout_path else {
+            continue;
+        };
+        if thread_id.is_empty() || rollout_path.trim().is_empty() {
+            continue;
+        }
+        let rollout_path = state_thread_rollout_path(root, &rollout_path);
+        let Some(rollout_metadata) = rollout_thread_metadata(&rollout_path)? else {
+            continue;
+        };
+        if wants_user_event && rollout_metadata.has_user_event {
+            metadata.user_event_thread_ids.insert(thread_id.to_string());
+        }
+        if wants_cwd {
+            if let Some(cwd) = rollout_metadata.cwd {
+                metadata.cwd_by_thread_id.insert(thread_id.to_string(), cwd);
+            }
+        }
+    }
+    Ok(metadata)
+}
+
+fn state_thread_rollout_path(root: &Path, raw_path: &str) -> PathBuf {
+    let path = PathBuf::from(raw_path.trim());
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
+}
+
+fn rollout_thread_metadata(path: &Path) -> Result<Option<RolloutThreadMetadata>, String> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) if is_locked_io_error(&err) => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "读取 Codex state 会话 rollout 元数据失败 {}: {err}",
+                path.display()
+            ))
+        }
+    };
+    let mut metadata = RolloutThreadMetadata {
+        cwd: None,
+        has_user_event: content.contains("\"user_message\"") || content.contains("\"user_input\""),
+    };
+
+    for line in content.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if event.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let Some(payload) = event.get("payload").and_then(Value::as_object) else {
+            continue;
+        };
+        metadata.cwd = payload
+            .get("cwd")
+            .and_then(Value::as_str)
+            .and_then(to_desktop_workspace_path);
+        break;
+    }
+
+    Ok(Some(metadata))
+}
+
+fn is_locked_io_error(error: &std::io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::PermissionDenied)
+        || matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+fn to_desktop_workspace_path(value: &str) -> Option<String> {
+    let stripped = value.trim();
+    if stripped.is_empty() {
+        return None;
+    }
+    let lower = stripped.to_ascii_lowercase();
+    if lower.starts_with(r"\\?\unc\") {
+        return Some(format!(r"\\{}", stripped[8..].replace('/', "\\")));
+    }
+    if stripped.starts_with(r"\\?\") {
+        return Some(stripped[4..].replace('\\', "/"));
+    }
+    Some(stripped.to_string())
+}
+
 #[cfg(test)]
 fn sync_codex_state_threads_to_provider(
     state_db: &Path,
@@ -1014,13 +1215,42 @@ fn sync_codex_state_threads_to_provider_with_diagnostics(
     connection
         .busy_timeout(Duration::from_millis(3000))
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
+    let Some(columns) = state_threads_columns(&connection)? else {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_state_db_threads_missing",
+                json!({
+                    "trigger": trigger,
+                    "targetProvider": target_provider,
+                    "stateDb": state_db.to_string_lossy().to_string()
+                }),
+            );
+        }
+        return Ok(0);
+    };
+    if !columns.contains("model_provider") {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_state_db_threads_unsupported",
+                json!({
+                    "trigger": trigger,
+                    "targetProvider": target_provider,
+                    "stateDb": state_db.to_string_lossy().to_string(),
+                    "missingColumn": "model_provider"
+                }),
+            );
+        }
+        return Ok(0);
+    }
+    let thread_metadata = collect_state_thread_sync_metadata(&connection, state_db, &columns)?;
     let before_summary = trigger
         .map(|_| query_state_db_summary(&connection, target_provider))
         .transpose();
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 会话同步事务失败: {err}"))?;
-    let updated = transaction
+    let mut counts = StateThreadUpdateCounts::default();
+    counts.provider_rows = transaction
         .execute(
             "UPDATE threads
              SET model_provider = ?1
@@ -1034,10 +1264,47 @@ fn sync_codex_state_threads_to_provider_with_diagnostics(
                 state_db.display()
             )
         })?;
+    if columns.contains("has_user_event") {
+        for thread_id in &thread_metadata.user_event_thread_ids {
+            counts.user_event_rows += transaction
+                .execute(
+                    "UPDATE threads
+                     SET has_user_event = 1
+                     WHERE id = ?1
+                        AND COALESCE(has_user_event, 0) <> 1",
+                    [thread_id],
+                )
+                .map_err(|err| {
+                    format!(
+                        "更新 Codex state 会话 user event 状态失败 {}: {err}",
+                        state_db.display()
+                    )
+                })?;
+        }
+    }
+    if columns.contains("cwd") {
+        for (thread_id, cwd) in &thread_metadata.cwd_by_thread_id {
+            counts.cwd_rows += transaction
+                .execute(
+                    "UPDATE threads
+                     SET cwd = ?1
+                     WHERE id = ?2
+                        AND COALESCE(cwd, '') <> ?1",
+                    (cwd, thread_id),
+                )
+                .map_err(|err| {
+                    format!(
+                        "更新 Codex state 会话 cwd 失败 {}: {err}",
+                        state_db.display()
+                    )
+                })?;
+        }
+    }
     transaction
         .commit()
         .map_err(|err| format!("保存 Codex state 会话同步结果失败: {err}"))?;
-    log_state_db_update_summary(state_db, target_provider, trigger, updated, before_summary);
+    let updated = counts.total();
+    log_state_db_update_summary(state_db, target_provider, trigger, counts, before_summary);
     Ok(updated)
 }
 
@@ -1067,7 +1334,36 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
     connection
         .busy_timeout(Duration::from_millis(3000))
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
-    let updated = connection
+    let Some(columns) = state_threads_columns(&connection)? else {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_preflight_state_db_threads_missing",
+                json!({
+                    "trigger": trigger,
+                    "targetProvider": target_provider,
+                    "stateDb": state_db.to_string_lossy().to_string()
+                }),
+            );
+        }
+        return Ok(0);
+    };
+    if !columns.contains("model_provider") {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_preflight_state_db_threads_unsupported",
+                json!({
+                    "trigger": trigger,
+                    "targetProvider": target_provider,
+                    "stateDb": state_db.to_string_lossy().to_string(),
+                    "missingColumn": "model_provider"
+                }),
+            );
+        }
+        return Ok(0);
+    }
+    let thread_metadata = collect_state_thread_sync_metadata(&connection, state_db, &columns)?;
+    let mut counts = StateThreadUpdateCounts::default();
+    counts.provider_rows = connection
         .query_row(
             "SELECT COUNT(*) FROM threads
              WHERE model_provider IS NULL
@@ -1081,6 +1377,43 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
                 state_db.display()
             )
         })? as usize;
+    if columns.contains("has_user_event") {
+        for thread_id in &thread_metadata.user_event_thread_ids {
+            counts.user_event_rows += connection
+                .query_row(
+                    "SELECT COUNT(*) FROM threads
+                     WHERE id = ?1
+                        AND COALESCE(has_user_event, 0) <> 1",
+                    [thread_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|err| {
+                    format!(
+                        "统计 Codex state 会话 user event 待同步数量失败 {}: {err}",
+                        state_db.display()
+                    )
+                })? as usize;
+        }
+    }
+    if columns.contains("cwd") {
+        for (thread_id, cwd) in &thread_metadata.cwd_by_thread_id {
+            counts.cwd_rows += connection
+                .query_row(
+                    "SELECT COUNT(*) FROM threads
+                     WHERE id = ?1
+                        AND COALESCE(cwd, '') <> ?2",
+                    (thread_id, cwd),
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|err| {
+                    format!(
+                        "统计 Codex state 会话 cwd 待同步数量失败 {}: {err}",
+                        state_db.display()
+                    )
+                })? as usize;
+        }
+    }
+    let updated = counts.total();
     if let Some(trigger) = trigger {
         log_session_sync_event(
             "session_sync_preflight_state_db_summary",
@@ -1088,6 +1421,9 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
                 "trigger": trigger,
                 "targetProvider": target_provider,
                 "stateDb": state_db.to_string_lossy().to_string(),
+                "providerRowsUpdated": counts.provider_rows,
+                "userEventRowsUpdated": counts.user_event_rows,
+                "cwdRowsUpdated": counts.cwd_rows,
                 "updated": updated
             }),
         );
@@ -1099,12 +1435,13 @@ fn log_state_db_update_summary(
     state_db: &Path,
     target_provider: &str,
     trigger: Option<&str>,
-    updated: usize,
+    counts: StateThreadUpdateCounts,
     summary: Result<Option<Value>, String>,
 ) {
     let Some(trigger) = trigger else {
         return;
     };
+    let updated = counts.total();
     let summary = match summary {
         Ok(Some(summary)) => summary,
         Ok(None) if updated == 0 => return,
@@ -1120,6 +1457,9 @@ fn log_state_db_update_summary(
             "trigger": trigger,
             "targetProvider": target_provider,
             "stateDb": state_db.to_string_lossy().to_string(),
+            "providerRowsUpdated": counts.provider_rows,
+            "userEventRowsUpdated": counts.user_event_rows,
+            "cwdRowsUpdated": counts.cwd_rows,
             "updated": updated,
             "summary": summary
         }),
@@ -1198,6 +1538,213 @@ fn query_state_db_summary(connection: &Connection, target_provider: &str) -> Res
         "providerCounts": provider_counts,
         "providerChanges": provider_changes
     }))
+}
+
+#[cfg(test)]
+fn sync_global_state_workspace_roots(path: &Path) -> Result<usize, String> {
+    sync_global_state_workspace_roots_with_diagnostics(path, None)
+}
+
+#[cfg(test)]
+fn preview_global_state_workspace_roots(path: &Path) -> Result<usize, String> {
+    preview_global_state_workspace_roots_with_diagnostics(path, None)
+}
+
+fn preview_global_state_workspace_roots_with_diagnostics(
+    path: &Path,
+    trigger: Option<&str>,
+) -> Result<usize, String> {
+    let state = load_global_state(path)?;
+    let next = normalized_global_state_workspace_roots(&state);
+    let updated = global_state_update_count(&state, &next);
+    if let Some(trigger) = trigger {
+        log_session_sync_event(
+            "session_sync_preflight_global_state_summary",
+            json!({
+                "trigger": trigger,
+                "globalState": path.to_string_lossy().to_string(),
+                "updated": updated
+            }),
+        );
+    }
+    Ok(updated)
+}
+
+fn sync_global_state_workspace_roots_with_diagnostics(
+    path: &Path,
+    trigger: Option<&str>,
+) -> Result<usize, String> {
+    if !path.exists() {
+        if let Some(trigger) = trigger {
+            log_session_sync_event(
+                "session_sync_global_state_missing",
+                json!({
+                    "trigger": trigger,
+                    "globalState": path.to_string_lossy().to_string()
+                }),
+            );
+        }
+        return Ok(0);
+    }
+
+    let original_content = fs::read_to_string(path)
+        .map_err(|err| format!("读取 Codex global state 失败 {}: {err}", path.display()))?;
+    let mut state = parse_global_state(&original_content, path)?;
+    let next = normalized_global_state_workspace_roots(&state);
+    let updated = global_state_update_count(&state, &next);
+    if updated > 0 {
+        for (key, value) in next {
+            state.insert(key, value);
+        }
+        if let Some(parent) = path.parent() {
+            fs::write(
+                parent.join(format!("{GLOBAL_STATE_FILE_NAME}.bak")),
+                &original_content,
+            )
+            .map_err(|err| {
+                format!(
+                    "备份 Codex global state 失败 {}: {err}",
+                    parent
+                        .join(format!("{GLOBAL_STATE_FILE_NAME}.bak"))
+                        .display()
+                )
+            })?;
+        }
+        let mut output = serde_json::to_string_pretty(&Value::Object(state))
+            .map_err(|err| format!("序列化 Codex global state 失败: {err}"))?;
+        output.push('\n');
+        write_existing_file(path, &output, "写入 Codex global state")?;
+    }
+    if let Some(trigger) = trigger {
+        log_session_sync_event(
+            "session_sync_global_state_summary",
+            json!({
+                "trigger": trigger,
+                "globalState": path.to_string_lossy().to_string(),
+                "updated": updated
+            }),
+        );
+    }
+    Ok(updated)
+}
+
+fn load_global_state(path: &Path) -> Result<Map<String, Value>, String> {
+    if !path.exists() {
+        return Ok(Map::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|err| format!("读取 Codex global state 失败 {}: {err}", path.display()))?;
+    parse_global_state(&content, path)
+}
+
+fn parse_global_state(content: &str, path: &Path) -> Result<Map<String, Value>, String> {
+    let value: Value = serde_json::from_str(content)
+        .map_err(|err| format!("解析 Codex global state 失败 {}: {err}", path.display()))?;
+    Ok(value.as_object().cloned().unwrap_or_default())
+}
+
+fn normalized_global_state_workspace_roots(state: &Map<String, Value>) -> Map<String, Value> {
+    let mut next = Map::new();
+    if let Some(value) = state.get("electron-saved-workspace-roots") {
+        next.insert(
+            "electron-saved-workspace-roots".to_string(),
+            json!(dedupe_paths(path_array(value))),
+        );
+    }
+    if let Some(value) = state.get("project-order") {
+        next.insert(
+            "project-order".to_string(),
+            json!(dedupe_paths(path_array(value))),
+        );
+    }
+    if let Some(value) = state.get("active-workspace-roots") {
+        let normalized = dedupe_paths(path_array(value));
+        let next_value = if value.is_array() {
+            json!(normalized)
+        } else if let Some(first) = normalized.first() {
+            json!(first)
+        } else {
+            value.clone()
+        };
+        next.insert("active-workspace-roots".to_string(), next_value);
+    }
+    if let Some(value) = state
+        .get("electron-workspace-root-labels")
+        .and_then(Value::as_object)
+    {
+        let mut labels = Map::new();
+        for (key, item) in value {
+            labels.insert(
+                to_desktop_workspace_path(key).unwrap_or_else(|| key.clone()),
+                item.clone(),
+            );
+        }
+        next.insert(
+            "electron-workspace-root-labels".to_string(),
+            Value::Object(labels),
+        );
+    }
+    if let Some(open_targets) = state
+        .get("open-in-target-preferences")
+        .and_then(Value::as_object)
+    {
+        let mut next_open_targets = open_targets.clone();
+        if let Some(per_path) =
+            copy_resolved_object_keys(open_targets.get("perPath").and_then(Value::as_object))
+        {
+            next_open_targets.insert("perPath".to_string(), Value::Object(per_path));
+        }
+        next.insert(
+            "open-in-target-preferences".to_string(),
+            Value::Object(next_open_targets),
+        );
+    }
+    next
+}
+
+fn copy_resolved_object_keys(value: Option<&Map<String, Value>>) -> Option<Map<String, Value>> {
+    let value = value?;
+    let mut next = Map::new();
+    for (key, item) in value {
+        next.insert(
+            to_desktop_workspace_path(key).unwrap_or_else(|| key.clone()),
+            item.clone(),
+        );
+    }
+    Some(next)
+}
+
+fn global_state_update_count(state: &Map<String, Value>, next: &Map<String, Value>) -> usize {
+    next.iter()
+        .filter(|(key, value)| state.get(*key) != Some(*value))
+        .count()
+}
+
+fn path_array(value: &Value) -> Vec<String> {
+    if let Some(items) = value.as_array() {
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|item| !item.trim().is_empty())
+            .map(ToString::to_string)
+            .collect()
+    } else if let Some(value) = value.as_str().filter(|item| !item.trim().is_empty()) {
+        vec![value.to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+fn dedupe_paths(paths: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for path in paths {
+        let normalized = to_desktop_workspace_path(&path).unwrap_or(path);
+        if seen.insert(normalized.to_ascii_lowercase()) {
+            result.push(normalized);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
