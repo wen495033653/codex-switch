@@ -38,6 +38,16 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
+.settings-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.settings-option:disabled:hover {
+  border-color: var(--border-app);
+  background: var(--bg-subtle);
+}
+
 .settings-option.active {
   border-color: rgba(51, 156, 255, 0.35);
   background: rgba(51, 156, 255, 0.08);
