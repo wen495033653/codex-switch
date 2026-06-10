@@ -1175,8 +1175,8 @@ fn to_desktop_workspace_path(value: &str) -> Option<String> {
     if lower.starts_with(r"\\?\unc\") {
         return Some(format!(r"\\{}", stripped[8..].replace('/', "\\")));
     }
-    if stripped.starts_with(r"\\?\") {
-        return Some(stripped[4..].replace('\\', "/"));
+    if let Some(stripped) = stripped.strip_prefix(r"\\?\") {
+        return Some(stripped.replace('\\', "/"));
     }
     Some(stripped.to_string())
 }
@@ -1249,21 +1249,23 @@ fn sync_codex_state_threads_to_provider_with_diagnostics(
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 会话同步事务失败: {err}"))?;
-    let mut counts = StateThreadUpdateCounts::default();
-    counts.provider_rows = transaction
-        .execute(
-            "UPDATE threads
-             SET model_provider = ?1
-             WHERE model_provider IS NULL
-                OR model_provider <> ?1",
-            [target_provider],
-        )
-        .map_err(|err| {
-            format!(
-                "更新 Codex state 会话 provider 失败 {}: {err}",
-                state_db.display()
+    let mut counts = StateThreadUpdateCounts {
+        provider_rows: transaction
+            .execute(
+                "UPDATE threads
+                 SET model_provider = ?1
+                 WHERE model_provider IS NULL
+                    OR model_provider <> ?1",
+                [target_provider],
             )
-        })?;
+            .map_err(|err| {
+                format!(
+                    "更新 Codex state 会话 provider 失败 {}: {err}",
+                    state_db.display()
+                )
+            })?,
+        ..StateThreadUpdateCounts::default()
+    };
     if columns.contains("has_user_event") {
         for thread_id in &thread_metadata.user_event_thread_ids {
             counts.user_event_rows += transaction
@@ -1362,21 +1364,23 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
         return Ok(0);
     }
     let thread_metadata = collect_state_thread_sync_metadata(&connection, state_db, &columns)?;
-    let mut counts = StateThreadUpdateCounts::default();
-    counts.provider_rows = connection
-        .query_row(
-            "SELECT COUNT(*) FROM threads
-             WHERE model_provider IS NULL
-                OR model_provider <> ?1",
-            [target_provider],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|err| {
-            format!(
-                "统计 Codex state 会话 provider 待同步数量失败 {}: {err}",
-                state_db.display()
+    let mut counts = StateThreadUpdateCounts {
+        provider_rows: connection
+            .query_row(
+                "SELECT COUNT(*) FROM threads
+                 WHERE model_provider IS NULL
+                    OR model_provider <> ?1",
+                [target_provider],
+                |row| row.get::<_, i64>(0),
             )
-        })? as usize;
+            .map_err(|err| {
+                format!(
+                    "统计 Codex state 会话 provider 待同步数量失败 {}: {err}",
+                    state_db.display()
+                )
+            })? as usize,
+        ..StateThreadUpdateCounts::default()
+    };
     if columns.contains("has_user_event") {
         for thread_id in &thread_metadata.user_event_thread_ids {
             counts.user_event_rows += connection
