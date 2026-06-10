@@ -176,7 +176,7 @@ export function useApiModeDraft({
 
   const removeApiProfile = async (id) => {
     const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
-    if (profiles.length <= 1 || id === activeApiProfileId) {
+    if (profiles.length <= 1) {
       closeDeleteApiProfileModal();
       return;
     }
@@ -206,7 +206,7 @@ export function useApiModeDraft({
   const openDeleteApiProfileModal = (id) => {
     const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
     const profile = getProfileById(profiles, id);
-    if (!profile || profiles.length <= 1 || profile.id === activeApiProfileId) return;
+    if (!profile || profiles.length <= 1) return;
     setApiProfileDeleteModal({
       visible: true,
       profileId: profile.id,

@@ -5,6 +5,7 @@ import { normalizeApiBaseUrlInput } from '../utils/appState';
 
 export default function ApiModePage({
   activeApiProfileId,
+  apiModeActive,
   apiProfiles,
   onAddApiProfile,
   onDeleteApiProfile,
@@ -118,7 +119,7 @@ export default function ApiModePage({
                 {currentItems.map((profile, index) => {
                   const profileId = profile.id || `api-${startIdx + index}`;
                   const configured = Boolean(profile.name && profile.base_url && profile.api_key);
-                  const active = profileId === activeApiProfileId;
+                  const active = apiModeActive && profileId === activeApiProfileId;
                   const profileName = profile.name || `API ${startIdx + index + 1}`;
                   const baseUrl = profile.base_url || '';
                   const apiKey = profile.api_key || '';
@@ -140,11 +141,9 @@ export default function ApiModePage({
                     ? '未配置 Base URL'
                     : (!apiKey ? '未配置 API Key' : '测试 Base URL');
                   const testDisabled = !baseUrl || !apiKey || testLoading;
-                  const deleteTitle = active
-                    ? '当前正在使用，不能删除'
-                    : profiles.length <= 1
-                      ? '至少保留一个 API'
-                      : '删除配置';
+                  const deleteTitle = profiles.length <= 1
+                    ? '至少保留一个 API'
+                    : '删除配置';
 
                   return (
                     <div
@@ -222,7 +221,7 @@ export default function ApiModePage({
                             type="button"
                             className="icon-btn danger"
                             title={deleteTitle}
-                            disabled={active || profiles.length <= 1 || savingApiMode || switching}
+                            disabled={profiles.length <= 1 || savingApiMode || switching}
                             onClick={() => onDeleteApiProfile(profileId)}
                           >
                             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">

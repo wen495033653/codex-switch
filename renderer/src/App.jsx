@@ -482,6 +482,7 @@ function MainApp() {
           }}
           apiModePageProps={{
             activeApiProfileId,
+            apiModeActive,
             apiProfiles,
             onAddApiProfile: addApiProfile,
             onDeleteApiProfile: openDeleteApiProfileModal,
