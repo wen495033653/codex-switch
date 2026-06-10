@@ -315,7 +315,7 @@ fn cdp_debug_port_from_command_line(command_line: &str) -> Option<u16> {
 
 const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
 (() => {
-  const version = "4";
+  const version = "5";
   if (window.__codexSwitchDeleteButtonController?.version === version) {
     window.__codexSwitchDeleteButtonScan?.();
     return;
@@ -338,6 +338,7 @@ const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
       this.observer?.disconnect?.();
       if (this.interval) clearInterval(this.interval);
       if (this.timeout) clearTimeout(this.timeout);
+      closeConfirmDialogs();
     },
   };
   window.__codexSwitchDeleteButtonController = controller;
@@ -364,6 +365,149 @@ const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
     });
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 4200);
+  }
+
+  function closeConfirmDialogs() {
+    document.querySelectorAll(".codex-switch-delete-confirm").forEach((node) => node.remove());
+  }
+
+  function buttonStyle(kind) {
+    const danger = kind === "danger";
+    return {
+      minWidth: "88px",
+      height: "34px",
+      padding: "0 13px",
+      border: danger ? "0" : "1px solid var(--color-border, rgba(127,127,127,.24))",
+      borderRadius: "8px",
+      background: danger ? "var(--color-decoration-deleted, #ba2623)" : "var(--color-background-button-secondary, rgba(127,127,127,.1))",
+      color: danger ? "#fff" : "var(--color-text-button-secondary, var(--color-token-foreground, currentColor))",
+      font: "inherit",
+      fontSize: "13px",
+      fontWeight: "600",
+      cursor: "pointer",
+    };
+  }
+
+  function confirmDelete(ref) {
+    closeConfirmDialogs();
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "codex-switch-delete-confirm";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+      Object.assign(overlay.style, {
+        position: "fixed",
+        inset: "0",
+        zIndex: "2147483646",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "18px",
+        background: "rgba(0, 0, 0, .42)",
+        backdropFilter: "blur(8px)",
+        fontFamily: "inherit",
+      });
+
+      const panel = document.createElement("div");
+      Object.assign(panel.style, {
+        width: "min(380px, calc(100vw - 32px))",
+        display: "grid",
+        gap: "12px",
+        padding: "18px",
+        border: "1px solid var(--color-border, rgba(127,127,127,.24))",
+        borderRadius: "12px",
+        background: "var(--color-background-elevated-primary, var(--color-token-bg-primary, #fff))",
+        color: "var(--color-text-foreground, var(--color-token-foreground, #111827))",
+        boxShadow: "0 18px 50px rgba(0, 0, 0, .24)",
+      });
+
+      const title = document.createElement("div");
+      title.textContent = "删除会话？";
+      Object.assign(title.style, {
+        fontSize: "16px",
+        fontWeight: "700",
+        lineHeight: "22px",
+      });
+
+      const message = document.createElement("div");
+      message.textContent = "删除后可在 Codex Switch 的“已删除”中恢复。";
+      Object.assign(message.style, {
+        color: "var(--color-text-foreground-secondary, var(--color-token-foreground, #4b5563))",
+        fontSize: "13px",
+        lineHeight: "20px",
+      });
+
+      const sessionName = document.createElement("div");
+      sessionName.textContent = ref.title || ref.session_id;
+      sessionName.title = ref.title || ref.session_id;
+      Object.assign(sessionName.style, {
+        minWidth: "0",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        padding: "9px 10px",
+        border: "1px solid var(--color-border-light, rgba(127,127,127,.16))",
+        borderRadius: "8px",
+        background: "var(--color-background-elevated-secondary, rgba(127,127,127,.06))",
+        color: "var(--color-text-foreground, var(--color-token-foreground, #111827))",
+        fontSize: "13px",
+      });
+
+      const actions = document.createElement("div");
+      Object.assign(actions.style, {
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: "8px",
+        paddingTop: "2px",
+      });
+
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.textContent = "取消";
+      Object.assign(cancelButton.style, buttonStyle("secondary"));
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.textContent = "删除";
+      Object.assign(deleteButton.style, buttonStyle("danger"));
+
+      let done = false;
+      const finish = (accepted) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener("keydown", onKeyDown, true);
+        overlay.remove();
+        resolve(accepted);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") {
+          stopButtonEvent(event);
+          finish(false);
+        }
+      };
+
+      cancelButton.addEventListener("click", (event) => {
+        stopButtonEvent(event);
+        finish(false);
+      }, true);
+      deleteButton.addEventListener("click", (event) => {
+        stopButtonEvent(event);
+        finish(true);
+      }, true);
+      overlay.addEventListener("pointerdown", (event) => {
+        if (event.target === overlay) {
+          stopButtonEvent(event);
+          finish(false);
+        }
+      }, true);
+      document.addEventListener("keydown", onKeyDown, true);
+
+      actions.append(cancelButton, deleteButton);
+      panel.append(title, message, sessionName, actions);
+      overlay.append(panel);
+      document.body.appendChild(overlay);
+      cancelButton.focus({ preventScroll: true });
+    });
   }
 
   function rowHref(row) {
@@ -442,7 +586,7 @@ const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
       showToast("删除失败：未找到会话 ID");
       return;
     }
-    if (!window.confirm(`删除后可在 Codex Switch 的“已删除”中恢复。\n\n确定删除会话“${ref.title || ref.session_id}”？`)) return;
+    if (!(await confirmDelete(ref))) return;
     button.disabled = true;
     button.dataset.codexSwitchDeleteBusy = "true";
     try {
