@@ -250,6 +250,16 @@ pub(super) fn apply_settings_patch(
         );
         upsert_api_profile(object, &api_mode);
     }
+    if has_key(patch, "api_test_results") {
+        object.insert(
+            "api_test_results".to_string(),
+            patch
+                .get("api_test_results")
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
+    }
     if has_key(patch, "window_bounds") {
         let bounds = normalize_settings(&json!({
             "window_bounds": patch.get("window_bounds").unwrap_or(&Value::Null)

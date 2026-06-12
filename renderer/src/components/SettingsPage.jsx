@@ -14,7 +14,6 @@ export default function SettingsPage({
     accounts,
     checkingUpdate,
     codexSessionSyncEnabled,
-    devAppearanceMode,
     isDevBuild,
     maskAccountName,
     savingCodexProxyEnv,
@@ -28,7 +27,6 @@ export default function SettingsPage({
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,
     setCodexSessionSyncEnabled,
-    setDevAppearanceMode,
     switching,
     updateSettingsDraftAndSave,
     normalizeBackgroundRefreshInterval,
@@ -64,10 +62,8 @@ export default function SettingsPage({
                     {settingsTab === 'general' && (
                         <GeneralSettingsTab
                             dataDir={dataDir}
-                            devAppearanceMode={devAppearanceMode}
                             isDevBuild={isDevBuild}
                             openDataDir={openDataDir}
-                            setDevAppearanceMode={setDevAppearanceMode}
                             settingsDraft={settingsDraft}
                             updateSettingsDraftAndSave={updateSettingsDraftAndSave}
                         />

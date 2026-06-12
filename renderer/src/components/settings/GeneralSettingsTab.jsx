@@ -1,17 +1,13 @@
 import {
     AUTO_START_OPTIONS,
-    DEFAULT_DEV_APPEARANCE_MODE,
     DEFAULT_UI_THEME,
-    DEV_APPEARANCE_OPTIONS,
     UI_THEME_OPTIONS
 } from './options';
 
 export default function GeneralSettingsTab({
     dataDir,
-    devAppearanceMode = DEFAULT_DEV_APPEARANCE_MODE,
     isDevBuild = false,
     openDataDir,
-    setDevAppearanceMode,
     settingsDraft,
     updateSettingsDraftAndSave
 }) {
@@ -52,36 +48,6 @@ export default function GeneralSettingsTab({
                     })}
                 </div>
             </section>
-
-            {isDevBuild && (
-                <section className="settings-section">
-                    <div className="settings-section-head">
-                        <div className="settings-section-title">运行外观</div>
-                    </div>
-
-                    <div className="settings-option-list settings-option-list-inline">
-                        {DEV_APPEARANCE_OPTIONS.map(option => {
-                            const active = devAppearanceMode === option.value;
-                            return (
-                                <button
-                                    key={option.value}
-                                    type="button"
-                                    className={`settings-option ${active ? 'active' : ''}`}
-                                    onClick={() => setDevAppearanceMode(option.value)}
-                                >
-                                    <span className="settings-option-radio" aria-hidden="true">
-                                        <span className="settings-option-dot" />
-                                    </span>
-                                    <span className="settings-option-text">
-                                        <span className="settings-option-title">{option.title}</span>
-                                        <span className="settings-option-desc">{option.desc}</span>
-                                    </span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </section>
-            )}
 
             <section className="settings-section">
                 <div className="settings-section-head">

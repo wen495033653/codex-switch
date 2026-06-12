@@ -182,6 +182,11 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "active_api_profile_id": api_profiles_state.active_id,
         "api_profiles": api_profiles_state.profiles,
         "api_mode": api_profiles_state.active_profile,
+        "api_test_results": data
+            .get("api_test_results")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({})),
         "window_bounds": {
             "width": width,
             "height": height

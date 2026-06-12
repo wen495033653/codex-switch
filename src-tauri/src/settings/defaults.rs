@@ -55,6 +55,7 @@ pub(crate) fn default_settings() -> Value {
         "active_api_profile_id": DEFAULT_API_PROFILE_ID,
         "api_profiles": default_api_profiles(),
         "api_mode": default_api_mode(),
+        "api_test_results": {},
         "window_bounds": {
             "width": 0,
             "height": 0

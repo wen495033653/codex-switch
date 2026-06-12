@@ -66,6 +66,10 @@
   width: 560px;
 }
 
+.modal-content-xxl {
+  width: min(760px, calc(100vw - 32px));
+}
+
 .modal-title {
   margin: 0 0 20px;
   font-size: 18px;

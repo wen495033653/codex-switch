@@ -28,20 +28,6 @@ import {
 } from './hooks';
 
 const IS_DEV_BUILD = import.meta.env.DEV;
-const DEV_APPEARANCE_STORAGE_KEY = 'codex-switch-dev-appearance-mode';
-
-function normalizeDevAppearanceMode(value) {
-  return value === 'release' ? 'release' : 'dev';
-}
-
-function readDevAppearanceMode() {
-  if (!IS_DEV_BUILD || typeof window === 'undefined') return 'dev';
-  try {
-    return normalizeDevAppearanceMode(window.localStorage.getItem(DEV_APPEARANCE_STORAGE_KEY));
-  } catch (_err) {
-    return 'dev';
-  }
-}
 
 export default function App() {
   if (IS_DEV_BUILD && isDevLogWindow()) {
@@ -97,15 +83,10 @@ function MainApp() {
   const [viewMode, setViewMode] = useState('accounts');
   const [settingsTab, setSettingsTab] = useState('general');
   const [appVersion, setAppVersion] = useState('');
-  const [devAppearanceMode, setDevAppearanceMode] = useState(readDevAppearanceMode);
   const [dataDir, setDataDir] = useState('');
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
-  const devBuildAppearanceActive = IS_DEV_BUILD && devAppearanceMode !== 'release';
-  const displayAppVersion = IS_DEV_BUILD && devAppearanceMode === 'release'
-    ? appVersion.replace(/-dev$/, '')
-    : appVersion;
   const { message, toast, toastError } = useToast();
   const openDevLogWindow = async () => {
     if (!window.api || typeof window.api.openDevLogWindow !== 'function') {
@@ -383,26 +364,13 @@ function MainApp() {
   useEffect(() => {
     if (!IS_DEV_BUILD) return undefined;
     const baseTitle = (document.title || 'Codex Switch').replace(/^\[DEV\]\s*/, '') || 'Codex Switch';
-    document.title = devBuildAppearanceActive ? `[DEV] ${baseTitle}` : baseTitle;
-    if (devBuildAppearanceActive) {
-      document.documentElement.dataset.build = 'dev';
-    } else {
-      delete document.documentElement.dataset.build;
-    }
+    document.title = `[DEV] ${baseTitle}`;
+    document.documentElement.dataset.build = 'dev';
     return () => {
       document.title = baseTitle;
       delete document.documentElement.dataset.build;
     };
-  }, [devBuildAppearanceActive]);
-
-  useEffect(() => {
-    if (!IS_DEV_BUILD) return;
-    try {
-      window.localStorage.setItem(DEV_APPEARANCE_STORAGE_KEY, devAppearanceMode);
-    } catch (_err) {
-      // Ignore storage failures; this switch is only a dev-only view preference.
-    }
-  }, [devAppearanceMode]);
+  }, []);
 
   const openGptPoolLanding = async () => {
     try {
@@ -424,16 +392,29 @@ function MainApp() {
   });
 
   const apiProfileBusy = savingApiMode || savingApiProfile;
+  const saveApiTestResults = async (apiTestResults) => {
+    const nextApiTestResults = apiTestResults && typeof apiTestResults === 'object'
+      ? apiTestResults
+      : {};
+    setSettings(prev => ({ ...prev, api_test_results: nextApiTestResults }));
+    setSettingsDraft(prev => ({ ...prev, api_test_results: nextApiTestResults }));
+    try {
+      const res = await window.api.updateSettings({ api_test_results: nextApiTestResults });
+      applySettings(res);
+    } catch (err) {
+      toastError(err, '保存 API 检查结果失败', 7000);
+    }
+  };
 
   return (
-    <div className={`app${devBuildAppearanceActive ? ' dev-build' : ''}`}>
+    <div className={`app${IS_DEV_BUILD ? ' dev-build' : ''}`}>
       <AppNavbar
         apiModeActive={apiModeActive}
         currentModeDetail={currentModeDetail}
         currentModeLabel={currentModeLabel}
         devErrorCount={devDiagnostics.errorCount}
         devLogCount={devDiagnostics.totalCount}
-        isDevBuild={devBuildAppearanceActive}
+        isDevBuild={IS_DEV_BUILD}
         onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
@@ -452,11 +433,10 @@ function MainApp() {
             settingsDraft,
             setSettingsDraft,
             dataDir,
-            appVersion: displayAppVersion,
+            appVersion,
             accounts: store.accounts,
             checkingUpdate,
             codexSessionSyncEnabled,
-            devAppearanceMode,
             isDevBuild: IS_DEV_BUILD,
             maskAccountName,
             savingCodexProxyEnv,
@@ -470,7 +450,6 @@ function MainApp() {
             setCodexRemoteControlAccountId,
             setCodexRemoteControlEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
-            setDevAppearanceMode: mode => setDevAppearanceMode(normalizeDevAppearanceMode(mode)),
             switching,
             updateSettingsDraftAndSave,
             normalizeBackgroundRefreshInterval,
@@ -484,10 +463,12 @@ function MainApp() {
             activeApiProfileId,
             apiModeActive,
             apiProfiles,
+            apiTestResults: settings.api_test_results,
             onAddApiProfile: addApiProfile,
             onDeleteApiProfile: openDeleteApiProfileModal,
             onEditApiProfile: editApiProfile,
             onOpenCodexConfigToml: openCodexConfigToml,
+            onSaveApiTestResults: saveApiTestResults,
             onSwitchToApiMode: switchToApiModeFromPage,
             savingApiMode: apiProfileBusy,
             switching

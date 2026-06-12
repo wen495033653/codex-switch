@@ -107,20 +107,41 @@
   .action-bar .btn-icon-only {
     padding: 0;
   }
+
+  .api-console-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
   .navbar {
+    height: auto;
+    min-height: 160px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    align-items: center;
     gap: 8px;
+    row-gap: 8px;
+    padding-bottom: 8px;
   }
 
   .current-mode-pill {
+    order: 3;
+    flex: 0 1 150px;
     max-width: 150px;
     padding: 0 10px;
   }
 
   .brand {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 16px;
+  }
+
+  .brand span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .brand-mark {
@@ -129,16 +150,37 @@
     flex-basis: 40px;
   }
 
+  .dev-build-chip {
+    order: 2;
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .dev-build-chip-main {
+    display: none;
+  }
+
+  .top-nav-tabs {
+    order: 4;
+    position: static;
+    width: 100%;
+    flex: 1 0 100%;
+    transform: none;
+    justify-content: space-between;
+  }
+
+  .top-nav-item {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
   .nav-item {
     min-width: 58px;
     padding: 5px 9px;
     font-size: 11px;
-  }
-
-  .top-nav-item {
-    min-width: 58px;
-    padding: 0 12px;
-    font-size: 12px;
   }
 
   .api-mode-page {
@@ -169,6 +211,20 @@
   .api-profile-grid {
     grid-template-columns: 1fr;
   }
+
+  .api-check-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .api-test-chat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .api-test-chat-pane + .api-test-chat-pane {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
 }
 
 @media (max-width: 720px) {
@@ -177,7 +233,7 @@
   }
 
   .navbar {
-    padding: 12px 16px 0 16px;
+    padding: 12px 16px 8px 16px;
   }
 
   .action-bar {

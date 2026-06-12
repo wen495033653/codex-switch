@@ -49,7 +49,8 @@ export const DEFAULT_SETTINGS = {
   ui_theme: 'light',
   active_api_profile_id: DEFAULT_API_PROFILE_ID,
   api_profiles: [DEFAULT_API_PROFILE],
-  api_mode: DEFAULT_API_PROFILE
+  api_mode: DEFAULT_API_PROFILE,
+  api_test_results: {}
 };
 
 export const DEFAULT_CODEX_STATE = {

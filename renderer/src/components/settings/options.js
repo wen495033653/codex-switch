@@ -1,6 +1,5 @@
 export const DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES = 30;
 export const DEFAULT_UI_THEME = 'light';
-export const DEFAULT_DEV_APPEARANCE_MODE = 'dev';
 
 export const ACCOUNT_NAME_DISPLAY_OPTIONS = [
     {
@@ -38,19 +37,6 @@ export const UI_THEME_OPTIONS = [
         value: 'light',
         title: '白色模式',
         desc: '切换为浅色界面。'
-    }
-];
-
-export const DEV_APPEARANCE_OPTIONS = [
-    {
-        value: 'release',
-        title: '正式版外观',
-        desc: '隐藏 DEV 水印和开发日志入口。'
-    },
-    {
-        value: 'dev',
-        title: 'Dev 版外观',
-        desc: '显示 DEV 水印和开发日志入口。'
     }
 ];
 

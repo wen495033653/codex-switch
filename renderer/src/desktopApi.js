@@ -67,7 +67,8 @@ const COMMAND_BINDINGS = {
   dismissUpdateVersion: ['dismiss_update_version', version => ({ version })],
   testApiBaseUrl: ['test_api_base_url', payload => ({
     baseUrl: payload && payload.baseUrl ? payload.baseUrl : '',
-    apiKey: payload && payload.apiKey ? payload.apiKey : ''
+    apiKey: payload && payload.apiKey ? payload.apiKey : '',
+    model: payload && payload.model ? payload.model : ''
   })],
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
