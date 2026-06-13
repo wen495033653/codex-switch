@@ -171,7 +171,6 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "codex_remote_control_enabled": bool_field(data, "codex_remote_control_enabled")
             || bool_field(data, "codex_remote_control_hook_enabled"),
         "codex_remote_control_account_id": string_field(data, "codex_remote_control_account_id"),
-        "codex_computer_use_repair_guard_enabled": bool_field(data, "codex_computer_use_repair_guard_enabled"),
         "codex_delete_button_enabled": bool_field(data, "codex_delete_button_enabled"),
         "codex_session_sync_enabled": data
             .get("codex_session_sync_enabled")
@@ -338,20 +337,6 @@ mod tests {
                 .get("codex_remote_control_account_id")
                 .and_then(Value::as_str),
             Some("acct-remote")
-        );
-    }
-
-    #[test]
-    fn normalize_settings_preserves_codex_computer_use_repair_guard_enabled() {
-        let settings = normalize_settings(&json!({
-            "codex_computer_use_repair_guard_enabled": true
-        }));
-
-        assert_eq!(
-            settings
-                .get("codex_computer_use_repair_guard_enabled")
-                .and_then(Value::as_bool),
-            Some(true)
         );
     }
 

@@ -41,17 +41,6 @@ html[data-theme="light"] .settings-remote-control-switch.active {
   border-color: rgba(37, 99, 235, 0.42);
 }
 
-html[data-theme="light"] .settings-computer-use-repair-button {
-  color: #047857;
-  border-color: rgba(4, 120, 87, 0.26);
-  background: rgba(16, 185, 129, 0.08);
-}
-
-html[data-theme="light"] .settings-computer-use-repair-button:hover {
-  border-color: rgba(4, 120, 87, 0.36);
-  background: rgba(16, 185, 129, 0.12);
-}
-
 html[data-theme="light"] .settings-refresh-section {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.84));

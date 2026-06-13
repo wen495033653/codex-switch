@@ -90,7 +90,6 @@ fn main() {
                 Arc::clone(app.state::<Arc<RefreshAllRuntime>>().inner()),
             );
             codex_launcher::start_codex_app_watcher();
-            codex_launcher::start_computer_use_repair_guard();
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -115,9 +114,6 @@ fn main() {
             codex_launcher::set_codex_remote_control_account_id,
             codex_launcher::set_codex_remote_control_enabled,
             codex_launcher::get_codex_remote_control_status,
-            codex_launcher::get_computer_use_repair_status,
-            codex_launcher::repair_computer_use_plugin,
-            codex_launcher::set_computer_use_repair_guard_enabled,
             codex_launcher::get_current_codex_app_processes,
             codex_launcher::restart_current_codex_app_for_plugin_setting,
             codex_launcher::restart_current_codex_app_normal,

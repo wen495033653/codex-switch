@@ -45,11 +45,6 @@ const COMMAND_BINDINGS = {
   restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
   getCodexRemoteControlStatus: ['get_codex_remote_control_status'],
-  getComputerUseRepairStatus: ['get_computer_use_repair_status'],
-  repairComputerUsePlugin: ['repair_computer_use_plugin'],
-  setComputerUseRepairGuardEnabled: ['set_computer_use_repair_guard_enabled', enabled => ({
-    enabled: Boolean(enabled)
-  })],
   setCodexRemoteControlAccountId: ['set_codex_remote_control_account_id', id => ({ id })],
   setCodexRemoteControlEnabled: ['set_codex_remote_control_enabled', payload => ({
     enabled: Boolean(payload && payload.enabled)

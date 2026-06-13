@@ -47,7 +47,6 @@ pub(crate) fn default_settings() -> Value {
         "codex_plugins_enabled": false,
         "codex_remote_control_enabled": false,
         "codex_remote_control_account_id": "",
-        "codex_computer_use_repair_guard_enabled": false,
         "codex_delete_button_enabled": false,
         "codex_session_sync_enabled": true,
         "codex_active_mode": "",

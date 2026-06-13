@@ -34,7 +34,6 @@ pub(crate) struct IdeRuntime {
 mod codex_app;
 mod codex_app_open;
 mod codex_app_watcher;
-mod computer_use_repair;
 mod ide_snapshot;
 mod plugins;
 mod process_control;
@@ -44,7 +43,6 @@ mod shell;
 
 pub(crate) use codex_app::*;
 pub(crate) use codex_app_watcher::{CodexAppOpenOutcome, CodexProcess};
-pub(crate) use computer_use_repair::*;
 pub(crate) use ide_snapshot::*;
 pub(crate) use plugins::*;
 pub(crate) use process_control::*;
