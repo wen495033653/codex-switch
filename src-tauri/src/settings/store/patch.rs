@@ -186,6 +186,12 @@ pub(super) fn apply_settings_patch(
             Value::String(string_field(patch, "codex_remote_control_account_id")),
         );
     }
+    if has_key(patch, "codex_computer_use_repair_guard_enabled") {
+        object.insert(
+            "codex_computer_use_repair_guard_enabled".to_string(),
+            Value::Bool(bool_field(patch, "codex_computer_use_repair_guard_enabled")),
+        );
+    }
     if has_key(patch, "codex_delete_button_enabled") {
         object.insert(
             "codex_delete_button_enabled".to_string(),
@@ -521,6 +527,26 @@ mod tests {
                 .get("codex_remote_control_account_id")
                 .and_then(Value::as_str),
             Some("acct-remote")
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_codex_computer_use_repair_guard_enabled() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_computer_use_repair_guard_enabled": true
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object
+                .get("codex_computer_use_repair_guard_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
 import { getAccountName, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 
@@ -20,6 +20,22 @@ function formatRemoteControlAccountLabel(account, maskAccountName) {
     const details = [plan, accountTag].filter(Boolean);
     const label = displayName || accountId || '账号数据异常';
     return details.length ? `${label} · ${details.join(' · ')}` : label;
+}
+
+function errorMessage(err, fallback) {
+    if (err && err.message) return err.message;
+    if (typeof err === 'string' && err.trim()) return err;
+    return fallback;
+}
+
+function compactPath(path) {
+    const value = String(path || '').trim();
+    if (!value) return '--';
+    const normalized = value.replaceAll('\\', '/');
+    const marker = '/.codex/';
+    const index = normalized.toLowerCase().indexOf(marker);
+    if (index >= 0) return `~${normalized.slice(index)}`;
+    return value;
 }
 
 export default function ProxySettingsTab({
@@ -46,6 +62,7 @@ export default function ProxySettingsTab({
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
     const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
     const codexRemoteControlEnabled = settingsDraft.codex_remote_control_enabled === true;
+    const computerUseRepairGuardEnabled = settingsDraft.codex_computer_use_repair_guard_enabled === true;
     const remoteControlAccountId = String(settingsDraft.codex_remote_control_account_id || '').trim();
     const remoteControlAccounts = Array.isArray(accounts)
         ? accounts.filter(account => !isApiModeAccount(account) && getAccountId(account))
@@ -84,6 +101,34 @@ export default function ProxySettingsTab({
         backendEnvironment: null,
         connectionStatus: null
     });
+    const [computerUseRepairStatus, setComputerUseRepairStatus] = useState({
+        loading: true,
+        error: '',
+        data: null
+    });
+    const [repairingComputerUse, setRepairingComputerUse] = useState(false);
+    const [savingComputerUseGuard, setSavingComputerUseGuard] = useState(false);
+
+    const refreshComputerUseRepairStatus = useCallback(async () => {
+        if (!window.api || !window.api.getComputerUseRepairStatus) {
+            setComputerUseRepairStatus({ loading: false, error: '', data: null });
+            return null;
+        }
+
+        setComputerUseRepairStatus(prev => ({ ...prev, loading: true, error: '' }));
+        try {
+            const result = await window.api.getComputerUseRepairStatus();
+            setComputerUseRepairStatus({ loading: false, error: '', data: result || null });
+            return result || null;
+        } catch (err) {
+            setComputerUseRepairStatus({
+                loading: false,
+                error: errorMessage(err, '读取 Computer Use 状态失败'),
+                data: null
+            });
+            return null;
+        }
+    }, []);
 
     useEffect(() => {
         let disposed = false;
@@ -184,6 +229,53 @@ export default function ProxySettingsTab({
         };
     }, [codexRemoteControlEnabled, remoteControlAccountId]);
 
+    useEffect(() => {
+        refreshComputerUseRepairStatus();
+        const timer = window.setInterval(refreshComputerUseRepairStatus, 5000);
+        return () => window.clearInterval(timer);
+    }, [refreshComputerUseRepairStatus]);
+
+    const repairComputerUsePlugin = async () => {
+        if (repairingComputerUse || !window.api || !window.api.repairComputerUsePlugin) return;
+        setRepairingComputerUse(true);
+        try {
+            const result = await window.api.repairComputerUsePlugin();
+            const status = result && result.status ? result.status : await refreshComputerUseRepairStatus();
+            setComputerUseRepairStatus({ loading: false, error: '', data: status || null });
+        } catch (err) {
+            setComputerUseRepairStatus(prev => ({
+                ...prev,
+                loading: false,
+                error: errorMessage(err, '修复 Computer Use 失败')
+            }));
+        } finally {
+            setRepairingComputerUse(false);
+        }
+    };
+
+    const setComputerUseRepairGuardEnabled = async (enabled) => {
+        if (savingComputerUseGuard || !window.api || !window.api.setComputerUseRepairGuardEnabled) return;
+        setSavingComputerUseGuard(true);
+        setSettingsDraft(prev => ({ ...prev, codex_computer_use_repair_guard_enabled: enabled }));
+        try {
+            const result = await window.api.setComputerUseRepairGuardEnabled(enabled);
+            if (result && result.settings) {
+                setSettingsDraft(result.settings);
+            }
+            if (result && result.status) {
+                setComputerUseRepairStatus({ loading: false, error: '', data: result.status });
+            }
+        } catch (err) {
+            setSettingsDraft(prev => ({ ...prev, codex_computer_use_repair_guard_enabled: !enabled }));
+            setComputerUseRepairStatus(prev => ({
+                ...prev,
+                error: errorMessage(err, '保存 Computer Use 守护修复设置失败')
+            }));
+        } finally {
+            setSavingComputerUseGuard(false);
+        }
+    };
+
     const codexAppPidText = codexAppProcessStatus.loading
         ? '检测中'
         : codexAppProcessStatus.error || (codexAppProcessStatus.pids.length ? codexAppProcessStatus.pids.join(', ') : '未检测到');
@@ -241,6 +333,39 @@ export default function ProxySettingsTab({
             : codexRemoteControlEnabled
                 ? '已启用'
                 : '启用';
+    const computerUseData = computerUseRepairStatus.data || null;
+    const computerUseStatus = computerUseData && computerUseData.status ? computerUseData.status : '';
+    const computerUseStatusState = computerUseRepairStatus.error
+        ? 'error'
+        : computerUseStatus === 'ok'
+            ? 'active'
+            : computerUseStatus === 'repairable'
+                ? 'warning'
+                : computerUseRepairStatus.loading
+                    ? 'muted'
+                    : 'error';
+    const computerUseStatusText = computerUseRepairStatus.loading
+        ? '检测中'
+        : computerUseRepairStatus.error
+            ? computerUseRepairStatus.error
+            : computerUseData && computerUseData.message
+                ? computerUseData.message
+                : '未检测';
+    const computerUseActive = computerUseData && computerUseData.active ? computerUseData.active : null;
+    const computerUseSource = computerUseData && computerUseData.source ? computerUseData.source : null;
+    const computerUseActiveText = computerUseActive && computerUseActive.valid
+        ? `${computerUseActive.version || '已安装'} · ${computerUseActive.fileCount || 0} files`
+        : computerUseActive
+            ? '缺失或不完整'
+            : '--';
+    const computerUseSourceText = computerUseSource
+        ? `${computerUseSource.version || '未知版本'} · ${computerUseSource.origin || 'local'} · ${computerUseSource.fileCount || 0} files`
+        : '未找到';
+    const computerUseRepairDisabled = repairingComputerUse
+        || computerUseRepairStatus.loading
+        || !computerUseData
+        || !computerUseData.needsRepair
+        || !computerUseData.repairAvailable;
 
     return (
         <>
@@ -306,6 +431,73 @@ export default function ProxySettingsTab({
                 >
                     <span className="settings-toggle-copy">
                         <span className="settings-toggle-title">启用</span>
+                    </span>
+                    <span className="settings-switch" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                    </span>
+                </button>
+            </section>
+
+            <section className="settings-section settings-app-card-section settings-computer-use-section">
+                <div className="settings-computer-use-topbar">
+                    <div className="settings-remote-control-title-group">
+                        <div className="settings-section-title">Computer Use 修复</div>
+                        <div
+                            className={`settings-remote-control-status-badge ${computerUseStatusState}`}
+                            title={computerUseStatusText}
+                        >
+                            <span className="settings-remote-control-status-dot" aria-hidden="true" />
+                            <span className="settings-remote-control-status-text">{computerUseStatusText}</span>
+                        </div>
+                    </div>
+                    <div className="settings-computer-use-actions">
+                        <button
+                            type="button"
+                            className="settings-codex-app-restart-button"
+                            disabled={computerUseRepairStatus.loading}
+                            onClick={refreshComputerUseRepairStatus}
+                        >
+                            检查
+                        </button>
+                        <button
+                            type="button"
+                            className="settings-computer-use-repair-button"
+                            disabled={computerUseRepairDisabled}
+                            onClick={repairComputerUsePlugin}
+                        >
+                            {repairingComputerUse ? '修复中...' : '修复'}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="settings-computer-use-grid">
+                    <div className="settings-computer-use-meta">
+                        <span className="settings-inline-field-label">active 插件</span>
+                        <strong title={computerUseActive && computerUseActive.path}>{computerUseActiveText}</strong>
+                    </div>
+                    <div className="settings-computer-use-meta">
+                        <span className="settings-inline-field-label">修复来源</span>
+                        <strong title={computerUseSource && computerUseSource.path}>{computerUseSourceText}</strong>
+                    </div>
+                    <div className="settings-computer-use-meta settings-computer-use-meta-wide">
+                        <span className="settings-inline-field-label">marketplace</span>
+                        <strong title={computerUseData && computerUseData.marketplace && computerUseData.marketplace.path}>
+                            {compactPath(computerUseData && computerUseData.marketplace && computerUseData.marketplace.path)}
+                        </strong>
+                    </div>
+                </div>
+
+                <button
+                    type="button"
+                    className={`settings-toggle-row ${computerUseRepairGuardEnabled ? 'active' : ''}`}
+                    aria-pressed={computerUseRepairGuardEnabled}
+                    aria-label={computerUseRepairGuardEnabled ? '关闭 Computer Use 自动守护修复' : '开启 Computer Use 自动守护修复'}
+                    disabled={savingComputerUseGuard}
+                    onClick={() => setComputerUseRepairGuardEnabled(!computerUseRepairGuardEnabled)}
+                >
+                    <span className="settings-toggle-copy">
+                        <span className="settings-toggle-title">自动守护修复</span>
+                        <span className="settings-toggle-desc">Codex app 更新覆盖后，从本机完整缓存恢复 Computer Use</span>
                     </span>
                     <span className="settings-switch" aria-hidden="true">
                         <span className="settings-switch-thumb" />
