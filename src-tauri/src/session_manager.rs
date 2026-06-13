@@ -1,7 +1,7 @@
 use crate::{
     codex_sessions::lock_codex_session_io,
     json_util::raw_string_field,
-    paths::{app_data_dir, codex_dir},
+    paths::{app_data_dir, codex_dir, codex_state_db_path_from_home},
     time_util::{now_string, parse_rfc3339_seconds},
 };
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
@@ -712,14 +712,15 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
     } else {
         None
     };
-    let state_backup_path = if root.join("state_5.sqlite").exists()
+    let state_db = codex_state_db_path_from_home(&root);
+    let state_backup_path = if state_db.exists()
         && candidates.iter().any(|candidate| {
             matches!(
                 candidate.action,
                 ImportAction::Import | ImportAction::SkipSame
             )
         }) {
-        Some(backup_file(&root.join("state_5.sqlite"))?)
+        Some(backup_file(&state_db)?)
     } else {
         None
     };
@@ -758,7 +759,7 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
 
     let mut sqlite_updated = 0usize;
     let mut sqlite_error = None;
-    if root.join("state_5.sqlite").exists() && !index_updates.is_empty() {
+    if state_db.exists() && !index_updates.is_empty() {
         let mut thread_metadata = Vec::new();
         for candidate in candidates.iter().filter(|candidate| {
             matches!(
@@ -1724,7 +1725,7 @@ fn resolve_codex_root(root: Option<&str>) -> Result<PathBuf, String> {
 fn find_session_relative_paths_by_id(root: &Path, session_id: &str) -> Result<Vec<String>, String> {
     let variants = session_id_variants(session_id);
     let mut relative_paths = Vec::new();
-    let state_db = root.join("state_5.sqlite");
+    let state_db = codex_state_db_path_from_home(root);
     if state_db.exists() {
         let connection = Connection::open_with_flags(
             &state_db,
@@ -1996,7 +1997,7 @@ fn append_missing_state_thread_conversations(
     conversations: &mut Vec<ConversationItem>,
     warnings: &mut Vec<String>,
 ) {
-    let state_db = root.join("state_5.sqlite");
+    let state_db = codex_state_db_path_from_home(root);
     if !state_db.exists() {
         return;
     }
@@ -2862,7 +2863,7 @@ fn upsert_state_threads(root: &Path, items: &[ThreadMetadata]) -> Result<usize, 
     if items.is_empty() {
         return Ok(0);
     }
-    let state_db = root.join("state_5.sqlite");
+    let state_db = codex_state_db_path_from_home(root);
     if !state_db.exists() {
         return Ok(0);
     }
@@ -3057,7 +3058,7 @@ fn update_state_thread_status(
     if moves.is_empty() {
         return Ok(None);
     }
-    let state_db = root.join("state_5.sqlite");
+    let state_db = codex_state_db_path_from_home(root);
     if !state_db.exists() {
         return Ok(None);
     }
@@ -3111,7 +3112,7 @@ fn delete_state_threads_for_sessions(
     ids: &[String],
     rollout_paths: &[PathBuf],
 ) -> Result<StateThreadDeleteReport, String> {
-    let state_db = root.join("state_5.sqlite");
+    let state_db = codex_state_db_path_from_home(root);
     if !state_db.exists() {
         return Ok(StateThreadDeleteReport::default());
     }
@@ -3308,7 +3309,7 @@ fn state_table_has_columns(
 }
 
 fn update_state_thread_cwds(root: &Path, items: &[(String, String)]) -> Result<usize, String> {
-    let state_db = root.join("state_5.sqlite");
+    let state_db = codex_state_db_path_from_home(root);
     if items.is_empty() || !state_db.exists() {
         return Ok(0);
     }
@@ -4354,6 +4355,48 @@ mod tests {
         assert_eq!(row.2, 1_700_000_120);
 
         drop(connection);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn upsert_state_threads_prefers_sqlite_state_db() {
+        let root = temp_path("upsert-prefers-sqlite");
+        let legacy_db = root.join("state_5.sqlite");
+        let sqlite_db = root.join("sqlite").join("state_5.sqlite");
+        for state_db in [&legacy_db, &sqlite_db] {
+            fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+            let connection = Connection::open(state_db).unwrap();
+            connection
+                .execute_batch(
+                    r#"
+                    CREATE TABLE threads (
+                        id TEXT PRIMARY KEY,
+                        rollout_path TEXT,
+                        title TEXT,
+                        updated_at INTEGER
+                    );
+                    "#,
+                )
+                .unwrap();
+        }
+
+        let item = sample_thread_metadata(root.join("sessions/rollout-thread-1.jsonl"));
+        let updated = upsert_state_threads(&root, &[item]).unwrap();
+        let legacy = Connection::open(&legacy_db).unwrap();
+        let sqlite = Connection::open(&sqlite_db).unwrap();
+        let legacy_count: i64 = legacy
+            .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
+            .unwrap();
+        let sqlite_count: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(updated, 1);
+        assert_eq!(legacy_count, 0);
+        assert_eq!(sqlite_count, 1);
+
+        drop(legacy);
+        drop(sqlite);
         fs::remove_dir_all(&root).unwrap();
     }
 

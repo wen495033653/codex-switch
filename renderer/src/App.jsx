@@ -414,6 +414,7 @@ function MainApp() {
         currentModeLabel={currentModeLabel}
         devErrorCount={devDiagnostics.errorCount}
         devLogCount={devDiagnostics.totalCount}
+        devWarningCount={devDiagnostics.warningCount}
         isDevBuild={IS_DEV_BUILD}
         onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}

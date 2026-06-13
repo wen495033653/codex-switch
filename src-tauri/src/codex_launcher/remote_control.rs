@@ -11,7 +11,9 @@ use crate::{
         sync_codex_rollout_files_to_provider_for_remote_control,
     },
     json_util::{bool_field, string_field},
-    paths::{app_data_dir, codex_dir, config_path, ensure_parent_dir},
+    paths::{
+        app_data_dir, codex_dir, codex_state_db_path_from_home, config_path, ensure_parent_dir,
+    },
     proxy_config::normalize_proxy_url,
     session_sync_diagnostics::log_session_sync_event,
     settings::{default_api_mode, read_settings_value, update_settings_value},
@@ -1268,7 +1270,7 @@ fn remote_control_api_key_from_home(home: &Path) -> Result<String, String> {
 }
 
 fn remote_control_state_db_path(home: &Path) -> PathBuf {
-    home.join("state_5.sqlite")
+    codex_state_db_path_from_home(home)
 }
 
 fn cleanup_remote_control_relay_enrollments(home: &Path) -> Result<usize, String> {
@@ -3154,7 +3156,7 @@ mod tests {
         let root = unique_remote_control_test_dir("state-root-copy");
         let remote = unique_remote_control_test_dir("state-remote-copy");
         let source_db = root.join("state_5.sqlite");
-        let target_db = remote.join("state_5.sqlite");
+        let target_db = remote.join("sqlite").join("state_5.sqlite");
         create_remote_control_history_state_db(&source_db);
         let source = Connection::open(&source_db).unwrap();
         source

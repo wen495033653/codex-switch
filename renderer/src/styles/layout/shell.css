@@ -130,7 +130,7 @@
 
 .current-mode-pill {
   margin-left: auto;
-  max-width: 360px;
+  max-width: min(30vw, 300px);
   height: 38px;
   padding: 0 13px;
   display: flex;
@@ -165,11 +165,13 @@
 }
 
 .current-mode-label {
+  flex: 0 0 auto;
   color: var(--text-primary);
   font-weight: 700;
 }
 
 .current-mode-detail {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

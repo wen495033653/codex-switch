@@ -2,7 +2,7 @@ use crate::{
     accounts::{get_codex_state_value, restore_api_mode_if_selected},
     api_config::API_PROVIDER_ID,
     json_util::raw_string_field,
-    paths::codex_dir,
+    paths::{codex_dir, codex_home_from_state_db_path, codex_state_db_path},
     session_sync_diagnostics::log_session_sync_event,
 };
 use rusqlite::{Connection, OpenFlags};
@@ -63,7 +63,7 @@ fn session_rollout_dir_paths() -> Result<Vec<PathBuf>, String> {
 }
 
 fn state_db_path() -> Result<PathBuf, String> {
-    Ok(codex_dir()?.join("state_5.sqlite"))
+    codex_state_db_path()
 }
 
 fn global_state_path() -> Result<PathBuf, String> {
@@ -969,12 +969,14 @@ fn update_model_provider_fields(value: &mut Value, target_provider: &str) -> boo
 }
 
 fn pinned_thread_rollout_paths_if_exists() -> Result<Vec<PathBuf>, String> {
-    pinned_thread_rollout_paths(&global_state_path()?, &state_db_path()?)
+    let codex_home = codex_dir()?;
+    pinned_thread_rollout_paths(&global_state_path()?, &state_db_path()?, &codex_home)
 }
 
 fn pinned_thread_rollout_paths(
     global_state: &Path,
     state_db: &Path,
+    codex_home: &Path,
 ) -> Result<Vec<PathBuf>, String> {
     if !global_state.exists() || !state_db.exists() {
         return Ok(Vec::new());
@@ -1022,7 +1024,9 @@ fn pinned_thread_rollout_paths(
             continue;
         }
         match statement.query_row([thread_id], |row| row.get::<_, String>(0)) {
-            Ok(path) if !path.trim().is_empty() => paths.push(PathBuf::from(path)),
+            Ok(path) if !path.trim().is_empty() => {
+                paths.push(state_thread_rollout_path(codex_home, &path))
+            }
             Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => {}
             Err(err) => {
                 return Err(format!(
@@ -1088,7 +1092,7 @@ fn collect_state_thread_sync_metadata(
         .map_err(|err| format!("读取 Codex state 会话 rollout 路径失败: {err}"))?;
 
     let mut metadata = StateThreadSyncMetadata::default();
-    let root = state_db.parent().unwrap_or_else(|| Path::new(""));
+    let root = codex_home_from_state_db_path(state_db);
     for row in rows {
         let (thread_id, rollout_path) =
             row.map_err(|err| format!("读取 Codex state 会话 rollout 路径失败: {err}"))?;
@@ -1099,7 +1103,7 @@ fn collect_state_thread_sync_metadata(
         if thread_id.is_empty() || rollout_path.trim().is_empty() {
             continue;
         }
-        let rollout_path = state_thread_rollout_path(root, &rollout_path);
+        let rollout_path = state_thread_rollout_path(&root, &rollout_path);
         let Some(rollout_metadata) = rollout_thread_metadata(&rollout_path)? else {
             continue;
         };

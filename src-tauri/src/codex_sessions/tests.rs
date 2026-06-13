@@ -332,7 +332,7 @@ fn sync_always_updates_pinned_rollouts() {
     )
     .unwrap();
 
-    let pinned_rollouts = pinned_thread_rollout_paths(&global_state, &state_db).unwrap();
+    let pinned_rollouts = pinned_thread_rollout_paths(&global_state, &state_db, &root).unwrap();
     let updated = sync_codex_session_rollout_dirs_to_provider(
         &[sessions_dir, archived_dir],
         "api",
@@ -622,6 +622,62 @@ fn sync_state_provider_updates_cwd_and_user_event_from_rollouts() {
                 1
             ),
         ]
+    );
+}
+
+#[test]
+fn sync_nested_state_db_resolves_relative_rollouts_from_codex_home() {
+    let temp_dir = unique_sessions_dir("nested-state-db-metadata");
+    let state_db = temp_dir.join("sqlite").join("state_5.sqlite");
+    let rollout = temp_dir.join("sessions").join("rollout-user.jsonl");
+    write_rollout_file_with_user_event(&rollout, "openai", "E:\\Project\\current");
+
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    connection
+        .execute(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                has_user_event INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                "thread-user",
+                "sessions/rollout-user.jsonl",
+                "openai",
+                "old-cwd",
+                0,
+            ),
+        )
+        .unwrap();
+    drop(connection);
+
+    let updated = sync_codex_state_threads_to_provider(&state_db, "api").unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    let row: (String, String, i64) = connection
+        .query_row(
+            "SELECT model_provider, cwd, has_user_event FROM threads WHERE id = 'thread-user'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    drop(connection);
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(updated, 3);
+    assert_eq!(
+        row,
+        ("api".to_string(), "E:\\Project\\current".to_string(), 1)
     );
 }
 
