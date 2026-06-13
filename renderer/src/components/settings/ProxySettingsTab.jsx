@@ -38,6 +38,16 @@ function compactPath(path) {
     return value;
 }
 
+function remoteControlRawMessage(...items) {
+    for (const item of items) {
+        const raw = item && Object.prototype.hasOwnProperty.call(item, 'raw') ? item.raw : item;
+        if (raw === null || raw === undefined) continue;
+        const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+        if (text && text.trim()) return text.trim();
+    }
+    return '';
+}
+
 export default function ProxySettingsTab({
     accounts = [],
     codexSessionSyncEnabled,
@@ -294,6 +304,11 @@ export default function ProxySettingsTab({
     const remoteControlBackendError = remoteControlStatus.backendError;
     const remoteControlHelperStatus = remoteControlStatus.helperStatus;
     const remoteControlConnectionStatus = remoteControlStatus.connectionStatus;
+    const remoteControlRawStatusMessage = remoteControlRawMessage(
+        remoteControlConnectionStatus,
+        remoteControlBackendError,
+        remoteControlHelperStatus
+    );
     const remoteControlStatusMessage = remoteControlStatus.error
         || (remoteControlConnectionStatus && remoteControlConnectionStatus.message)
         || (remoteControlBackendError && remoteControlBackendError.message)
@@ -309,7 +324,9 @@ export default function ProxySettingsTab({
         : codexRemoteControlPendingEnabled === false
             ? '关闭中'
             : '';
-    const remoteControlWarningStatus = remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
+    const remoteControlWarningStatus = remoteControlRawStatusMessage
+        ? remoteControlRawStatusMessage
+        : remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
         ? '需要 MFA'
         : (remoteControlStatusMessage || '需要重新登录').replace(/[。.]$/, '');
     const remoteControlDisplayStatus = remoteControlPendingStatus || (!codexRemoteControlEnabled
@@ -320,7 +337,7 @@ export default function ProxySettingsTab({
                 ? remoteControlWarningStatus
                 : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
     const remoteControlStatusTitle = remoteControlStatusState === 'warning'
-        ? remoteControlDisplayStatus
+        ? remoteControlRawStatusMessage || remoteControlDisplayStatus
         : '';
     const remoteControlMissingAccount = !codexRemoteControlEnabled && !remoteControlAccount;
     const remoteControlToggleDisabled = savingCodexRemoteControl
