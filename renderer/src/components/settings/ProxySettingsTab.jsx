@@ -600,7 +600,7 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-session-sync-section">
                 <div className="settings-section-head">
                     <div className="settings-section-title">会话同步</div>
-                    <div className="settings-section-desc">切换订阅/API 后同步历史会话的 provider、工作目录和列表索引</div>
+                    <div className="settings-section-desc">订阅/API 模式下会话列表保持同步</div>
                 </div>
                 <button
                     type="button"
