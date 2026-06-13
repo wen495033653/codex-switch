@@ -223,7 +223,7 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
         "codex_app_open_handler_start" => Some(pick_labeled_details(
             details,
             &[
-                ("pluginUnlockEnabled", "Plugin 解锁已启用"),
+                ("pluginUnlockEnabled", "Plugin 增强已启用"),
                 ("sessionSyncEnabled", "会话同步已启用"),
             ],
         )),

@@ -293,19 +293,19 @@ export default function ProxySettingsTab({
 
             <section className="settings-section settings-app-card-section settings-plugin-section">
                 <div className="settings-section-head">
-                    <div className="settings-section-title">Plugin 支持</div>
-                    <div className="settings-section-desc">API 模式下显示 Plugin 入口，并允许安装可用项</div>
+                    <div className="settings-section-title">Plugin 增强</div>
+                    <div className="settings-section-desc">API 模式下扩展 Plugin 市场请求，尽量显示完整 Plugin 列表并保留安装能力</div>
                 </div>
                 <button
                     type="button"
                     className={`settings-toggle-row ${codexPluginsEnabled ? 'active' : ''}`}
                     aria-pressed={codexPluginsEnabled}
-                    aria-label={codexPluginsEnabled ? '关闭 Plugin 支持' : '开启 Plugin 支持'}
+                    aria-label={codexPluginsEnabled ? '关闭 Plugin 增强' : '开启 Plugin 增强'}
                     disabled={switching}
                     onClick={() => updateSettingsDraftAndSave({ codex_plugins_enabled: !codexPluginsEnabled })}
                 >
                     <span className="settings-toggle-copy">
-                        <span className="settings-toggle-title">启动</span>
+                        <span className="settings-toggle-title">启用</span>
                     </span>
                     <span className="settings-switch" aria-hidden="true">
                         <span className="settings-switch-thumb" />
