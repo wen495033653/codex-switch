@@ -1,6 +1,6 @@
 [package]
 name = "codex-switch"
-version = "5.2.6"
+version = "5.2.7"
 description = "Desktop tool for managing and switching Codex accounts."
 authors = ["Codex Switch contributors"]
 license = "MIT"
