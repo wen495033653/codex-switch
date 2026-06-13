@@ -419,7 +419,7 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-plugin-section">
                 <div className="settings-section-head">
                     <div className="settings-section-title">Plugin 增强</div>
-                    <div className="settings-section-desc">API 模式下扩展 Plugin 市场请求，尽量显示完整 Plugin 列表并保留安装能力</div>
+                    <div className="settings-section-desc">API 模式支持安装 Plugin</div>
                 </div>
                 <button
                     type="button"
