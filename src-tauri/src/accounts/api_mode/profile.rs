@@ -7,7 +7,12 @@ use model::ApiModeProfile;
 impl ApiModeProfile {
     pub(super) fn api_key_or_auth_file(&self) -> String {
         if self.api_key.is_empty() {
-            read_api_key_from_auth()
+            let provider_key = read_api_key_from_provider_config().trim().to_string();
+            if provider_key.is_empty() {
+                read_api_key_from_auth()
+            } else {
+                provider_key
+            }
         } else {
             self.api_key.clone()
         }
@@ -37,6 +42,31 @@ pub(crate) fn read_api_key_from_auth() -> String {
         .unwrap_or_default()
 }
 
+pub(crate) fn read_api_key_from_provider_config() -> String {
+    let model_provider = read_root_config()
+        .ok()
+        .and_then(|config| {
+            config
+                .get("model_provider")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    if model_provider.is_empty() {
+        return String::new();
+    }
+
+    read_table_config(&format!("model_providers.{model_provider}"))
+        .ok()
+        .and_then(|config| {
+            config
+                .get("experimental_bearer_token")
+                .and_then(Value::as_str)
+                .map(|value| value.trim().to_string())
+        })
+        .unwrap_or_default()
+}
+
 fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Value)> {
     vec![
         ("name", Value::String(API_PROVIDER_ID.to_string())),
@@ -48,7 +78,7 @@ fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Valu
 
 pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
     let profile = ApiModeProfile::from_value(profile)?;
-    let api_key = profile.api_key_or_auth_file();
+    let api_key = profile.api_key_or_auth_file().trim().to_string();
     write_api_auth(&api_key)?;
     set_config_values(vec![
         ("model_provider", API_PROVIDER_ID.to_string()),

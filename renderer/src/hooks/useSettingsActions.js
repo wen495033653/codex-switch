@@ -131,6 +131,10 @@ export function useSettingsActions({
       const res = await window.api.setCodexRemoteControlEnabled({ enabled });
       applySettings(res);
       toast((res && res.message) || (enabled ? 'app远程控制已启用' : 'app远程控制已关闭'));
+      if (res && res.restartRequired) {
+        setPluginRestartNoticeMessage('app远程控制配置已保存，重启 Codex app 后生效。');
+        setPluginRestartNoticeVisible(true);
+      }
     } catch (err) {
       setSettingsDraft(settings);
       toast(getErrorMessage(err, enabled ? '启用 app远程控制失败' : '关闭 app远程控制失败'), 7000);
@@ -154,6 +158,10 @@ export function useSettingsActions({
       const res = await window.api.setCodexRemoteControlAccountId(nextAccountId);
       applySettings(res);
       toast((res && res.message) || 'app远程控制账号已更新');
+      if (res && res.restartRequired) {
+        setPluginRestartNoticeMessage('app远程控制账号已更新，重启 Codex app 后生效。');
+        setPluginRestartNoticeVisible(true);
+      }
     } catch (err) {
       setSettingsDraft(settings);
       toast(getErrorMessage(err, '更新 app远程控制账号失败'), 7000);

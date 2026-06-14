@@ -11,7 +11,12 @@ pub(super) fn capture_current_impl() -> Result<Value, String> {
     let auth = read_auth_value()?;
     let codex_state = get_codex_state_value();
     if raw_string_field(&codex_state, "mode") == "api" {
-        let api_key = read_api_key_from_auth();
+        let provider_key = read_api_key_from_provider_config();
+        let api_key = if provider_key.is_empty() {
+            read_api_key_from_auth()
+        } else {
+            provider_key
+        };
         if !api_key.is_empty() {
             let current = read_settings_value()?;
             let current_api = current.get("api_mode").unwrap_or(&Value::Null);

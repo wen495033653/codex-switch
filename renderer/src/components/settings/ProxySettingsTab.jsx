@@ -232,6 +232,7 @@ export default function ProxySettingsTab({
             ? '关闭中'
             : '';
     const remoteControlWarningStatus = remoteControlRawStatusMessage
+        && !(remoteControlConnectionStatus && remoteControlConnectionStatus.message)
         ? remoteControlRawStatusMessage
         : remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
         ? '需要 MFA'
@@ -243,9 +244,9 @@ export default function ProxySettingsTab({
             : remoteControlStatusState === 'warning'
                 ? remoteControlWarningStatus
                 : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
-    const remoteControlStatusTitle = remoteControlStatusState === 'warning'
-        ? remoteControlRawStatusMessage || remoteControlDisplayStatus
-        : '';
+    const remoteControlStatusTitle = (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
+        || remoteControlRawStatusMessage
+        || (remoteControlStatusState === 'warning' ? remoteControlDisplayStatus : '');
     const remoteControlMissingAccount = !codexRemoteControlEnabled && !remoteControlAccount;
     const remoteControlToggleDisabled = savingCodexRemoteControl
         || switching

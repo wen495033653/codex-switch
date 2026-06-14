@@ -403,20 +403,6 @@ fn preview_codex_session_rollout_dirs_to_provider_with_diagnostics(
     preview_rollout_files_to_provider_with_diagnostics(rollout_files, target_provider, trigger)
 }
 
-pub(crate) fn collect_recent_codex_rollout_files_for_remote_control(
-    rollout_dirs: &[PathBuf],
-    limit: usize,
-) -> Result<Vec<PathBuf>, String> {
-    collect_recent_rollout_files_from_dirs(rollout_dirs, limit, &[])
-}
-
-pub(crate) fn sync_codex_rollout_files_to_provider_for_remote_control(
-    rollout_files: Vec<PathBuf>,
-    target_provider: &str,
-) -> Result<usize, String> {
-    sync_rollout_files_to_provider_with_diagnostics(rollout_files, target_provider, None)
-}
-
 fn sync_codex_session_rollout_dirs_to_provider_with_diagnostics_limit(
     rollout_dirs: &[PathBuf],
     target_provider: &str,

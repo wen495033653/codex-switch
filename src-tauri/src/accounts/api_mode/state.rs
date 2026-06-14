@@ -1,4 +1,7 @@
-use super::{profile::read_api_key_from_auth, *};
+use super::{
+    profile::{read_api_key_from_auth, read_api_key_from_provider_config},
+    *,
+};
 
 pub(crate) fn get_codex_state_value() -> Value {
     let auth = read_auth_value().unwrap_or_else(|_| json!({}));
@@ -49,7 +52,8 @@ pub(crate) fn get_codex_state_value() -> Value {
         .filter(|value| !value.is_empty())
         .unwrap_or(&provider_base_url)
         .to_string();
-    let api_key_present = !read_api_key_from_auth().is_empty();
+    let api_key_present =
+        !read_api_key_from_auth().is_empty() || !read_api_key_from_provider_config().is_empty();
     let account_id = auth
         .get("tokens")
         .and_then(|tokens| tokens.get("account_id"))
