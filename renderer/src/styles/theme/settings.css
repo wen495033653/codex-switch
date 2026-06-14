@@ -124,23 +124,6 @@ html[data-theme="light"] .settings-remote-control-status-badge.active {
   background: rgba(22, 163, 74, 0.08);
 }
 
-html[data-theme="light"] .settings-remote-control-account-current {
-  background: rgba(248, 250, 252, 0.9);
-  border-color: var(--border-app);
-}
-
-html[data-theme="light"] .settings-remote-control-account-current.active {
-  color: #1d4ed8;
-  border-color: rgba(37, 99, 235, 0.22);
-  background: rgba(37, 99, 235, 0.06);
-}
-
-html[data-theme="light"] .settings-remote-control-account-current.error {
-  color: #b91c1c;
-  border-color: rgba(185, 28, 28, 0.22);
-  background: rgba(220, 38, 38, 0.07);
-}
-
 html[data-theme="light"] .settings-option-title {
   color: #1e293b;
 }

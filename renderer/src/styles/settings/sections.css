@@ -142,14 +142,12 @@
 
 .settings-remote-control-account-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(180px, 0.65fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: end;
   min-width: 0;
 }
 
-.settings-remote-control-account-field,
-.settings-remote-control-account-meta {
+.settings-remote-control-account-field {
   display: grid;
   gap: 8px;
   min-width: 0;
@@ -189,33 +187,6 @@
   opacity: 0.45;
 }
 
-.settings-remote-control-account-current {
-  min-height: 38px;
-  padding: 9px 11px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.settings-remote-control-account-current.active {
-  color: #bfdbfe;
-  border-color: rgba(96, 165, 250, 0.28);
-  background: rgba(96, 165, 250, 0.08);
-}
-
-.settings-remote-control-account-current.error {
-  color: #fca5a5;
-  border-color: rgba(252, 165, 165, 0.28);
-  background: rgba(239, 68, 68, 0.08);
-}
-
 @media (max-width: 720px) {
   .settings-remote-control-topbar {
     flex-direction: column;
@@ -226,7 +197,4 @@
     width: 100%;
   }
 
-  .settings-remote-control-account-grid {
-    grid-template-columns: 1fr;
-  }
 }

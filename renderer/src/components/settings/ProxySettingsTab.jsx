@@ -72,11 +72,6 @@ export default function ProxySettingsTab({
         : remoteControlAccountId
             ? '账号不存在，请重新选择'
             : '未选择';
-    const remoteControlAccountState = remoteControlAccountId && !remoteControlAccount
-        ? 'error'
-        : remoteControlAccount
-            ? 'active'
-            : 'muted';
     const codexDeleteButtonEnabled = settingsDraft.codex_delete_button_enabled === true;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex app 或 VS Code 前同步会话列表。';
@@ -258,6 +253,13 @@ export default function ProxySettingsTab({
             : codexRemoteControlEnabled
                 ? '已启用'
                 : '启用';
+    const remoteControlAccountSelectDisabled = codexRemoteControlEnabled
+        || savingCodexRemoteControl
+        || switching
+        || remoteControlAccounts.length === 0;
+    const remoteControlAccountSelectTitle = codexRemoteControlEnabled
+        ? '关闭 app远程控制后可切换控制账号'
+        : remoteControlAccountLabel;
     return (
         <>
             <section className="settings-codex-app-pid-card" aria-label="当前 Codex app PID">
@@ -360,12 +362,13 @@ export default function ProxySettingsTab({
                 </div>
                 <div className="settings-remote-control-account-grid">
                     <label className="settings-remote-control-account-field">
-                        <span className="settings-inline-field-label">控制账号</span>
+                        <span className="settings-inline-field-label">控制账号（app登录账号）</span>
                         <div className="settings-remote-control-account-select-wrap">
                             <select
                                 className="settings-input settings-select settings-remote-control-account-select"
                                 value={remoteControlSelectedAccountId}
-                                disabled={savingCodexRemoteControl || switching || remoteControlAccounts.length === 0}
+                                disabled={remoteControlAccountSelectDisabled}
+                                title={remoteControlAccountSelectTitle}
                                 onChange={e => setCodexRemoteControlAccountId(e.target.value)}
                             >
                                 <option value="">未选择</option>
@@ -387,15 +390,6 @@ export default function ProxySettingsTab({
                             />
                         </div>
                     </label>
-                    <div className="settings-remote-control-account-meta">
-                        <span className="settings-inline-field-label">当前账号</span>
-                        <div
-                            className={`settings-remote-control-account-current ${remoteControlAccountState}`}
-                            title={remoteControlAccountId || remoteControlAccountLabel}
-                        >
-                            {remoteControlAccountLabel}
-                        </div>
-                    </div>
                 </div>
             </section>
 
