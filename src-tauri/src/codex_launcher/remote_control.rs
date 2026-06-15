@@ -1,9 +1,9 @@
 use super::{json_as_array, kill_process_tree, parse_json_output, run_pwsh};
 use crate::{
     accounts::{
-        find_store_account, profile_id_from_account, profile_id_from_tokens_value,
-        read_api_key_from_auth, read_api_key_from_provider_config, read_auth_value, set_api_mode,
-        write_account_auth,
+        find_store_account, get_codex_state_value, profile_id_from_account,
+        profile_id_from_tokens_value, read_api_key_from_auth, read_api_key_from_provider_config,
+        read_auth_value, set_api_mode, set_subscription_mode, write_account_auth,
     },
     api_config::API_PROVIDER_ID,
     codex_config::{
@@ -27,9 +27,18 @@ const REMOTE_CONTROL_ENVIRONMENTS_ENDPOINT: &str =
 const REMOTE_CONTROL_BACKEND_STATUS_TIMEOUT_MS: u64 = 6_000;
 const REMOTE_CONTROL_BACKEND_ERROR_TEXT_MAX_LEN: usize = 1800;
 
-pub(crate) fn remote_control_enabled_from_settings(settings: &Value) -> bool {
+fn remote_control_config_enabled_from_settings(settings: &Value) -> bool {
     bool_field(settings, REMOTE_CONTROL_ENABLED_SETTING_KEY)
         || bool_field(settings, LEGACY_REMOTE_CONTROL_HOOK_SETTING_KEY)
+}
+
+fn remote_control_suspended_by_subscription(settings: &Value) -> bool {
+    string_field(settings, "codex_active_mode") == "chatgpt"
+}
+
+pub(crate) fn remote_control_enabled_from_settings(settings: &Value) -> bool {
+    remote_control_config_enabled_from_settings(settings)
+        && !remote_control_suspended_by_subscription(settings)
 }
 
 fn remote_control_account_id_from_settings(settings: &Value) -> String {
@@ -38,10 +47,10 @@ fn remote_control_account_id_from_settings(settings: &Value) -> String {
 
 fn remote_control_account(account_id: &str) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("app远程控制需要先单独选择一个订阅账号".to_string());
+        return Err("远程控制需要先单独选择一个订阅账号".to_string());
     }
     find_store_account(account_id)
-        .map_err(|_| format!("app远程控制账号不存在，请重新选择: {account_id}"))
+        .map_err(|_| format!("远程控制账号不存在，请重新选择: {account_id}"))
 }
 
 fn validate_remote_control_account_id(account_id: &str) -> Result<(), String> {
@@ -75,19 +84,27 @@ fn remote_control_api_session_profile_from_settings(
     let api_mode = active_api_profile(settings);
     let base_url = string_field(&api_mode, "base_url");
     if base_url.is_empty() {
-        return Err("app远程控制会话流量走 API 需要先配置 API 模式 base_url".to_string());
+        return Err("远程控制会话流量走 API 需要先配置 API 模式 base_url".to_string());
     }
 
     let api_key = api_key_from_settings_or_runtime(&api_mode);
     if api_key.trim().is_empty() {
-        return Err("app远程控制会话流量走 API 需要先配置 API Key".to_string());
+        return Err("远程控制会话流量走 API 需要先配置 API Key".to_string());
     }
 
     Ok((base_url, api_key))
 }
 
+fn subscription_mode_active(settings: &Value) -> bool {
+    remote_control_suspended_by_subscription(settings)
+        || string_field(&get_codex_state_value(), "mode") == "chatgpt"
+}
+
 fn validate_remote_control_enable_prerequisites() -> Result<(), String> {
     let settings = read_settings_value()?;
+    if subscription_mode_active(&settings) {
+        return Err("订阅模式下不可开启远程控制，请先切换到 API 模式".to_string());
+    }
     let account_id = remote_control_account_id_from_settings(&settings);
     validate_remote_control_account_id(&account_id)?;
     remote_control_api_session_profile_from_settings(&settings).map(|_| ())
@@ -157,7 +174,7 @@ fn legacy_remote_control_home_removed() -> Result<bool, String> {
         return Ok(false);
     }
     fs::remove_dir_all(&home)
-        .map_err(|err| format!("删除旧 app远程控制 home 失败 {}: {err}", home.display()))?;
+        .map_err(|err| format!("删除旧远程控制 home 失败 {}: {err}", home.display()))?;
     Ok(true)
 }
 
@@ -306,6 +323,13 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
         let pending = !remote_control_mixed_config_applied(&settings);
         apply_remote_control_mixed_config(&settings)?;
         changed |= pending;
+    } else if remote_control_config_enabled_from_settings(&settings)
+        && remote_control_suspended_by_subscription(&settings)
+    {
+        let pending = remote_control_mixed_config_present();
+        set_subscription_mode()?;
+        remove_remote_control_config()?;
+        changed |= pending;
     } else {
         let pending = remote_control_mixed_config_present();
         restore_api_config_after_remote_control_disabled(&settings)?;
@@ -354,10 +378,10 @@ fn fetch_remote_control_backend_environment_status(settings: &Value) -> Result<V
     let account = remote_control_account(&account_id)?;
     let tokens = account
         .get("tokens")
-        .ok_or_else(|| "app远程控制订阅账号缺少 tokens".to_string())?;
+        .ok_or_else(|| "远程控制订阅账号缺少 tokens".to_string())?;
     let access_token = string_field(tokens, "access_token");
     if access_token.is_empty() {
-        return Err("app远程控制订阅账号缺少 tokens.access_token".to_string());
+        return Err("远程控制订阅账号缺少 tokens.access_token".to_string());
     }
     let chatgpt_account_id = string_field(tokens, "account_id");
     let display_names = remote_control_local_display_names();
@@ -613,12 +637,18 @@ fn remote_control_status_from_backend_environment(environment: &Value) -> Option
 }
 
 fn remote_control_status_value(settings: &Value, backend_environment: Option<&Value>) -> Value {
-    let enabled = remote_control_enabled_from_settings(settings);
-    if !enabled {
+    if !remote_control_config_enabled_from_settings(settings) {
         return json!({
             "state": "muted",
             "status": "disabled",
             "message": "未启用"
+        });
+    }
+    if remote_control_suspended_by_subscription(settings) {
+        return json!({
+            "state": "muted",
+            "status": "subscription_mode",
+            "message": "订阅模式不可用"
         });
     }
 
@@ -674,7 +704,8 @@ pub(crate) fn get_codex_remote_control_status() -> Result<Value, String> {
     let connection_status = remote_control_status_value(&settings, backend_environment.as_ref());
     Ok(json!({
         "ok": true,
-        "enabled": remote_control_enabled_from_settings(&settings),
+        "enabled": remote_control_config_enabled_from_settings(&settings),
+        "effectiveEnabled": remote_control_enabled_from_settings(&settings),
         "accountId": remote_control_account_id_from_settings(&settings),
         "backendEnvironment": backend_environment,
         "connectionStatus": connection_status
@@ -689,10 +720,17 @@ pub(crate) fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, S
         validate_remote_control_enable_prerequisites()?;
     }
 
-    let settings = update_settings_value(&json!({
-        REMOTE_CONTROL_ENABLED_SETTING_KEY: enabled,
-        "codex_active_mode": "api"
-    }))?;
+    let settings_patch = if enabled {
+        json!({
+            REMOTE_CONTROL_ENABLED_SETTING_KEY: enabled,
+            "codex_active_mode": "api"
+        })
+    } else {
+        json!({
+            REMOTE_CONTROL_ENABLED_SETTING_KEY: enabled
+        })
+    };
+    let settings = update_settings_value(&settings_patch)?;
     let settings = super::codex_app::apply_codex_proxy_env_state_to_settings(settings)?;
     let changed =
         sync_remote_control_runtime_for_current_settings("set_codex_remote_control_enabled")?;
@@ -702,14 +740,14 @@ pub(crate) fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, S
         "ok": true,
         "message": if enabled {
             if restart_required {
-                "app远程控制已启用，重启 Codex app 后生效"
+                "远程控制已启用，重启 Codex app 后生效"
             } else {
-                "app远程控制已启用"
+                "远程控制已启用"
             }
         } else if restart_required {
-            "app远程控制已关闭，重启 Codex app 后恢复 API 模式"
+            "远程控制已关闭，重启 Codex app 后恢复 API 模式"
         } else {
-            "app远程控制已关闭"
+            "远程控制已关闭"
         },
         "settings": settings,
         "changed": changed,
@@ -739,9 +777,9 @@ pub(crate) fn set_codex_remote_control_account_id(id: String) -> Result<Value, S
     Ok(json!({
         "ok": true,
         "message": if restart_required {
-            "app远程控制账号已更新，重启 Codex app 后生效"
+            "远程控制账号已更新，重启 Codex app 后生效"
         } else {
-            "app远程控制账号已更新"
+            "远程控制账号已更新"
         },
         "settings": settings,
         "changed": changed,
@@ -790,6 +828,17 @@ mod tests {
         assert!(remote_control_enabled_from_settings(&json!({
             "codex_remote_control_hook_enabled": true
         })));
+    }
+
+    #[test]
+    fn remote_control_enabled_suspends_in_subscription_mode() {
+        let settings = json!({
+            "codex_remote_control_enabled": true,
+            "codex_active_mode": "chatgpt"
+        });
+
+        assert!(remote_control_config_enabled_from_settings(&settings));
+        assert!(!remote_control_enabled_from_settings(&settings));
     }
 
     #[test]

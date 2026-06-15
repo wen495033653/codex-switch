@@ -29,6 +29,10 @@
   gap: 18px;
 }
 
+.settings-remote-control-section.disabled {
+  opacity: 0.62;
+}
+
 .settings-remote-control-topbar {
   min-width: 0;
   display: flex;

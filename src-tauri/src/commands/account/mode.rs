@@ -138,7 +138,10 @@ pub(super) fn switch_api_mode_impl(
     if raw_string_field(&state, "mode") != "api" {
         return Err("切换失败：Codex 未进入 API 模式".to_string());
     }
-    update_settings_value(&json!({ "codex_active_mode": "api" }))?;
+    let settings = update_settings_value(&json!({ "codex_active_mode": "api" }))?;
+    if bool_field(&settings, "codex_remote_control_enabled") {
+        sync_remote_control_runtime_for_current_settings("switch_api_mode")?;
+    }
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
         runtime.inner().as_ref(),

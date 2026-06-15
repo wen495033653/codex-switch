@@ -3,7 +3,7 @@ use crate::{
     codex_config::ensure_config_file,
     codex_launcher::{
         apply_codex_proxy_env_state_to_settings, attach_ide_reopen, build_ide_reopen_payload,
-        IdeRuntime,
+        sync_remote_control_runtime_for_current_settings, IdeRuntime,
     },
     desktop::{sync_system_auto_start, validate_system_auto_start},
     json_util::{bool_field, has_key, raw_string_field, string_field},

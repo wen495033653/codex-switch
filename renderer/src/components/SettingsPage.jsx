@@ -16,6 +16,7 @@ export default function SettingsPage({
     codexSessionSyncEnabled,
     isDevBuild,
     maskAccountName,
+    subscriptionModeActive,
     savingCodexProxyEnv,
     savingCodexRemoteControl,
     savingCodexSessionSync,
@@ -83,6 +84,7 @@ export default function SettingsPage({
                             accounts={accounts}
                             codexSessionSyncEnabled={codexSessionSyncEnabled}
                             maskAccountName={maskAccountName}
+                            subscriptionModeActive={subscriptionModeActive}
                             savingCodexProxyEnv={savingCodexProxyEnv}
                             savingCodexRemoteControl={savingCodexRemoteControl}
                             savingCodexSessionSync={savingCodexSessionSync}

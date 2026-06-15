@@ -40,6 +40,7 @@ export default function ProxySettingsTab({
     savingCodexRemoteControl,
     savingCodexSessionSync,
     savingProxySettings,
+    subscriptionModeActive,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     codexRemoteControlPendingEnabled,
@@ -56,6 +57,8 @@ export default function ProxySettingsTab({
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
     const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
     const codexRemoteControlEnabled = settingsDraft.codex_remote_control_enabled === true;
+    const remoteControlBlockedBySubscription = subscriptionModeActive === true;
+    const remoteControlEnabledInCurrentMode = codexRemoteControlEnabled && !remoteControlBlockedBySubscription;
     const remoteControlAccountId = String(settingsDraft.codex_remote_control_account_id || '').trim();
     const remoteControlAccounts = Array.isArray(accounts)
         ? accounts.filter(account => !isApiModeAccount(account) && getAccountId(account))
@@ -134,7 +137,7 @@ export default function ProxySettingsTab({
         let disposed = false;
 
         async function refreshRemoteControlStatus() {
-            if (!codexRemoteControlEnabled || !window.api || !window.api.getCodexRemoteControlStatus) {
+            if (!remoteControlEnabledInCurrentMode || !window.api || !window.api.getCodexRemoteControlStatus) {
                 if (!disposed) {
                     setRemoteControlStatus({
                         loading: false,
@@ -176,7 +179,7 @@ export default function ProxySettingsTab({
         }
 
         refreshRemoteControlStatus();
-        if (!codexRemoteControlEnabled) {
+        if (!remoteControlEnabledInCurrentMode) {
             return () => {
                 disposed = true;
             };
@@ -186,7 +189,7 @@ export default function ProxySettingsTab({
             disposed = true;
             window.clearInterval(timer);
         };
-    }, [codexRemoteControlEnabled, remoteControlAccountId]);
+    }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
 
     const codexAppPidText = codexAppProcessStatus.loading
         ? '检测中'
@@ -216,11 +219,13 @@ export default function ProxySettingsTab({
         || (remoteControlBackendError && remoteControlBackendError.message)
         || (remoteControlHelperStatus && remoteControlHelperStatus.message)
         || '';
-    const remoteControlStatusState = remoteControlConnectionStatus && remoteControlConnectionStatus.state
-        ? remoteControlConnectionStatus.state
-        : (remoteControlBackendError || remoteControlStatus.error || (remoteControlHelperStatus && remoteControlHelperStatus.status === 'errored'))
-        ? 'error'
-        : 'muted';
+    const remoteControlStatusState = remoteControlBlockedBySubscription
+        ? 'muted'
+        : remoteControlConnectionStatus && remoteControlConnectionStatus.state
+            ? remoteControlConnectionStatus.state
+            : (remoteControlBackendError || remoteControlStatus.error || (remoteControlHelperStatus && remoteControlHelperStatus.status === 'errored'))
+                ? 'error'
+                : 'muted';
     const remoteControlPendingStatus = codexRemoteControlPendingEnabled === true
         ? '打开中'
         : codexRemoteControlPendingEnabled === false
@@ -232,19 +237,22 @@ export default function ProxySettingsTab({
         : remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
         ? '需要 MFA'
         : (remoteControlStatusMessage || '需要重新登录').replace(/[。.]$/, '');
-    const remoteControlDisplayStatus = remoteControlPendingStatus || (!codexRemoteControlEnabled
-        ? '未启用'
-        : remoteControlStatus.loading && !remoteControlStatusMessage
-            ? '检测中'
-            : remoteControlStatusState === 'warning'
-                ? remoteControlWarningStatus
-                : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
+    const remoteControlDisplayStatus = remoteControlBlockedBySubscription
+        ? '订阅模式不可用'
+        : remoteControlPendingStatus || (!remoteControlEnabledInCurrentMode
+            ? '未启用'
+            : remoteControlStatus.loading && !remoteControlStatusMessage
+                ? '检测中'
+                : remoteControlStatusState === 'warning'
+                    ? remoteControlWarningStatus
+                    : (remoteControlStatusMessage || '等待连接').replace(/[。.]$/, ''));
     const remoteControlStatusTitle = (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
         || remoteControlRawStatusMessage
         || (remoteControlStatusState === 'warning' ? remoteControlDisplayStatus : '');
-    const remoteControlMissingAccount = !codexRemoteControlEnabled && !remoteControlAccount;
+    const remoteControlMissingAccount = !remoteControlBlockedBySubscription && !remoteControlEnabledInCurrentMode && !remoteControlAccount;
     const remoteControlToggleDisabled = savingCodexRemoteControl
         || switching
+        || remoteControlBlockedBySubscription
         || remoteControlMissingAccount;
     const remoteControlSwitchLabel = codexRemoteControlPendingEnabled === true
         ? '打开中'
@@ -252,13 +260,18 @@ export default function ProxySettingsTab({
             ? '关闭中'
             : codexRemoteControlEnabled
                 ? '已启用'
-                : '启用';
-    const remoteControlAccountSelectDisabled = codexRemoteControlEnabled
+                : remoteControlBlockedBySubscription
+                    ? '不可用'
+                    : '启用';
+    const remoteControlAccountSelectDisabled = remoteControlBlockedBySubscription
+        || remoteControlEnabledInCurrentMode
         || savingCodexRemoteControl
         || switching
         || remoteControlAccounts.length === 0;
-    const remoteControlAccountSelectTitle = codexRemoteControlEnabled
-        ? '关闭 app远程控制后可切换控制账号'
+    const remoteControlAccountSelectTitle = remoteControlBlockedBySubscription
+        ? '订阅模式下不可开启远程控制'
+        : remoteControlEnabledInCurrentMode
+        ? '关闭远程控制后可切换控制账号'
         : remoteControlAccountLabel;
     return (
         <>
@@ -331,10 +344,10 @@ export default function ProxySettingsTab({
                 </button>
             </section>
 
-            <section className="settings-section settings-app-card-section settings-remote-control-section">
+            <section className={`settings-section settings-app-card-section settings-remote-control-section ${remoteControlBlockedBySubscription ? 'disabled' : ''}`}>
                 <div className="settings-remote-control-topbar">
                     <div className="settings-remote-control-title-group">
-                        <div className="settings-section-title">app远程控制</div>
+                        <div className="settings-section-title">远程控制</div>
                         <div
                             className={`settings-remote-control-status-badge ${remoteControlStatusState}`}
                             title={remoteControlStatusTitle || undefined}
@@ -347,9 +360,9 @@ export default function ProxySettingsTab({
                         type="button"
                         className={`settings-remote-control-switch ${codexRemoteControlEnabled ? 'active' : ''}`}
                         aria-pressed={codexRemoteControlEnabled}
-                        aria-label={codexRemoteControlEnabled ? '关闭 app远程控制' : '开启 app远程控制'}
+                        aria-label={codexRemoteControlEnabled ? '关闭远程控制' : '开启远程控制'}
                         disabled={remoteControlToggleDisabled}
-                        title={remoteControlMissingAccount ? '请先选择 app远程控制账号' : ''}
+                        title={remoteControlBlockedBySubscription ? '订阅模式下不可开启远程控制' : remoteControlMissingAccount ? '请先选择远程控制账号' : ''}
                         onClick={() => setCodexRemoteControlEnabled(!codexRemoteControlEnabled)}
                     >
                         <span className="settings-remote-control-switch-label">
@@ -359,6 +372,9 @@ export default function ProxySettingsTab({
                             <span className="settings-switch-thumb" />
                         </span>
                     </button>
+                </div>
+                <div className="settings-section-desc settings-remote-control-note">
+                    流量走 API，控制走账号
                 </div>
                 <div className="settings-remote-control-account-grid">
                     <label className="settings-remote-control-account-field">

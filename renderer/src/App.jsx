@@ -339,6 +339,7 @@ function MainApp() {
     settingsDraft,
     setSettingsDraft,
     setViewMode,
+    subscriptionModeActive,
     toast,
     toastError
   });
@@ -440,6 +441,7 @@ function MainApp() {
             codexSessionSyncEnabled,
             isDevBuild: IS_DEV_BUILD,
             maskAccountName,
+            subscriptionModeActive,
             savingCodexProxyEnv,
             savingCodexRemoteControl,
             savingCodexSessionSync,
