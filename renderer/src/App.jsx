@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppDialogs, AppMainView, AppNavbar, DevDiagnosticsPanel } from './components';
+import { AppDialogs, AppMainView, AppNavbar, DevDiagnosticsPanel, UsageStatsDetailDrawer } from './components';
 import {
   DEFAULT_CODEX_STATE,
   DEFAULT_SETTINGS,
@@ -84,10 +84,25 @@ function MainApp() {
   const [settingsTab, setSettingsTab] = useState('general');
   const [appVersion, setAppVersion] = useState('');
   const [dataDir, setDataDir] = useState('');
+  const [usageStats, setUsageStats] = useState({ subscriptions: {}, api_profiles: {}, warnings: [] });
+  const [usageStatsDetail, setUsageStatsDetail] = useState(null);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
+  const refreshUsageStats = async ({ silent = false } = {}) => {
+    if (!window.api || typeof window.api.getUsageStats !== 'function') return null;
+    try {
+      const res = await window.api.getUsageStats();
+      if (res && res.ok === true) {
+        setUsageStats(res);
+      }
+      return res;
+    } catch (err) {
+      if (!silent) toastError(err, '加载 token 统计失败', 7000);
+      return null;
+    }
+  };
   const openDevLogWindow = async () => {
     if (!window.api || typeof window.api.openDevLogWindow !== 'function') {
       toast('开发日志窗口需要在桌面应用中打开', 5000);
@@ -253,6 +268,7 @@ function MainApp() {
     applySettings,
     clearApiAutoSaveTimer,
     handleRes,
+    onUsageStatsRefresh: () => refreshUsageStats({ silent: true }),
     showIdeReopen,
     toastError
   });
@@ -356,6 +372,30 @@ function MainApp() {
     setStore,
     toastError
   });
+
+  useEffect(() => {
+    refreshUsageStats({ silent: true });
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      refreshUsageStats({ silent: true });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshUsageStats({ silent: true });
+      }
+    };
+    const intervalId = window.setInterval(refreshWhenVisible, 30000);
+
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     const nextTheme = (viewMode === 'settings' ? settingsDraft.ui_theme : settings.ui_theme) || DEFAULT_SETTINGS.ui_theme;
@@ -471,10 +511,12 @@ function MainApp() {
             onDeleteApiProfile: openDeleteApiProfileModal,
             onEditApiProfile: editApiProfile,
             onOpenCodexConfigToml: openCodexConfigToml,
+            onOpenUsageStatsDetail: setUsageStatsDetail,
             onSaveApiTestResults: saveApiTestResults,
             onSwitchToApiMode: switchToApiModeFromPage,
             savingApiMode: apiProfileBusy,
-            switching
+            switching,
+            usageStatsByApiProfile: usageStats.api_profiles || {}
           }}
           sessionManagerPageProps={{
             toast,
@@ -482,7 +524,6 @@ function MainApp() {
           }}
           accountsPageProps={{
             accountGridRef,
-            apiModeActive,
             counts,
             currentAccountId,
             currentItems,
@@ -497,6 +538,7 @@ function MainApp() {
             onRefreshAllClick: openRefreshAllModal,
             onSearchChange: setSearch,
             onSwitchAccount: handleSwitchAccount,
+            onOpenUsageStatsDetail: setUsageStatsDetail,
             onViewRefreshToken: openRefreshTokenModal,
             page,
             pageSize,
@@ -506,7 +548,8 @@ function MainApp() {
             startIdx,
             switching,
             total,
-            totalPages
+            totalPages,
+            usageStatsBySubscription: usageStats.subscriptions || {}
           }}
         />
 
@@ -574,6 +617,10 @@ function MainApp() {
             onCancel: cancelUpdateModal,
             onConfirm: confirmUpdateAction
           }}
+        />
+        <UsageStatsDetailDrawer
+          detail={usageStatsDetail}
+          onClose={() => setUsageStatsDetail(null)}
         />
       </div>
     </div>

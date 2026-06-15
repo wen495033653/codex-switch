@@ -3,6 +3,7 @@ import { useApiProfilePagination } from '../hooks';
 import { getErrorMessage } from '../utils/errors';
 import { normalizeApiBaseUrlInput } from '../utils/appState';
 import Modal from './Modal';
+import UsageStatsSummary from './UsageStatsSummary';
 
 const DEFAULT_API_TEST_MODEL = 'gpt-5.5';
 const API_TEST_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -264,10 +265,12 @@ export default function ApiModePage({
   onDeleteApiProfile,
   onEditApiProfile,
   onOpenCodexConfigToml,
+  onOpenUsageStatsDetail,
   onSaveApiTestResults,
   onSwitchToApiMode,
   savingApiMode,
-  switching
+  switching,
+  usageStatsByApiProfile
 }) {
   const [baseUrlTests, setBaseUrlTests] = useState(() => normalizeApiTestResults(apiTestResults));
   const baseUrlTestsRef = useRef(normalizeApiTestResults(apiTestResults));
@@ -519,6 +522,9 @@ export default function ApiModePage({
                   const deleteTitle = profiles.length <= 1
                     ? '至少保留一个 API'
                     : '删除配置';
+                  const usageStats = usageStatsByApiProfile
+                    ? usageStatsByApiProfile[profileId]
+                    : null;
 
                   return (
                     <div
@@ -550,6 +556,14 @@ export default function ApiModePage({
                               {baseUrl || '未配置 Base URL'}
                             </span>
                           </div>
+                          <UsageStatsSummary
+                            stats={usageStats}
+                            onOpenDetails={() => onOpenUsageStatsDetail?.({
+                              ownerName: profileName,
+                              ownerTypeLabel: 'API 配置',
+                              stats: usageStats
+                            })}
+                          />
                         </div>
                       </div>
 

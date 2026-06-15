@@ -1,4 +1,5 @@
 import QuotaItem from './QuotaItem';
+import UsageStatsSummary from './UsageStatsSummary';
 import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, maskAccountDisplayName } from '../utils/auth';
 
 const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
@@ -53,7 +54,7 @@ function getAuthBadge(info) {
     return null;
 }
 
-export default function AccountCard({ acc, isCurrent, refreshing, switching, maskAccountName, onSwitch, onRefresh, onDelete, onViewRefreshToken }) {
+export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail }) {
     const info = parseAuthInfo(acc);
     const plan = info.planType;
     const authBadge = getAuthBadge(info);
@@ -130,6 +131,14 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, mas
                         </>
                     )}
                 </div>
+                <UsageStatsSummary
+                    stats={usageStats}
+                    onOpenDetails={() => onOpenUsageStatsDetail?.({
+                        ownerName: displayName,
+                        ownerTypeLabel: '订阅账号',
+                        stats: usageStats
+                    })}
+                />
             </div>
 
             <div className="account-card-footer">

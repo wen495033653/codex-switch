@@ -13,3 +13,4 @@ export { default as RefreshTokenDialog } from './RefreshTokenDialog';
 export { default as SessionManagerPage } from './SessionManagerPage';
 export { default as SettingsPage } from './SettingsPage';
 export { default as UpdateDialog } from './UpdateDialog';
+export { default as UsageStatsDetailDrawer } from './UsageStatsDetailDrawer';

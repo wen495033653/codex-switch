@@ -1,6 +1,6 @@
 @media (max-height: 860px) {
   :root {
-    --account-card-height: 216px;
+    --account-card-height: 248px;
   }
 
   .navbar {
@@ -35,7 +35,7 @@
 
 @media (max-height: 720px) {
   :root {
-    --account-card-height: 204px;
+    --account-card-height: 236px;
   }
 
   .navbar {

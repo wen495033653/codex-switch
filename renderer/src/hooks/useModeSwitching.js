@@ -13,6 +13,7 @@ export function useModeSwitching({
   applySettings,
   clearApiAutoSaveTimer,
   handleRes,
+  onUsageStatsRefresh,
   showIdeReopen,
   toastError
 }) {
@@ -41,6 +42,7 @@ export function useModeSwitching({
 
       const res = await window.api.switchApiMode(activeProfile.id);
       handleRes(res);
+      if (typeof onUsageStatsRefresh === 'function') onUsageStatsRefresh();
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);
     } catch (err) {
       toastError(err, '切换 API 模式失败');
@@ -58,6 +60,7 @@ export function useModeSwitching({
         ? await window.api.switchApiMode(activeApiProfileId)
         : await window.api.switchAccount(accountId);
       handleRes(res);
+      if (typeof onUsageStatsRefresh === 'function') onUsageStatsRefresh();
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);
     } catch (err) {
       toastError(err, '切换账号失败');

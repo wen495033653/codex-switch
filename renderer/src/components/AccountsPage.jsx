@@ -5,7 +5,6 @@ const ACCOUNT_FILTERS = ['ALL', 'FREE', 'PLUS', 'TEAM', 'PRO'];
 
 export default function AccountsPage({
     accountGridRef,
-    apiModeActive,
     counts,
     currentAccountId,
     currentItems,
@@ -20,6 +19,7 @@ export default function AccountsPage({
     onRefreshAllClick,
     onSearchChange,
     onSwitchAccount,
+    onOpenUsageStatsDetail,
     onViewRefreshToken,
     page,
     pageSize,
@@ -29,19 +29,11 @@ export default function AccountsPage({
     startIdx,
     switching,
     total,
-    totalPages
+    totalPages,
+    usageStatsBySubscription
 }) {
     return (
         <>
-            {apiModeActive && (
-                <div className="mode-page-notice api">
-                    <div>
-                        <strong>当前正在使用 API 模式</strong>
-                        <span>账号列表仅用于管理；点击任意账号的切换按钮会切回订阅模式。</span>
-                    </div>
-                </div>
-            )}
-
             <div className="toolbar account-toolbar">
                 <div className="account-toolbar-row">
                     <div className="search-wrapper">
@@ -93,6 +85,9 @@ export default function AccountsPage({
                 <div className="account-grid" ref={accountGridRef}>
                     {currentItems.map(acc => {
                         const accountId = getAccountId(acc);
+                        const usageStats = usageStatsBySubscription && accountId
+                            ? usageStatsBySubscription[accountId]
+                            : null;
                         return (
                             <AccountCard
                                 key={accountId}
@@ -100,11 +95,13 @@ export default function AccountsPage({
                                 isCurrent={accountId === currentAccountId}
                                 refreshing={refreshAllStatus.running || refreshingAccountId === accountId}
                                 switching={switching}
+                                usageStats={usageStats}
                                 maskAccountName={maskAccountName}
                                 onSwitch={onSwitchAccount}
                                 onRefresh={onRefreshAccount}
                                 onDelete={onDeleteAccount}
                                 onViewRefreshToken={onViewRefreshToken}
+                                onOpenUsageStatsDetail={onOpenUsageStatsDetail}
                             />
                         );
                     })}

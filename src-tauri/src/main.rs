@@ -24,6 +24,7 @@ mod session_sync_diagnostics;
 mod settings;
 mod time_util;
 mod updater;
+mod usage_stats;
 
 use codex_launcher::IdeRuntime;
 use desktop::{
@@ -71,6 +72,9 @@ fn main() {
             }
             if let Err(err) = accounts::restore_api_mode_if_selected() {
                 eprintln!("恢复 Codex API 模式失败: {err}");
+            }
+            if let Err(err) = usage_stats::record_current_attribution_if_available() {
+                eprintln!("记录当前 token 统计归属失败: {err}");
             }
             if let Err(err) =
                 codex_launcher::sync_remote_control_runtime_for_current_settings("app_start")
@@ -134,6 +138,7 @@ fn main() {
             commands::open_external_url,
             commands::open_codex_config_toml,
             commands::list_brand_voice_files,
+            usage_stats::usage_stats_get,
             session_manager::session_manager_scan,
             session_manager::session_manager_preview,
             session_manager::session_manager_preview_deleted,

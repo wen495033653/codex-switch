@@ -59,7 +59,9 @@
 
 .account-card-body {
   min-height: 0;
-  display: flex;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: stretch;
   overflow: hidden;
   flex: 1 1 auto;
@@ -67,7 +69,7 @@
 
 .account-card-quotas {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   grid-template-rows: repeat(2, minmax(0, 1fr));
   min-height: 0;
   width: 100%;
