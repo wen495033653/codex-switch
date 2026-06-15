@@ -1,51 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApiProfilePagination } from '../hooks';
-import { getErrorMessage } from '../utils/errors';
-import { normalizeApiBaseUrlInput } from '../utils/appState';
+import {
+  DEFAULT_API_TEST_MODEL,
+  getApiLastAvailableAt,
+  getApiTestSignature,
+  isFreshApiTest,
+  normalizeApiTestModelInput,
+  normalizeApiTestResults,
+  runApiProfilePrecheck
+} from '../utils/apiPrecheck';
 import Modal from './Modal';
 import UsageStatsSummary from './UsageStatsSummary';
-
-const DEFAULT_API_TEST_MODEL = 'gpt-5.5';
-const API_TEST_CACHE_TTL_MS = 60 * 60 * 1000;
-
-function normalizeApiTestModelInput(value) {
-  const trimmed = String(value || '').trim();
-  return trimmed || DEFAULT_API_TEST_MODEL;
-}
-
-function getApiKeyFingerprint(value) {
-  const text = String(value || '');
-  let hash = 2166136261;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${text.length}:${(hash >>> 0).toString(16)}`;
-}
-
-function getApiTestSignature(baseUrl, apiKey, model) {
-  return [
-    String(baseUrl || ''),
-    getApiKeyFingerprint(apiKey),
-    normalizeApiTestModelInput(model)
-  ].join('\n');
-}
-
-function normalizeApiTestResults(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value).filter(([, item]) => item && typeof item === 'object' && !Array.isArray(item))
-  );
-}
-
-function isFreshApiTest(test, now = Date.now()) {
-  return Boolean(
-    test
-    && !test.loading
-    && Number.isFinite(test.checkedAt)
-    && now - test.checkedAt < API_TEST_CACHE_TTL_MS
-  );
-}
 
 function formatApiCheckTime(value) {
   if (!Number.isFinite(value)) return '';
@@ -68,14 +33,7 @@ function getApiCheckTimeText(test) {
   const timestamp = Number.isFinite(test.checkedAt) ? test.checkedAt : test.startedAt;
   const formatted = formatApiCheckTime(timestamp);
   if (!formatted) return '';
-  return `${test.loading ? '开始时间' : '检查时间'} ${formatted}`;
-}
-
-function getApiLastAvailableAt(test) {
-  if (!test) return null;
-  if (Number.isFinite(test.lastAvailableAt)) return test.lastAvailableAt;
-  if (test.ok && Number.isFinite(test.checkedAt)) return test.checkedAt;
-  return null;
+  return `${test.loading ? '开始时间' : '预检时间'} ${formatted}`;
 }
 
 function getApiLastAvailableTimeText(test) {
@@ -134,10 +92,10 @@ function getApiTestState(test) {
 
 function getApiTestStateLabel(test) {
   const state = getApiTestState(test);
-  if (state === 'loading') return '检查中';
+  if (state === 'loading') return '预检中';
   if (state === 'success') return '可用';
   if (state === 'error') return '不可用';
-  return '未检查';
+  return '未预检';
 }
 
 function prettyApiTestBody(body) {
@@ -196,7 +154,7 @@ function ApiTestResponseBlock({ response, title }) {
   );
 }
 
-function ApiTestChatBlock({ request, response }) {
+function ApiTestResponsesBlock({ request, response }) {
   if (!request && !response) return null;
   const endpoint = (response && response.endpoint) || (request && request.endpoint) || '';
   const requestBody = request ? formatApiTestJson(request.body || {}) : '未发送请求';
@@ -205,7 +163,7 @@ function ApiTestChatBlock({ request, response }) {
   return (
     <section className="api-test-response-block api-test-chat-block">
       <div className="api-test-response-head">
-        <div className="api-test-response-title">Chat 调用</div>
+        <div className="api-test-response-title">Responses 调用</div>
         <div className="api-test-response-status">{getApiTestResponseStatusLabel(response)}</div>
       </div>
       <div className="api-test-response-endpoint" title={endpoint}>
@@ -235,7 +193,7 @@ function ApiTestDetailContent({ test }) {
     <div className="api-test-detail-content">
       <div className="api-test-detail-head">
         <div className="api-test-detail-title-stack">
-          <div className="api-test-detail-time">{timeText || '等待检查时间'}</div>
+          <div className="api-test-detail-time">{timeText || '等待预检时间'}</div>
           {lastAvailableTimeText && (
             <div className="api-test-detail-time api-test-detail-time-available">
               {lastAvailableTimeText}
@@ -251,7 +209,10 @@ function ApiTestDetailContent({ test }) {
         </div>
       )}
 
-      <ApiTestChatBlock request={test.chatRequest} response={test.chatResponse} />
+      <ApiTestResponsesBlock
+        request={test.responsesRequest || test.chatRequest}
+        response={test.responsesResponse || test.chatResponse}
+      />
     </div>
   );
 }
@@ -313,8 +274,8 @@ export default function ApiModePage({
   const detailTestMatchesModel = Boolean(detailTest && detailTest.testModel === effectiveDetailModel);
   const visibleDetailTest = detailTestMatchesModel ? detailTest : null;
   const detailPlaceholderText = detailTest && !detailTestMatchesModel
-    ? '更改测试模型后需要重新检查'
-    : '准备检查';
+    ? '更改测试模型后需要重新预检'
+    : '准备预检';
 
   useEffect(() => {
     const nextResults = normalizeApiTestResults(apiTestResults);
@@ -378,89 +339,16 @@ export default function ApiModePage({
   const handleTestBaseUrl = async (profile, profileId, profileName, rawTestModel) => {
     if (baseUrlTestsRef.current[profileId]?.loading) return;
 
-    const sourceBaseUrl = profile.base_url || '';
     const testModel = normalizeApiTestModelInput(rawTestModel);
-    const signature = getApiTestSignature(sourceBaseUrl, profile.api_key || '', testModel);
-    const startedAt = Date.now();
-    const previousLastAvailableAt = getApiLastAvailableAt(baseUrlTestsRef.current[profileId]);
-    let normalizedBaseUrl = '';
-    try {
-      normalizedBaseUrl = normalizeApiBaseUrlInput(sourceBaseUrl);
-    } catch (err) {
-      const checkedAt = Date.now();
-      setApiTestForProfile(profileId, {
-        signature,
-        sourceBaseUrl,
-        baseUrl: sourceBaseUrl,
-        apiKeyPresent: Boolean(profile.api_key),
-        testModel,
-        profileName,
-        stage: 'input',
-        startedAt,
-        checkedAt,
-        lastAvailableAt: previousLastAvailableAt,
-        loading: false,
-        ok: false,
-        message: getErrorMessage(err, 'API Base URL 格式无效')
-      }, true);
-      return;
-    }
-
-    setApiTestForProfile(profileId, {
-      signature,
-      sourceBaseUrl,
-      baseUrl: normalizedBaseUrl,
-      apiKeyPresent: Boolean(profile.api_key),
-      testModel,
+    const result = await runApiProfilePrecheck({
+      profile,
+      profileId,
       profileName,
-      stage: 'models',
-      startedAt,
-      lastAvailableAt: previousLastAvailableAt,
-      loading: true,
-      ok: false,
-      message: '正在检查 API'
+      model: testModel,
+      previousTest: baseUrlTestsRef.current[profileId],
+      onUpdate: test => setApiTestForProfile(profileId, test)
     });
-    try {
-      const res = await window.api.testApiBaseUrl({
-        baseUrl: normalizedBaseUrl,
-        apiKey: profile.api_key || '',
-        model: testModel
-      });
-      const result = res && typeof res === 'object' ? res : {};
-      const checkedAt = Date.now();
-      setApiTestForProfile(profileId, {
-        ...result,
-        signature,
-        sourceBaseUrl,
-        baseUrl: normalizedBaseUrl,
-        apiKeyPresent: Boolean(profile.api_key),
-        testModel: result.testModel || testModel,
-        profileName,
-        startedAt,
-        checkedAt,
-        lastAvailableAt: result.ok ? checkedAt : previousLastAvailableAt,
-        loading: false,
-        ok: Boolean(result.ok),
-        message: result.message || 'API 检查完成'
-      }, true);
-    } catch (err) {
-      const checkedAt = Date.now();
-      setApiTestForProfile(profileId, {
-        signature,
-        sourceBaseUrl,
-        baseUrl: normalizedBaseUrl,
-        apiKeyPresent: Boolean(profile.api_key),
-        testModel,
-        profileName,
-        stage: 'chat',
-        startedAt,
-        checkedAt,
-        lastAvailableAt: previousLastAvailableAt,
-        loading: false,
-        ok: false,
-        message: getErrorMessage(err, 'API 检查失败')
-      }, true);
-    }
+    setApiTestForProfile(profileId, result, true);
   };
 
   return (
@@ -515,10 +403,10 @@ export default function ApiModePage({
                     : (!apiKey
                         ? '未配置 API Key'
                         : (hasFreshTest
-                            ? '1 小时内已检查，点击查看详情'
-                            : `使用 ${normalizedTestModel} 检查 API`));
+                            ? '1 小时内已预检，点击查看详情'
+                            : `使用 ${normalizedTestModel} 预检 API`));
                   const testDisabled = !baseUrl || !apiKey || testLoading;
-                  const testActionText = testLoading ? '检查中' : '检查';
+                  const testActionText = testLoading ? '预检中' : '预检';
                   const deleteTitle = profiles.length <= 1
                     ? '至少保留一个 API'
                     : '删除配置';
@@ -573,7 +461,7 @@ export default function ApiModePage({
                             type="button"
                             className={`api-profile-card-test-button ${testLoading ? 'is-loading' : ''}`}
                             title={testButtonTitle}
-                            aria-label="检查 API"
+                            aria-label="预检 API"
                             aria-busy={testLoading}
                             disabled={testDisabled}
                             onClick={() => openCheckModalAndRun(profile, profileId, profileName, normalizedTestModel)}
@@ -655,7 +543,7 @@ export default function ApiModePage({
 
       {checkModalProfileId && (
         <Modal
-          title={detailProfileName || checkModalProfileId || 'API 检查'}
+          title={detailProfileName || checkModalProfileId || 'API 预检'}
           width="760px"
           onClose={closeCheckModal}
         >
@@ -749,7 +637,7 @@ export default function ApiModePage({
                 effectiveDetailModel
               )}
             >
-              重新检查
+              重新预检
             </button>
             <button
               type="button"

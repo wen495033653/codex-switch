@@ -195,6 +195,38 @@ html[data-theme="light"] .api-profile-modal-error {
   border-color: #fecaca;
 }
 
+html[data-theme="light"] .api-profile-modal-precheck {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(203, 213, 225, 0.74);
+}
+
+html[data-theme="light"] .api-profile-modal-precheck.loading {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+html[data-theme="light"] .api-profile-modal-precheck.success {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+html[data-theme="light"] .api-profile-modal-precheck.error {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+html[data-theme="light"] .api-profile-modal-precheck.loading .api-profile-modal-precheck-head strong {
+  color: #1d4ed8;
+}
+
+html[data-theme="light"] .api-profile-modal-precheck.success .api-profile-modal-precheck-head strong {
+  color: #047857;
+}
+
+html[data-theme="light"] .api-profile-modal-precheck.error .api-profile-modal-precheck-head strong {
+  color: #b91c1c;
+}
+
 html[data-theme="light"] .api-mode-label {
   color: #64748b;
 }

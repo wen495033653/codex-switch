@@ -1,6 +1,20 @@
 import { useState } from 'react';
 import Modal from './Modal';
 
+function getPrecheckState(precheck) {
+  if (!precheck) return 'idle';
+  if (precheck.loading) return 'loading';
+  return precheck.ok ? 'success' : 'error';
+}
+
+function getPrecheckLabel(precheck) {
+  const state = getPrecheckState(precheck);
+  if (state === 'loading') return '预检中';
+  if (state === 'success') return '可用';
+  if (state === 'error') return '不可用';
+  return '未预检';
+}
+
 export default function ApiProfileModal({
   modal,
   saving,
@@ -11,6 +25,11 @@ export default function ApiProfileModal({
   const [showApiKey, setShowApiKey] = useState(false);
   const draft = modal && modal.draft ? modal.draft : {};
   const isEdit = modal && modal.mode === 'edit';
+  const precheck = modal && modal.precheck ? modal.precheck : null;
+  const precheckState = getPrecheckState(precheck);
+  const submitText = precheck && precheck.loading
+    ? '预检中...'
+    : (saving ? '保存中...' : '保存配置');
   const handleClose = () => {
     if (!saving) onClose();
   };
@@ -79,6 +98,18 @@ export default function ApiProfileModal({
           </span>
         </label>
 
+        {precheck && (
+          <div className={`api-profile-modal-precheck ${precheckState}`}>
+            <div className="api-profile-modal-precheck-head">
+              <span>配置预检</span>
+              <strong>{getPrecheckLabel(precheck)}</strong>
+            </div>
+            <div className="api-profile-modal-precheck-message">
+              {precheck.message || getPrecheckLabel(precheck)}
+            </div>
+          </div>
+        )}
+
         <div className="api-profile-modal-actions">
           <button
             type="button"
@@ -93,7 +124,7 @@ export default function ApiProfileModal({
             className="btn btn-primary api-profile-modal-button"
             disabled={saving}
           >
-            {saving ? '保存中...' : '保存配置'}
+            {submitText}
           </button>
         </div>
       </form>

@@ -129,7 +129,8 @@ pub(crate) async fn test_api_base_url(
                     "message": format!("模型列表请求失败: {err}"),
                     "testModel": test_model,
                     "modelsResponse": api_test_error_response(&models_url, &err.to_string()),
-                    "chatResponse": Value::Null,
+                    "responsesRequest": Value::Null,
+                    "responsesResponse": Value::Null,
                     "tokenUsage": Value::Null
                 }));
             }
@@ -148,7 +149,8 @@ pub(crate) async fn test_api_base_url(
                 "message": message,
                 "testModel": test_model,
                 "modelsResponse": models_response,
-                "chatResponse": Value::Null,
+                "responsesRequest": Value::Null,
+                "responsesResponse": Value::Null,
                 "tokenUsage": Value::Null
             }));
         }
@@ -161,7 +163,8 @@ pub(crate) async fn test_api_base_url(
                 "message": "模型列表响应不是有效 JSON",
                 "testModel": test_model,
                 "modelsResponse": models_response,
-                "chatResponse": Value::Null,
+                "responsesRequest": Value::Null,
+                "responsesResponse": Value::Null,
                 "tokenUsage": Value::Null
             }));
         };
@@ -173,7 +176,8 @@ pub(crate) async fn test_api_base_url(
                 "message": "模型列表响应缺少 data 数组",
                 "testModel": test_model,
                 "modelsResponse": models_response,
-                "chatResponse": Value::Null,
+                "responsesRequest": Value::Null,
+                "responsesResponse": Value::Null,
                 "tokenUsage": Value::Null
             }));
         };
@@ -185,7 +189,8 @@ pub(crate) async fn test_api_base_url(
                 "message": "模型列表为空",
                 "testModel": test_model,
                 "modelsResponse": models_response,
-                "chatResponse": Value::Null,
+                "responsesRequest": Value::Null,
+                "responsesResponse": Value::Null,
                 "tokenUsage": Value::Null
             }));
         }
@@ -193,96 +198,93 @@ pub(crate) async fn test_api_base_url(
         let model_ids = api_test_model_ids(models);
         let selected_model = test_model.clone();
 
-        let chat_url = api_test_endpoint(&base_url, "chat/completions");
-        let chat_request = json!({
+        let responses_url = api_test_endpoint(&base_url, "responses");
+        let responses_request = json!({
             "model": selected_model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Reply with OK."
-                }
-            ],
-            "max_tokens": 8,
-            "temperature": 0,
+            "input": "Reply with OK.",
+            "max_output_tokens": 8,
             "stream": false
         });
-        let chat_request_snapshot = json!({
-            "endpoint": chat_url,
-            "body": chat_request
+        let responses_request_snapshot = json!({
+            "endpoint": responses_url,
+            "body": responses_request
         });
-        let chat_response = match client
-            .post(&chat_url)
+        let responses_response = match client
+            .post(&responses_url)
             .bearer_auth(&api_key)
-            .json(&chat_request)
+            .json(&responses_request)
             .send()
         {
-            Ok(response) => read_api_test_response(&chat_url, response)?,
+            Ok(response) => read_api_test_response(&responses_url, response)?,
             Err(err) => {
                 return Ok(json!({
                     "ok": false,
-                    "stage": "chat",
+                    "stage": "responses",
                     "baseUrl": base_url,
-                    "message": format!("Chat 测试请求失败: {err}"),
+                    "message": format!("Responses 测试请求失败: {err}"),
                     "testModel": selected_model,
                     "modelCount": models.len(),
                     "modelIds": model_ids,
                     "selectedModel": selected_model,
                     "modelsResponse": models_response,
-                    "chatRequest": chat_request_snapshot,
-                    "chatResponse": api_test_error_response(&chat_url, &err.to_string()),
+                    "responsesRequest": responses_request_snapshot,
+                    "responsesResponse": api_test_error_response(&responses_url, &err.to_string()),
                     "tokenUsage": Value::Null
                 }));
             }
         };
-        let chat_status = u16_field(&chat_response, "status");
-        if !(200..300).contains(&chat_status) {
+        let responses_status = u16_field(&responses_response, "status");
+        if !(200..300).contains(&responses_status) {
             return Ok(json!({
                 "ok": false,
-                "stage": "chat",
+                "stage": "responses",
                 "baseUrl": base_url,
-                "message": format!("Chat 测试返回 HTTP {chat_status}"),
+                "message": format!("Responses 测试返回 HTTP {responses_status}"),
                 "testModel": selected_model,
                 "modelCount": models.len(),
                 "modelIds": model_ids,
                 "selectedModel": selected_model,
                 "modelsResponse": models_response,
-                "chatRequest": chat_request_snapshot,
-                "chatResponse": chat_response,
+                "responsesRequest": responses_request_snapshot,
+                "responsesResponse": responses_response,
                 "tokenUsage": Value::Null
             }));
         }
 
-        let Some(chat_payload) = chat_response.get("json").filter(|value| !value.is_null()) else {
+        let Some(responses_payload) = responses_response
+            .get("json")
+            .filter(|value| !value.is_null())
+        else {
             return Ok(json!({
                 "ok": false,
-                "stage": "chat",
+                "stage": "responses",
                 "baseUrl": base_url,
-                "message": "Chat 测试响应不是有效 JSON",
+                "message": "Responses 测试响应不是有效 JSON",
                 "testModel": selected_model,
                 "modelCount": models.len(),
                 "modelIds": model_ids,
                 "selectedModel": selected_model,
                 "modelsResponse": models_response,
-                "chatRequest": chat_request_snapshot,
-                "chatResponse": chat_response,
+                "responsesRequest": responses_request_snapshot,
+                "responsesResponse": responses_response,
                 "tokenUsage": Value::Null
             }));
         };
 
-        let token_usage = api_test_token_usage(chat_payload);
+        let token_usage = api_test_token_usage(responses_payload);
 
         Ok(json!({
             "ok": true,
             "stage": "complete",
             "baseUrl": base_url,
-            "message": "Base URL 可用，Chat 测试成功",
+            "message": "Base URL 可用，Responses 测试成功",
             "testModel": selected_model,
             "modelCount": models.len(),
             "modelIds": model_ids,
             "selectedModel": selected_model,
             "modelsResponse": models_response,
-            "chatRequest": chat_request_snapshot,
-            "chatResponse": chat_response,
+            "responsesRequest": responses_request_snapshot,
+            "responsesResponse": responses_response,
             "tokenUsage": token_usage
         }))
     })

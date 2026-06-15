@@ -4,6 +4,8 @@ use super::*;
 use crate::settings::{default_api_mode, read_settings_value};
 use model::ApiModeProfile;
 
+const API_WIRE_RESPONSES: &str = "responses";
+
 impl ApiModeProfile {
     pub(super) fn api_key_or_auth_file(&self) -> String {
         if self.api_key.is_empty() {
@@ -71,6 +73,7 @@ fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Valu
     vec![
         ("name", Value::String(API_PROVIDER_ID.to_string())),
         ("base_url", Value::String(profile.base_url.clone())),
+        ("wire_api", Value::String(API_WIRE_RESPONSES.to_string())),
         ("supports_websockets", Value::Bool(false)),
         ("requires_openai_auth", Value::Bool(true)),
     ]
@@ -127,7 +130,7 @@ mod tests {
     use serde_json::Map;
 
     #[test]
-    fn api_mode_provider_config_uses_fixed_api_name_and_openai_auth() {
+    fn api_mode_provider_config_uses_responses_wire_api_and_openai_auth() {
         let profile = ApiModeProfile {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: "sk-test".to_string(),
@@ -139,7 +142,10 @@ mod tests {
             .collect();
 
         assert_eq!(config.get("name").and_then(Value::as_str), Some("api"));
-        assert!(!config.contains_key("wire_api"));
+        assert_eq!(
+            config.get("wire_api").and_then(Value::as_str),
+            Some(API_WIRE_RESPONSES)
+        );
         assert_eq!(
             config.get("supports_websockets").and_then(Value::as_bool),
             Some(false)

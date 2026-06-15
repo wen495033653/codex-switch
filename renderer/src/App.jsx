@@ -173,6 +173,20 @@ function MainApp() {
     return res;
   };
 
+  const saveApiTestResults = async (apiTestResults) => {
+    const nextApiTestResults = apiTestResults && typeof apiTestResults === 'object'
+      ? apiTestResults
+      : {};
+    setSettings(prev => ({ ...prev, api_test_results: nextApiTestResults }));
+    setSettingsDraft(prev => ({ ...prev, api_test_results: nextApiTestResults }));
+    try {
+      const res = await window.api.updateSettings({ api_test_results: nextApiTestResults });
+      applySettings(res);
+    } catch (err) {
+      toastError(err, '保存 API 预检结果失败', 7000);
+    }
+  };
+
   const {
     activeApiProfileId,
     addApiProfile,
@@ -193,6 +207,7 @@ function MainApp() {
     setApiProfiles,
     updateApiProfileModalDraft
   } = useApiModeDraft({
+    apiTestResults: settings.api_test_results,
     applySettings,
     toastError
   });
@@ -265,9 +280,11 @@ function MainApp() {
     activeApiProfileId,
     apiDraft,
     apiProfiles,
+    apiTestResults: settings.api_test_results,
     applySettings,
     clearApiAutoSaveTimer,
     handleRes,
+    onSaveApiTestResults: saveApiTestResults,
     onUsageStatsRefresh: () => refreshUsageStats({ silent: true }),
     showIdeReopen,
     toastError
@@ -433,19 +450,6 @@ function MainApp() {
   });
 
   const apiProfileBusy = savingApiMode || savingApiProfile;
-  const saveApiTestResults = async (apiTestResults) => {
-    const nextApiTestResults = apiTestResults && typeof apiTestResults === 'object'
-      ? apiTestResults
-      : {};
-    setSettings(prev => ({ ...prev, api_test_results: nextApiTestResults }));
-    setSettingsDraft(prev => ({ ...prev, api_test_results: nextApiTestResults }));
-    try {
-      const res = await window.api.updateSettings({ api_test_results: nextApiTestResults });
-      applySettings(res);
-    } catch (err) {
-      toastError(err, '保存 API 检查结果失败', 7000);
-    }
-  };
 
   return (
     <div className={`app${IS_DEV_BUILD ? ' dev-build' : ''}`}>
