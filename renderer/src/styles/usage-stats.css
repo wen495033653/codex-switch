@@ -1,11 +1,11 @@
 .usage-stats-summary {
   min-width: 0;
-  min-height: 40px;
-  padding-top: 8px;
+  min-height: 34px;
+  padding-top: 6px;
   border-top: 1px dashed rgba(255, 255, 255, 0.1);
   display: grid;
   grid-template-rows: auto auto;
-  gap: 5px;
+  gap: 4px;
   align-content: end;
   overflow: hidden;
 }
@@ -72,7 +72,7 @@
     "label cost";
   column-gap: 6px;
   align-items: center;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.055);
@@ -86,7 +86,7 @@
 
 .usage-stats-metric-empty {
   grid-template-areas: "label value";
-  min-height: 32px;
+  min-height: 28px;
   background: rgba(255, 255, 255, 0.025);
   border-style: dashed;
   border-color: rgba(255, 255, 255, 0.075);
