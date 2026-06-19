@@ -1,7 +1,8 @@
 use super::{
     codex_processes_have_cdp_launch, inject_codex_cdp_hooks, inject_codex_mobile_no_replace_hook,
-    kill_process_tree, launch_codex_with_cdp_hooks, relaunch_executable_with_retry,
-    wait_for_pids_exit, CodexAppOpenOutcome, CodexCdpLaunchHooks, CodexProcess,
+    kill_process_tree, launch_codex_with_cdp_hooks, launch_codex_with_cdp_hooks_with_options,
+    launch_executable_with_options, relaunch_executable_with_retry, wait_for_pids_exit,
+    CodexAppOpenOutcome, CodexCdpLaunchHooks, CodexProcess,
 };
 use crate::{
     codex_launcher::{
@@ -553,6 +554,39 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
             );
             Err(err)
         }
+    }
+}
+
+pub(crate) fn launch_codex_executable_for_current_settings_with_options(
+    executable: &str,
+    args: &[String],
+    envs: &[(String, String)],
+) -> Result<bool, String> {
+    let path = Path::new(executable);
+    if !path.exists() {
+        log_session_sync_event(
+            "codex_app_launch_executable_skip",
+            json!({
+                "executable": executable,
+                "reason": "missing_executable"
+            }),
+        );
+        return Ok(false);
+    }
+    let mode = codex_relaunch_mode_for_current_settings()?;
+    log_session_sync_event(
+        "codex_app_launch_executable_start",
+        json!({
+            "executable": executable,
+            "mode": format!("{mode:?}")
+        }),
+    );
+    match mode {
+        CodexRelaunchMode::Cdp(hooks) => {
+            launch_codex_with_cdp_hooks_with_options(path, hooks, args, envs)?;
+            Ok(true)
+        }
+        CodexRelaunchMode::Normal => launch_executable_with_options(executable, args, envs),
     }
 }
 

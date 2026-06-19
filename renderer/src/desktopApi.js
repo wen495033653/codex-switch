@@ -45,6 +45,9 @@ const COMMAND_BINDINGS = {
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
   restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
+  openCodexAppInstance: ['open_codex_app_instance', payload => ({ payload })],
+  showCodexAppInstance: ['show_codex_app_instance', payload => ({ payload })],
+  getCodexAppInstanceStatus: ['get_codex_app_instance_status'],
   getCodexRemoteControlStatus: ['get_codex_remote_control_status'],
   setCodexRemoteControlAccountId: ['set_codex_remote_control_account_id', id => ({ id })],
   setCodexRemoteControlEnabled: ['set_codex_remote_control_enabled', payload => ({

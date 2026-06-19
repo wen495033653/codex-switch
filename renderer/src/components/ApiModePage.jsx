@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApiProfilePagination } from '../hooks';
+import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import {
   DEFAULT_API_TEST_MODEL,
   getApiLastAvailableAt,
@@ -227,6 +228,9 @@ export default function ApiModePage({
   onEditApiProfile,
   onOpenCodexConfigToml,
   onOpenUsageStatsDetail,
+  onOpenCodexAppInstance,
+  openingCodexAppTarget,
+  runningCodexAppInstances,
   onSaveApiTestResults,
   onSwitchToApiMode,
   savingApiMode,
@@ -379,6 +383,13 @@ export default function ApiModePage({
                 {currentItems.map((profile, index) => {
                   const profileId = profile.id || `api-${startIdx + index}`;
                   const configured = Boolean(profile.name && profile.base_url && profile.api_key);
+                  const codexAppTargetKey = `api:${profileId}`;
+                  const codexAppInstanceKey = getCodexAppInstanceKey('api', profileId);
+                  const openingThisCodexApp = openingCodexAppTarget === codexAppTargetKey;
+                  const openingAnyCodexApp = Boolean(openingCodexAppTarget);
+                  const codexAppInstanceRunning = Boolean(
+                    codexAppInstanceKey && runningCodexAppInstances && runningCodexAppInstances[codexAppInstanceKey]
+                  );
                   const active = apiModeActive && profileId === activeApiProfileId;
                   const profileName = profile.name || `API ${startIdx + index + 1}`;
                   const baseUrl = profile.base_url || '';
@@ -424,6 +435,11 @@ export default function ApiModePage({
                         <div className="account-card-name-row">
                           <div className="account-card-name" title={profileName}>{profileName}</div>
                           {active && <span className="current-badge">当前</span>}
+                          {codexAppInstanceRunning && (
+                            <span className="codex-app-running-badge" title="独立 Codex app 正在运行">
+                              窗口运行中
+                            </span>
+                          )}
                           {testForThisProfile && (
                             <span className={`api-profile-test-tag ${testResultState}`} title={lastAvailableTimeText || testTimeText || testForThisProfile.message || testTagText}>
                               {testLoading && <span className="api-profile-test-spinner" aria-hidden="true" />}
@@ -468,6 +484,19 @@ export default function ApiModePage({
                           >
                             {testLoading && <span className="api-profile-test-spinner" aria-hidden="true" />}
                             <span>{testActionText}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
+                            title={configured ? (openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此 API 打开独立 Codex app')) : '配置未完整'}
+                            aria-label={openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此 API 打开独立 Codex app')}
+                            disabled={!configured || openingAnyCodexApp}
+                            onClick={() => onOpenCodexAppInstance(profileId)}
+                          >
+                            <svg className={openingThisCodexApp ? 'icon-spin' : ''} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7.5h8.5A2.5 2.5 0 0 1 19 10v6.5A2.5 2.5 0 0 1 16.5 19H8a2.5 2.5 0 0 1-2.5-2.5V10A2.5 2.5 0 0 1 8 7.5Z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.5 15.5H5A2.5 2.5 0 0 1 2.5 13V6.5A2.5 2.5 0 0 1 5 4h8.5A2.5 2.5 0 0 1 16 6.5V7" />
+                            </svg>
                           </button>
                           <button
                             type="button"

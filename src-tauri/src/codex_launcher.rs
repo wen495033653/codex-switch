@@ -32,6 +32,7 @@ pub(crate) struct IdeRuntime {
 }
 
 mod codex_app;
+mod codex_app_instances;
 mod codex_app_open;
 mod codex_app_watcher;
 mod ide_snapshot;
@@ -67,4 +68,19 @@ pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, St
 #[tauri::command]
 pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     codex_app_open::restart_current_codex_app_normal()
+}
+
+#[tauri::command]
+pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
+    codex_app_instances::open_codex_app_instance(payload)
+}
+
+#[tauri::command]
+pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
+    codex_app_instances::show_codex_app_instance(payload)
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
+    codex_app_instances::get_codex_app_instance_status()
 }

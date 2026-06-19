@@ -6,6 +6,7 @@
 }
 
 .icon-btn {
+  position: relative;
   width: 34px;
   height: 34px;
   border-radius: 9px;
@@ -23,6 +24,41 @@
   background: rgba(255, 255, 255, 0.075);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.16);
+}
+
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.icon-btn:disabled:hover {
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.icon-btn.codex-app-instance-running {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.11);
+  border-color: rgba(134, 239, 172, 0.26);
+}
+
+.icon-btn.codex-app-instance-running:hover {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(134, 239, 172, 0.38);
+}
+
+.icon-btn.codex-app-instance-running::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(42, 42, 42, 0.96);
 }
 
 .icon-btn svg {

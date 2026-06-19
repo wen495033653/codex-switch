@@ -875,6 +875,15 @@ pub(crate) fn launch_codex_with_cdp_hooks(
     executable_path: &Path,
     hooks: CodexCdpLaunchHooks,
 ) -> Result<(), String> {
+    launch_codex_with_cdp_hooks_with_options(executable_path, hooks, &[], &[])
+}
+
+pub(crate) fn launch_codex_with_cdp_hooks_with_options(
+    executable_path: &Path,
+    hooks: CodexCdpLaunchHooks,
+    args: &[String],
+    envs: &[(String, String)],
+) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("Codex app hook 目前仅支持 Windows 重启入口".to_string());
     }
@@ -896,6 +905,12 @@ pub(crate) fn launch_codex_with_cdp_hooks(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for arg in args {
+        command.arg(arg);
+    }
+    for (name, value) in envs {
+        command.env(name, value);
+    }
     if let Some(parent) = executable_path.parent() {
         command.current_dir(parent);
     }

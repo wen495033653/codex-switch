@@ -94,6 +94,28 @@ html[data-theme="light"] .current-badge {
   border-color: #2563eb;
 }
 
+html[data-theme="light"] .codex-app-running-badge {
+  background: #dcfce7;
+  color: #15803d;
+  border-color: #86efac;
+}
+
+html[data-theme="light"] .icon-btn.codex-app-instance-running {
+  color: #15803d;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+html[data-theme="light"] .icon-btn.codex-app-instance-running:hover {
+  color: #166534;
+  background: #bbf7d0;
+  border-color: #4ade80;
+}
+
+html[data-theme="light"] .icon-btn.codex-app-instance-running::after {
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
 html[data-theme="light"] .quota-reset-inline,
 html[data-theme="light"] .quota-reset-card {
   color: #64748b;

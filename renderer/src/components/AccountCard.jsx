@@ -1,5 +1,6 @@
 import QuotaItem from './QuotaItem';
 import UsageStatsSummary from './UsageStatsSummary';
+import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, maskAccountDisplayName } from '../utils/auth';
 
 const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
@@ -54,7 +55,7 @@ function getAuthBadge(info) {
     return null;
 }
 
-export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail }) {
+export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail }) {
     const info = parseAuthInfo(acc);
     const plan = info.planType;
     const authBadge = getAuthBadge(info);
@@ -68,6 +69,13 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
     const name = getAccountName(acc);
     const displayName = maskAccountName ? maskAccountDisplayName(name) : name;
     const accountId = getAccountId(acc);
+    const codexAppTargetKey = accountId ? `account:${accountId}` : '';
+    const codexAppInstanceKey = accountId ? getCodexAppInstanceKey('account', accountId) : '';
+    const openingThisCodexApp = openingCodexAppTarget === codexAppTargetKey;
+    const openingAnyCodexApp = Boolean(openingCodexAppTarget);
+    const codexAppInstanceRunning = Boolean(
+        codexAppInstanceKey && runningCodexAppInstances && runningCodexAppInstances[codexAppInstanceKey]
+    );
     const chatgptAccountId = getChatgptAccountId(acc);
     const accountTag = chatgptAccountId ? chatgptAccountId.split('-')[0] : '';
     const usageNoticeTitle = info.usageNotice
@@ -80,6 +88,11 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                 <div className="account-card-name-row">
                     <div className="account-card-name" title={displayName}>{displayName}</div>
                     {isCurrent && <span className="current-badge">当前</span>}
+                    {codexAppInstanceRunning && (
+                        <span className="codex-app-running-badge" title="独立 Codex app 正在运行">
+                            窗口运行中
+                        </span>
+                    )}
                 </div>
                 <div className="account-badges account-card-badges">
                     {plan && !isPersonalPlan && (
@@ -143,6 +156,20 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
 
             <div className="account-card-footer">
                 <div className="action-btns">
+                    {!info.isApiMode && (
+                        <button
+                            className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
+                            title={openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此账号打开独立 Codex app')}
+                            aria-label={openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此账号打开独立 Codex app')}
+                            onClick={() => onOpenCodexAppInstance(accountId)}
+                            disabled={!accountId || openingAnyCodexApp}
+                        >
+                            <svg className={openingThisCodexApp ? 'icon-spin' : ''} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7.5h8.5A2.5 2.5 0 0 1 19 10v6.5A2.5 2.5 0 0 1 16.5 19H8a2.5 2.5 0 0 1-2.5-2.5V10A2.5 2.5 0 0 1 8 7.5Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.5 15.5H5A2.5 2.5 0 0 1 2.5 13V6.5A2.5 2.5 0 0 1 5 4h8.5A2.5 2.5 0 0 1 16 6.5V7" />
+                            </svg>
+                        </button>
+                    )}
                     {!info.isApiMode && (
                         <button className="icon-btn" title="查看 Refresh Token" onClick={() => onViewRefreshToken(acc)}>
                             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -19,6 +19,9 @@ export default function AccountsPage({
     onRefreshAllClick,
     onSearchChange,
     onSwitchAccount,
+    onOpenCodexAppInstance,
+    openingCodexAppTarget,
+    runningCodexAppInstances,
     onOpenUsageStatsDetail,
     onViewRefreshToken,
     page,
@@ -98,6 +101,9 @@ export default function AccountsPage({
                                 usageStats={usageStats}
                                 maskAccountName={maskAccountName}
                                 onSwitch={onSwitchAccount}
+                                onOpenCodexAppInstance={onOpenCodexAppInstance}
+                                openingCodexAppTarget={openingCodexAppTarget}
+                                runningCodexAppInstances={runningCodexAppInstances}
                                 onRefresh={onRefreshAccount}
                                 onDelete={onDeleteAccount}
                                 onViewRefreshToken={onViewRefreshToken}

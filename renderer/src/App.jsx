@@ -10,6 +10,11 @@ import {
   OAUTH_TIMEOUT_HINT
 } from './utils/appState';
 import {
+  getCodexAppInstanceKey,
+  markCodexAppInstanceRunning,
+  normalizeCodexAppInstanceStatus
+} from './utils/codexAppInstances';
+import {
   useAddAccountFlow,
   useAccountOperations,
   useAccountPagination,
@@ -86,10 +91,25 @@ function MainApp() {
   const [dataDir, setDataDir] = useState('');
   const [usageStats, setUsageStats] = useState({ subscriptions: {}, api_profiles: {}, warnings: [] });
   const [usageStatsDetail, setUsageStatsDetail] = useState(null);
+  const [codexAppInstanceStatus, setCodexAppInstanceStatus] = useState(() => normalizeCodexAppInstanceStatus(null));
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
+  const refreshCodexAppInstanceStatus = async ({ silent = true } = {}) => {
+    if (!window.api || typeof window.api.getCodexAppInstanceStatus !== 'function') {
+      setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(null));
+      return null;
+    }
+    try {
+      const res = await window.api.getCodexAppInstanceStatus();
+      setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(res));
+      return res;
+    } catch (err) {
+      if (!silent) toastError(err, '加载 Codex app 多开状态失败', 7000);
+      return null;
+    }
+  };
   const refreshUsageStats = async ({ silent = false } = {}) => {
     if (!window.api || typeof window.api.getUsageStats !== 'function') return null;
     try {
@@ -377,6 +397,33 @@ function MainApp() {
     toastError
   });
 
+  const [openingCodexAppTarget, setOpeningCodexAppTarget] = useState('');
+
+  const openCodexAppInstance = async (kind, id) => {
+    const targetId = String(id || '').trim();
+    if (!kind || !targetId || openingCodexAppTarget) return;
+    const targetKey = `${kind}:${targetId}`;
+    const instanceKey = getCodexAppInstanceKey(kind, targetId);
+    const instanceRunning = Boolean(
+      instanceKey && codexAppInstanceStatus.runningByKey[instanceKey]
+    );
+    setOpeningCodexAppTarget(targetKey);
+    try {
+      const res = instanceRunning && typeof window.api.showCodexAppInstance === 'function'
+        ? await window.api.showCodexAppInstance({ kind, id: targetId })
+        : await window.api.openCodexAppInstance({ kind, id: targetId });
+      if (!instanceRunning) {
+        setCodexAppInstanceStatus(prev => markCodexAppInstanceRunning(prev, res));
+      }
+      toast((res && res.message) || (instanceRunning ? '已打开 Codex app 窗口' : '已打开 Codex app'));
+      window.setTimeout(() => refreshCodexAppInstanceStatus({ silent: true }), 1200);
+    } catch (err) {
+      toastError(err, '打开 Codex app 失败', 7000);
+    } finally {
+      setOpeningCodexAppTarget(prev => (prev === targetKey ? '' : prev));
+    }
+  };
+
   useAppBootstrap({
     applyOauthUpdate,
     applySettings,
@@ -392,23 +439,31 @@ function MainApp() {
 
   useEffect(() => {
     refreshUsageStats({ silent: true });
+    refreshCodexAppInstanceStatus({ silent: true });
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'hidden') return;
       refreshUsageStats({ silent: true });
+      refreshCodexAppInstanceStatus({ silent: true });
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         refreshUsageStats({ silent: true });
+        refreshCodexAppInstanceStatus({ silent: true });
       }
     };
     const intervalId = window.setInterval(refreshWhenVisible, 30000);
+    const codexAppInstanceIntervalId = window.setInterval(
+      () => refreshCodexAppInstanceStatus({ silent: true }),
+      3000
+    );
 
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.clearInterval(intervalId);
+      window.clearInterval(codexAppInstanceIntervalId);
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
@@ -516,6 +571,9 @@ function MainApp() {
             onEditApiProfile: editApiProfile,
             onOpenCodexConfigToml: openCodexConfigToml,
             onOpenUsageStatsDetail: setUsageStatsDetail,
+            onOpenCodexAppInstance: profileId => openCodexAppInstance('api', profileId),
+            openingCodexAppTarget,
+            runningCodexAppInstances: codexAppInstanceStatus.runningByKey,
             onSaveApiTestResults: saveApiTestResults,
             onSwitchToApiMode: switchToApiModeFromPage,
             savingApiMode: apiProfileBusy,
@@ -542,6 +600,9 @@ function MainApp() {
             onRefreshAllClick: openRefreshAllModal,
             onSearchChange: setSearch,
             onSwitchAccount: handleSwitchAccount,
+            onOpenCodexAppInstance: accountId => openCodexAppInstance('account', accountId),
+            openingCodexAppTarget,
+            runningCodexAppInstances: codexAppInstanceStatus.runningByKey,
             onOpenUsageStatsDetail: setUsageStatsDetail,
             onViewRefreshToken: openRefreshTokenModal,
             page,

@@ -47,7 +47,11 @@ pub(crate) fn wait_for_pids_exit(pids: &[u64], timeout_ms: u64) -> Vec<u64> {
     alive
 }
 
-pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String> {
+pub(crate) fn launch_executable_with_options(
+    executable_path: &str,
+    args: &[String],
+    envs: &[(String, String)],
+) -> Result<bool, String> {
     let path = PathBuf::from(executable_path);
     if !path.exists() {
         return Ok(false);
@@ -58,6 +62,12 @@ pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String>
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for arg in args {
+        command.arg(arg);
+    }
+    for (name, value) in envs {
+        command.env(name, value);
+    }
     if let Some(parent) = path.parent() {
         command.current_dir(parent);
     }
@@ -68,6 +78,10 @@ pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String>
         .spawn()
         .map(|_| true)
         .map_err(|err| format!("重新打开应用失败 {}: {err}", path.display()))
+}
+
+pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String> {
+    launch_executable_with_options(executable_path, &[], &[])
 }
 
 pub(crate) fn sanitize_desktop_app_launch_env(command: &mut Command) {

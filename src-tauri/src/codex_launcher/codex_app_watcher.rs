@@ -16,6 +16,7 @@ use std::{
 const WATCHER_INTERVAL_MS: u64 = 2_000;
 const TAKEOVER_GRACE_MS: u64 = 500;
 const PENDING_RELAUNCH_TTL_MS: u64 = 30_000;
+const SUPPRESSED_OPEN_TTL_MS: u64 = 30_000;
 const OPEN_ABSENCE_RESET_MS: u64 = 3_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,8 +51,16 @@ struct ExpectedCodexAppOpen {
     until: Option<Instant>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct SuppressedCodexAppOpen {
+    count: usize,
+    source: String,
+    until: Option<Instant>,
+}
+
 static CURRENT_CODEX_APP_PROCESSES: OnceLock<Mutex<CodexAppWatcherSnapshot>> = OnceLock::new();
 static EXPECTED_CODEX_APP_OPEN: OnceLock<Mutex<ExpectedCodexAppOpen>> = OnceLock::new();
+static SUPPRESSED_CODEX_APP_OPENS: OnceLock<Mutex<SuppressedCodexAppOpen>> = OnceLock::new();
 
 fn current_codex_app_processes_state() -> &'static Mutex<CodexAppWatcherSnapshot> {
     CURRENT_CODEX_APP_PROCESSES.get_or_init(|| Mutex::new(CodexAppWatcherSnapshot::default()))
@@ -59,6 +68,10 @@ fn current_codex_app_processes_state() -> &'static Mutex<CodexAppWatcherSnapshot
 
 fn expected_codex_app_open_state() -> &'static Mutex<ExpectedCodexAppOpen> {
     EXPECTED_CODEX_APP_OPEN.get_or_init(|| Mutex::new(ExpectedCodexAppOpen::default()))
+}
+
+fn suppressed_codex_app_open_state() -> &'static Mutex<SuppressedCodexAppOpen> {
+    SUPPRESSED_CODEX_APP_OPENS.get_or_init(|| Mutex::new(SuppressedCodexAppOpen::default()))
 }
 
 pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
@@ -146,6 +159,42 @@ pub(crate) fn clear_expected_codex_app_open_for_executables(executables: &[Strin
                 json!({ "executables": keys }),
             );
         }
+    }
+}
+
+pub(crate) fn suppress_next_codex_app_open_handler(source: &str) {
+    if let Ok(mut suppressed) = suppressed_codex_app_open_state().lock() {
+        suppressed.count = suppressed.count.saturating_add(1);
+        suppressed.source = source.to_string();
+        suppressed.until = Some(Instant::now() + StdDuration::from_millis(SUPPRESSED_OPEN_TTL_MS));
+        log_session_sync_event(
+            "codex_app_watcher_suppress_open_set",
+            json!({
+                "source": suppressed.source.clone(),
+                "count": suppressed.count,
+                "ttlMs": SUPPRESSED_OPEN_TTL_MS
+            }),
+        );
+    }
+}
+
+pub(crate) fn clear_suppressed_codex_app_open_handler(source: &str) {
+    if let Ok(mut suppressed) = suppressed_codex_app_open_state().lock() {
+        if suppressed.count == 0 || suppressed.source != source {
+            return;
+        }
+        suppressed.count -= 1;
+        if suppressed.count == 0 {
+            suppressed.source.clear();
+            suppressed.until = None;
+        }
+        log_session_sync_event(
+            "codex_app_watcher_suppress_open_cleared",
+            json!({
+                "source": source,
+                "remaining": suppressed.count
+            }),
+        );
     }
 }
 
@@ -310,6 +359,23 @@ where
             continue;
         }
 
+        if let Some(source) = take_suppressed_codex_app_open_source(now) {
+            log_session_sync_event(
+                "codex_app_watcher_suppressed_open_matched",
+                json!({
+                    "action": "skip_on_open_handler",
+                    "source": source,
+                    "signature": codex_open_signature_log_value(&signature),
+                    "executables": executable_keys.clone(),
+                    "processes": codex_processes_log_value(&processes)
+                }),
+            );
+            open_signature = Some(signature.clone());
+            reset_candidate(&mut candidate_signature, &mut candidate_since);
+            sleep_interval();
+            continue;
+        }
+
         open_signature = Some(signature.clone());
         log_session_sync_event(
             "codex_app_watcher_on_open_invoke",
@@ -409,6 +475,28 @@ fn take_expected_codex_app_open_source_if_matches(
     expected.executables.clear();
     expected.source.clear();
     expected.until = None;
+    Some(source)
+}
+
+fn take_suppressed_codex_app_open_source(now: Instant) -> Option<String> {
+    let Ok(mut suppressed) = suppressed_codex_app_open_state().lock() else {
+        return None;
+    };
+    if until_expired(suppressed.until, now) {
+        suppressed.count = 0;
+        suppressed.source.clear();
+        suppressed.until = None;
+        return None;
+    }
+    if suppressed.count == 0 {
+        return None;
+    }
+    suppressed.count -= 1;
+    let source = suppressed.source.clone();
+    if suppressed.count == 0 {
+        suppressed.source.clear();
+        suppressed.until = None;
+    }
     Some(source)
 }
 
