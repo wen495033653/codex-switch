@@ -13,7 +13,6 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -339,7 +338,7 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
     };
 
     struct WindowSearch {
-        pids: HashSet<u32>,
+        pids: std::collections::HashSet<u32>,
         hwnd: HWND,
     }
 
@@ -360,7 +359,7 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
     let pids = pids
         .iter()
         .filter_map(|pid| u32::try_from(*pid).ok())
-        .collect::<HashSet<_>>();
+        .collect::<std::collections::HashSet<_>>();
     if pids.is_empty() {
         return Err("独立 Codex app 窗口未运行，请重新打开一次".to_string());
     }
