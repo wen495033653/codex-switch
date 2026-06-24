@@ -35,6 +35,7 @@ export default function SettingsPage({
     updateCodexProxySettings,
     openRepository,
     handleCheckUpdate,
+    onCodexRemoteControlAutoDisabled,
     onOpenGptPool
 }) {
     return (
@@ -92,6 +93,7 @@ export default function SettingsPage({
                             restartingCodexApp={restartingCodexApp}
                             restartCurrentCodexAppNormal={restartCurrentCodexAppNormal}
                             codexRemoteControlPendingEnabled={codexRemoteControlPendingEnabled}
+                            onCodexRemoteControlAutoDisabled={onCodexRemoteControlAutoDisabled}
                             setSettingsDraft={setSettingsDraft}
                             setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
                             setCodexRemoteControlAccountId={setCodexRemoteControlAccountId}

@@ -26,6 +26,7 @@ export default function AppDialogs({
   pluginRestartNotice = { visible: false },
   refreshAll,
   refreshToken,
+  remoteControlNotice = { visible: false },
   update
 }) {
   return (
@@ -42,6 +43,17 @@ export default function AppDialogs({
           cancelText="稍后"
           onConfirm={pluginRestartNotice.onRestart}
           onCancel={pluginRestartNotice.onClose}
+        />
+      )}
+
+      {remoteControlNotice.visible && (
+        <ConfirmDialog
+          title="远程控制"
+          message={remoteControlNotice.message || '当前控制账号过期，远程控制关闭'}
+          confirmText="知道了"
+          showCancel={false}
+          onConfirm={remoteControlNotice.onClose}
+          onCancel={remoteControlNotice.onClose}
         />
       )}
 

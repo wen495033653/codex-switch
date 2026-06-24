@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
 import { getAccountName, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 
@@ -44,6 +44,7 @@ export default function ProxySettingsTab({
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     codexRemoteControlPendingEnabled,
+    onCodexRemoteControlAutoDisabled,
     setSettingsDraft,
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
@@ -92,6 +93,16 @@ export default function ProxySettingsTab({
         backendEnvironment: null,
         connectionStatus: null
     });
+    const remoteControlAutoDisableNotifiedRef = useRef(false);
+    const onRemoteControlAutoDisabledRef = useRef(onCodexRemoteControlAutoDisabled);
+    useEffect(() => {
+        onRemoteControlAutoDisabledRef.current = onCodexRemoteControlAutoDisabled;
+    }, [onCodexRemoteControlAutoDisabled]);
+    useEffect(() => {
+        if (remoteControlEnabledInCurrentMode) {
+            remoteControlAutoDisableNotifiedRef.current = false;
+        }
+    }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
     useEffect(() => {
         let disposed = false;
 
@@ -155,6 +166,12 @@ export default function ProxySettingsTab({
             try {
                 const result = await window.api.getCodexRemoteControlStatus();
                 if (!disposed) {
+                    if (result && result.autoDisabled === true && !remoteControlAutoDisableNotifiedRef.current) {
+                        remoteControlAutoDisableNotifiedRef.current = true;
+                        if (typeof onRemoteControlAutoDisabledRef.current === 'function') {
+                            onRemoteControlAutoDisabledRef.current(result);
+                        }
+                    }
                     setRemoteControlStatus({
                         loading: false,
                         error: '',
@@ -259,7 +276,7 @@ export default function ProxySettingsTab({
         : codexRemoteControlPendingEnabled === false
             ? '关闭中'
             : codexRemoteControlEnabled
-                ? '已启用'
+                ? '启动'
                 : remoteControlBlockedBySubscription
                     ? '不可用'
                     : '启用';
@@ -300,7 +317,7 @@ export default function ProxySettingsTab({
                         disabled={saving}
                         onClick={() => setCodexProxyEnvEnabled(!proxyEnvEnabled)}
                     >
-                        <span className="settings-proxy-switch-label">启用代理</span>
+                        <span className="settings-proxy-switch-label">启动</span>
                         <span className="settings-switch" aria-hidden="true">
                             <span className="settings-switch-thumb" />
                         </span>

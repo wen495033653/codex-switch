@@ -96,6 +96,10 @@ function MainApp() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
+  const [remoteControlNotice, setRemoteControlNotice] = useState({
+    visible: false,
+    message: ''
+  });
   const refreshCodexAppInstanceStatus = async ({ silent = true } = {}) => {
     if (!window.api || typeof window.api.getCodexAppInstanceStatus !== 'function') {
       setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(null));
@@ -184,6 +188,24 @@ function MainApp() {
     setApiDraft(nextSettings.api_mode || DEFAULT_SETTINGS.api_mode);
     setSettingsLoaded(true);
     return nextSettings;
+  };
+
+  const handleCodexRemoteControlAutoDisabled = (res) => {
+    try {
+      if (res && res.settings) {
+        applySettings(res);
+      } else {
+        setSettings(prev => ({ ...prev, codex_remote_control_enabled: false }));
+        setSettingsDraft(prev => ({ ...prev, codex_remote_control_enabled: false }));
+      }
+    } catch (err) {
+      toastError(err, '同步远程控制状态失败', 7000);
+    }
+
+    setRemoteControlNotice({
+      visible: true,
+      message: (res && res.message) || '当前控制账号过期，远程控制关闭'
+    });
   };
 
   const handleRes = (res) => {
@@ -559,6 +581,7 @@ function MainApp() {
             updateCodexProxySettings,
             openRepository,
             handleCheckUpdate,
+            onCodexRemoteControlAutoDisabled: handleCodexRemoteControlAutoDisabled,
             onOpenGptPool: openGptPoolLanding
           }}
           apiModePageProps={{
@@ -657,6 +680,11 @@ function MainApp() {
             onClose: closeRefreshTokenModal,
             onCopy: copyRefreshToken,
             onRefresh: handleRefreshAccountToken
+          }}
+          remoteControlNotice={{
+            visible: remoteControlNotice.visible,
+            message: remoteControlNotice.message,
+            onClose: () => setRemoteControlNotice({ visible: false, message: '' })
           }}
           deleteAccount={{
             displayName: deleteAccountDisplayName,

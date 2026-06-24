@@ -26,6 +26,7 @@ const REMOTE_CONTROL_ENVIRONMENTS_ENDPOINT: &str =
     "https://chatgpt.com/backend-api/wham/remote/control/environments";
 const REMOTE_CONTROL_BACKEND_STATUS_TIMEOUT_MS: u64 = 6_000;
 const REMOTE_CONTROL_BACKEND_ERROR_TEXT_MAX_LEN: usize = 1800;
+const REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE: &str = "当前控制账号过期，远程控制关闭";
 
 fn remote_control_config_enabled_from_settings(settings: &Value) -> bool {
     bool_field(settings, REMOTE_CONTROL_ENABLED_SETTING_KEY)
@@ -559,6 +560,7 @@ fn remote_control_backend_error_message(
         }
         _ if text.contains("refresh_token_reused")
             || text.contains("refresh token has already been used")
+            || text.contains("authentication token is expired")
             || text.contains("please log out and sign in again") =>
         {
             Some(("login_expired", "控制账号登录已过期，请重新登录"))
@@ -697,19 +699,77 @@ fn remote_control_status_value(settings: &Value, backend_environment: Option<&Va
     })
 }
 
+fn remote_control_status_is_login_expired(status: &Value) -> bool {
+    status.get("status").and_then(Value::as_str) == Some("login_expired")
+}
+
+fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String> {
+    let settings = update_settings_value(&json!({
+        REMOTE_CONTROL_ENABLED_SETTING_KEY: false
+    }))?;
+    let settings = super::codex_app::apply_codex_proxy_env_state_to_settings(settings)?;
+    let changed = sync_remote_control_runtime_for_current_settings("remote_control_login_expired")?;
+    Ok((settings, changed))
+}
+
 #[tauri::command]
 pub(crate) fn get_codex_remote_control_status() -> Result<Value, String> {
-    let settings = read_settings_value()?;
+    let mut settings = read_settings_value()?;
     let backend_environment = remote_control_backend_environment_status(&settings);
-    let connection_status = remote_control_status_value(&settings, backend_environment.as_ref());
-    Ok(json!({
+    let mut connection_status =
+        remote_control_status_value(&settings, backend_environment.as_ref());
+    let mut auto_disabled = false;
+    let mut changed = false;
+    let mut restart_required = false;
+
+    if remote_control_status_is_login_expired(&connection_status)
+        && remote_control_enabled_from_settings(&settings)
+    {
+        let codex_app_running =
+            !super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty();
+        let (disabled_settings, runtime_changed) = disable_remote_control_after_login_expired()?;
+        settings = disabled_settings;
+        auto_disabled = true;
+        changed = runtime_changed;
+        restart_required = codex_app_running && runtime_changed;
+        if let Some(status) = connection_status.as_object_mut() {
+            status.insert(
+                "message".to_string(),
+                json!(REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE),
+            );
+            status.insert("autoDisabled".to_string(), json!(true));
+        }
+        log_session_sync_event(
+            "codex_remote_control_auto_disabled",
+            json!({
+                "reason": "login_expired",
+                "changed": changed,
+                "restartRequired": restart_required
+            }),
+        );
+    }
+
+    let mut response = json!({
         "ok": true,
         "enabled": remote_control_config_enabled_from_settings(&settings),
         "effectiveEnabled": remote_control_enabled_from_settings(&settings),
         "accountId": remote_control_account_id_from_settings(&settings),
         "backendEnvironment": backend_environment,
         "connectionStatus": connection_status
-    }))
+    });
+    if auto_disabled {
+        if let Some(response) = response.as_object_mut() {
+            response.insert("autoDisabled".to_string(), json!(true));
+            response.insert(
+                "message".to_string(),
+                json!(REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE),
+            );
+            response.insert("settings".to_string(), settings);
+            response.insert("changed".to_string(), json!(changed));
+            response.insert("restartRequired".to_string(), json!(restart_required));
+        }
+    }
+    Ok(response)
 }
 
 #[tauri::command]
@@ -948,5 +1008,26 @@ mod tests {
             status.get("message").and_then(Value::as_str),
             Some("codex app 未找到")
         );
+    }
+
+    #[test]
+    fn backend_error_message_detects_expired_authentication_token() {
+        let raw = r#"HTTP 401 body: {"detail":"Provided authentication token is expired. Please try signing in again."}"#;
+
+        assert_eq!(
+            remote_control_backend_error_message(None, raw),
+            Some(("login_expired", "控制账号登录已过期，请重新登录"))
+        );
+    }
+
+    #[test]
+    fn remote_control_status_detects_login_expired() {
+        let status = json!({
+            "state": "warning",
+            "status": "login_expired",
+            "message": "控制账号登录已过期，请重新登录"
+        });
+
+        assert!(remote_control_status_is_login_expired(&status));
     }
 }
