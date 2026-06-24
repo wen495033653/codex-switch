@@ -33,6 +33,17 @@ import {
 } from './hooks';
 
 const IS_DEV_BUILD = import.meta.env.DEV;
+const CODEX_APP_INSTANCE_REOPEN_ERRORS = [
+  '独立 Codex app 窗口未运行',
+  '未找到独立 Codex app 的可见窗口'
+];
+
+function shouldReopenCodexAppInstanceAfterShowError(err) {
+  const message = typeof err === 'string'
+    ? err
+    : String((err && (err.message || err.error)) || '');
+  return CODEX_APP_INSTANCE_REOPEN_ERRORS.some(text => message.includes(text));
+}
 
 export default function App() {
   if (IS_DEV_BUILD && isDevLogWindow()) {
@@ -431,13 +442,27 @@ function MainApp() {
     );
     setOpeningCodexAppTarget(targetKey);
     try {
-      const res = instanceRunning && typeof window.api.showCodexAppInstance === 'function'
-        ? await window.api.showCodexAppInstance({ kind, id: targetId })
-        : await window.api.openCodexAppInstance({ kind, id: targetId });
-      if (!instanceRunning) {
+      let usedOpenCommand = false;
+      const openTargetInstance = async () => {
+        usedOpenCommand = true;
+        return window.api.openCodexAppInstance({ kind, id: targetId });
+      };
+
+      let res;
+      if (instanceRunning && typeof window.api.showCodexAppInstance === 'function') {
+        try {
+          res = await window.api.showCodexAppInstance({ kind, id: targetId });
+        } catch (err) {
+          if (!shouldReopenCodexAppInstanceAfterShowError(err)) throw err;
+          res = await openTargetInstance();
+        }
+      } else {
+        res = await openTargetInstance();
+      }
+      if (usedOpenCommand) {
         setCodexAppInstanceStatus(prev => markCodexAppInstanceRunning(prev, res));
       }
-      toast((res && res.message) || (instanceRunning ? '已打开 Codex app 窗口' : '已打开 Codex app'));
+      toast((res && res.message) || (usedOpenCommand ? '已打开 Codex app' : '已打开 Codex app 窗口'));
       window.setTimeout(() => refreshCodexAppInstanceStatus({ silent: true }), 1200);
     } catch (err) {
       toastError(err, '打开 Codex app 失败', 7000);
