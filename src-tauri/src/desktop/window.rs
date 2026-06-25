@@ -4,11 +4,13 @@ use crate::{
     settings::{read_settings_value, update_settings_value},
 };
 use serde_json::{json, Value};
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, thread, time::Duration as StdDuration};
 use tauri::{
     AppHandle, CloseRequestApi, Manager, PhysicalSize, Size, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
+
+const WINDOW_STATE_PERSIST_DEBOUNCE_MS: u64 = 800;
 
 fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW_LABEL)
@@ -153,15 +155,54 @@ fn persist_main_window_state(window: &tauri::Window) -> Result<(), String> {
     Ok(())
 }
 
+fn schedule_main_window_state_persist(window: &tauri::Window) {
+    let app = window.app_handle().clone();
+    let window = window.clone();
+    let runtime = app.state::<AppRuntime>();
+    runtime
+        .window_state_save_generation
+        .fetch_add(1, Ordering::SeqCst);
+    if runtime
+        .window_state_save_worker_running
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+
+    thread::spawn(move || {
+        let runtime = app.state::<AppRuntime>();
+        loop {
+            let observed = runtime.window_state_save_generation.load(Ordering::SeqCst);
+            thread::sleep(StdDuration::from_millis(WINDOW_STATE_PERSIST_DEBOUNCE_MS));
+            if runtime.window_state_save_generation.load(Ordering::SeqCst) != observed {
+                continue;
+            }
+            if let Err(err) = persist_main_window_state(&window) {
+                eprintln!("保存窗口状态失败: {err}");
+            }
+            runtime
+                .window_state_save_worker_running
+                .store(false, Ordering::SeqCst);
+            if runtime.window_state_save_generation.load(Ordering::SeqCst) == observed {
+                break;
+            }
+            if runtime
+                .window_state_save_worker_running
+                .swap(true, Ordering::SeqCst)
+            {
+                break;
+            }
+        }
+    });
+}
+
 pub(crate) fn handle_main_window_event(window: &tauri::Window, event: &WindowEvent) {
     if window.label() != MAIN_WINDOW_LABEL {
         return;
     }
     match event {
         WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
-            if let Err(err) = persist_main_window_state(window) {
-                eprintln!("保存窗口状态失败: {err}");
-            }
+            schedule_main_window_state_persist(window)
         }
         WindowEvent::CloseRequested { api, .. } => handle_main_window_close(window, api),
         _ => {}

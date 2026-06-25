@@ -10,6 +10,7 @@ mod restart;
 
 pub(crate) use pending::{attach_ide_reopen, build_ide_reopen_payload};
 
+pub(crate) use detect::detect_ide_app;
 use detect::{build_ide_summary, normalize_ide_entries};
 use restart::restart_from_ide_snapshot;
 

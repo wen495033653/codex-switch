@@ -1,9 +1,6 @@
-use super::capture_open_ide_snapshot;
+use super::detect_ide_app;
+use crate::session_sync_diagnostics::log_session_sync_event;
 use crate::time_util::now_string;
-use crate::{
-    json_util::{raw_string_field, string_field, value_u64_field},
-    session_sync_diagnostics::log_session_sync_event,
-};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -12,8 +9,9 @@ use std::{
     thread,
     time::{Duration as StdDuration, Instant},
 };
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-const WATCHER_INTERVAL_MS: u64 = 2_000;
+const WATCHER_INTERVAL_MS: u64 = 5_000;
 const TAKEOVER_GRACE_MS: u64 = 500;
 const PENDING_RELAUNCH_TTL_MS: u64 = 30_000;
 const SUPPRESSED_OPEN_TTL_MS: u64 = 30_000;
@@ -564,33 +562,52 @@ fn codex_root_pids(processes: &[CodexProcess]) -> Vec<u64> {
 }
 
 fn running_codex_processes() -> Result<Vec<CodexProcess>, String> {
-    let snapshot = capture_open_ide_snapshot()?;
-    let mut processes = snapshot
-        .get("entries")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|entry| string_field(entry, "kind") == "codex")
-        .filter_map(|entry| {
-            let pid = value_u64_field(&entry, "pid")?;
-            let parent_pid = value_u64_field(&entry, "parentPid").unwrap_or(0);
-            let executable_path = raw_string_field(&entry, "executablePath");
-            let command_line = raw_string_field(&entry, "commandLine");
+    let refresh_kind = ProcessRefreshKind::nothing()
+        .with_cmd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .without_tasks();
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
+
+    let mut processes = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let executable_path = process
+                .exe()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_default();
             if executable_path.trim().is_empty() {
                 return None;
             }
+            let name = process.name().to_string_lossy().to_string();
+            let (kind, _) = detect_ide_app(&name, &executable_path)?;
+            if kind != "codex" {
+                return None;
+            }
             Some(CodexProcess {
-                pid,
-                parent_pid,
+                pid: u64::from(pid.as_u32()),
+                parent_pid: process
+                    .parent()
+                    .map(|pid| u64::from(pid.as_u32()))
+                    .unwrap_or(0),
                 executable_path,
-                command_line,
+                command_line: process_command_line(process),
             })
         })
         .collect::<Vec<_>>();
     processes.sort_by_key(|process| process.pid);
     processes.dedup_by_key(|process| process.pid);
     Ok(processes)
+}
+
+fn process_command_line(process: &sysinfo::Process) -> String {
+    process
+        .cmd()
+        .iter()
+        .map(|item| item.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
