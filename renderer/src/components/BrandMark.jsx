@@ -21,6 +21,7 @@ export default function BrandMark() {
     }
 
     let cancelled = false;
+    let removeWindowActivityHandlers = () => {};
 
     async function loadBrandAnimation() {
       const [{ default: lottie }, response] = await Promise.all([
@@ -45,8 +46,13 @@ export default function BrandMark() {
         }
       });
       animationRef.current = animation;
+      const isWindowActive = () => document.visibilityState !== 'hidden' && document.hasFocus();
 
       const playIdle = () => {
+        if (!isWindowActive()) {
+          animation.pause();
+          return;
+        }
         animation.loop = true;
         animation.playSegments(IDLE_SEGMENT, true);
       };
@@ -59,8 +65,28 @@ export default function BrandMark() {
         playIdle();
       };
 
+      const syncAnimationWithWindowActivity = () => {
+        if (!isWindowActive()) {
+          animation.pause();
+          return;
+        }
+        if (clickedRef.current) {
+          animation.play();
+          return;
+        }
+        playIdle();
+      };
+
       animation.addEventListener('DOMLoaded', playIdle);
       animation.addEventListener('complete', handleComplete);
+      document.addEventListener('visibilitychange', syncAnimationWithWindowActivity);
+      window.addEventListener('focus', syncAnimationWithWindowActivity);
+      window.addEventListener('blur', syncAnimationWithWindowActivity);
+      removeWindowActivityHandlers = () => {
+        document.removeEventListener('visibilitychange', syncAnimationWithWindowActivity);
+        window.removeEventListener('focus', syncAnimationWithWindowActivity);
+        window.removeEventListener('blur', syncAnimationWithWindowActivity);
+      };
       playIdle();
     }
 
@@ -70,6 +96,7 @@ export default function BrandMark() {
 
     return () => {
       cancelled = true;
+      removeWindowActivityHandlers();
       audioRef.current?.pause();
       audioRef.current = null;
       animationRef.current?.destroy();
@@ -142,6 +169,9 @@ export default function BrandMark() {
   }
 
   function playClickedSegment() {
+    if (document.visibilityState === 'hidden' || !document.hasFocus()) {
+      return;
+    }
     setPinned(true);
     void playRandomVoice();
     const animation = animationRef.current;

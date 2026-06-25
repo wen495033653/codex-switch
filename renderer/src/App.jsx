@@ -493,6 +493,10 @@ function MainApp() {
       refreshUsageStats({ silent: true });
       refreshCodexAppInstanceStatus({ silent: true });
     };
+    const refreshCodexAppInstanceWhenVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      refreshCodexAppInstanceStatus({ silent: true });
+    };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         refreshUsageStats({ silent: true });
@@ -500,10 +504,7 @@ function MainApp() {
       }
     };
     const intervalId = window.setInterval(refreshWhenVisible, 30000);
-    const codexAppInstanceIntervalId = window.setInterval(
-      () => refreshCodexAppInstanceStatus({ silent: true }),
-      3000
-    );
+    const codexAppInstanceIntervalId = window.setInterval(refreshCodexAppInstanceWhenVisible, 3000);
 
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', handleVisibilityChange);

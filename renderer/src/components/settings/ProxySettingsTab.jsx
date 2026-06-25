@@ -107,6 +107,9 @@ export default function ProxySettingsTab({
         let disposed = false;
 
         async function refreshCodexAppProcesses() {
+            if (document.visibilityState === 'hidden') {
+                return;
+            }
             if (!window.api || !window.api.getCurrentCodexAppProcesses) {
                 if (!disposed) {
                     setCodexAppProcessStatus({ loading: false, error: '', pids: [], processCount: 0 });
@@ -137,10 +140,17 @@ export default function ProxySettingsTab({
         }
 
         refreshCodexAppProcesses();
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                refreshCodexAppProcesses();
+            }
+        };
         const timer = window.setInterval(refreshCodexAppProcesses, 3000);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => {
             disposed = true;
             window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, []);
 
@@ -148,6 +158,9 @@ export default function ProxySettingsTab({
         let disposed = false;
 
         async function refreshRemoteControlStatus() {
+            if (document.visibilityState === 'hidden') {
+                return;
+            }
             if (!remoteControlEnabledInCurrentMode || !window.api || !window.api.getCodexRemoteControlStatus) {
                 if (!disposed) {
                     setRemoteControlStatus({
@@ -196,15 +209,23 @@ export default function ProxySettingsTab({
         }
 
         refreshRemoteControlStatus();
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                refreshRemoteControlStatus();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         if (!remoteControlEnabledInCurrentMode) {
             return () => {
                 disposed = true;
+                document.removeEventListener('visibilitychange', handleVisibilityChange);
             };
         }
         const timer = window.setInterval(refreshRemoteControlStatus, 4000);
         return () => {
             disposed = true;
             window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
 
