@@ -201,9 +201,7 @@ pub(crate) fn handle_main_window_event(window: &tauri::Window, event: &WindowEve
         return;
     }
     match event {
-        WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
-            schedule_main_window_state_persist(window)
-        }
+        WindowEvent::Resized(_) => schedule_main_window_state_persist(window),
         WindowEvent::CloseRequested { api, .. } => handle_main_window_close(window, api),
         _ => {}
     }
