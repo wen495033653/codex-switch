@@ -83,33 +83,44 @@ pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
     );
 
     super::codex_app_watcher::suppress_next_codex_app_open_handler(MULTI_OPEN_SUPPRESS_SOURCE);
-    match super::codex_app_open::launch_codex_executable_for_current_settings_with_options(
+    match super::codex_app_open::launch_codex_app_instance_for_current_settings_with_options(
         &executable,
         &args,
         &envs,
     ) {
-        Ok(true) => {
+        Ok(launch) if launch.launched => {
+            let hook_warning = launch.hook_warning.clone();
+            let message = if hook_warning.is_some() {
+                format!(
+                    "已用{}打开 Codex app；hook 注入失败，增强功能可能未生效",
+                    channel.label
+                )
+            } else {
+                format!("已用{}打开 Codex app", channel.label)
+            };
             log_session_sync_event(
                 "codex_app_multi_open_finish",
                 json!({
                     "kind": channel.kind,
                     "channel": channel.label,
-                    "instanceRoot": paths.root.to_string_lossy()
+                    "instanceRoot": paths.root.to_string_lossy(),
+                    "hookWarning": hook_warning.clone()
                 }),
             );
             Ok(json!({
                 "ok": true,
-                "message": format!("已用{}打开 Codex app", channel.label),
+                "message": message,
                 "kind": channel.kind,
                 "targetId": channel.target_id,
                 "instanceKey": channel.key,
                 "channel": channel.label,
                 "instanceRoot": paths.root.to_string_lossy().to_string(),
                 "codexHome": paths.codex_home.to_string_lossy().to_string(),
-                "userDataDir": paths.user_data_dir.to_string_lossy().to_string()
+                "userDataDir": paths.user_data_dir.to_string_lossy().to_string(),
+                "hookWarning": hook_warning
             }))
         }
-        Ok(false) => {
+        Ok(_) => {
             super::codex_app_watcher::clear_suppressed_codex_app_open_handler(
                 MULTI_OPEN_SUPPRESS_SOURCE,
             );

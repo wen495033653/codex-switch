@@ -1,8 +1,9 @@
 use super::{
     codex_processes_have_cdp_launch, inject_codex_cdp_hooks, inject_codex_mobile_no_replace_hook,
-    kill_process_tree, launch_codex_with_cdp_hooks, launch_codex_with_cdp_hooks_with_options,
-    launch_executable_with_options, relaunch_executable_with_retry, wait_for_pids_exit,
-    CodexAppOpenOutcome, CodexCdpLaunchHooks, CodexProcess,
+    kill_process_tree, launch_codex_with_cdp_hooks,
+    launch_codex_with_optional_cdp_hooks_with_options, launch_executable_with_options,
+    relaunch_executable_with_retry, wait_for_pids_exit, CodexAppOpenOutcome, CodexCdpLaunchHooks,
+    CodexProcess,
 };
 use crate::{
     codex_launcher::{
@@ -40,6 +41,11 @@ struct CodexAppOpenActions {
 struct CodexAppOpenStatus {
     session_sync_pending: bool,
     cdp_launch_applied: bool,
+}
+
+pub(crate) struct CodexAppInstanceLaunch {
+    pub(crate) launched: bool,
+    pub(crate) hook_warning: Option<String>,
 }
 
 impl CodexAppOpenActions {
@@ -557,25 +563,28 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
     }
 }
 
-pub(crate) fn launch_codex_executable_for_current_settings_with_options(
+pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
     executable: &str,
     args: &[String],
     envs: &[(String, String)],
-) -> Result<bool, String> {
+) -> Result<CodexAppInstanceLaunch, String> {
     let path = Path::new(executable);
     if !path.exists() {
         log_session_sync_event(
-            "codex_app_launch_executable_skip",
+            "codex_app_instance_launch_skip",
             json!({
                 "executable": executable,
                 "reason": "missing_executable"
             }),
         );
-        return Ok(false);
+        return Ok(CodexAppInstanceLaunch {
+            launched: false,
+            hook_warning: None,
+        });
     }
     let mode = codex_relaunch_mode_for_current_settings()?;
     log_session_sync_event(
-        "codex_app_launch_executable_start",
+        "codex_app_instance_launch_start",
         json!({
             "executable": executable,
             "mode": format!("{mode:?}")
@@ -583,10 +592,30 @@ pub(crate) fn launch_codex_executable_for_current_settings_with_options(
     );
     match mode {
         CodexRelaunchMode::Cdp(hooks) => {
-            launch_codex_with_cdp_hooks_with_options(path, hooks, args, envs)?;
-            Ok(true)
+            let hook_warning =
+                launch_codex_with_optional_cdp_hooks_with_options(path, hooks, args, envs)?;
+            if let Some(error) = &hook_warning {
+                log_session_sync_event(
+                    "codex_app_instance_launch_cdp_hook_warning",
+                    json!({
+                        "executable": executable,
+                        "mode": format!("{mode:?}"),
+                        "error": error
+                    }),
+                );
+            }
+            Ok(CodexAppInstanceLaunch {
+                launched: true,
+                hook_warning,
+            })
         }
-        CodexRelaunchMode::Normal => launch_executable_with_options(executable, args, envs),
+        CodexRelaunchMode::Normal => {
+            let launched = launch_executable_with_options(executable, args, envs)?;
+            Ok(CodexAppInstanceLaunch {
+                launched,
+                hook_warning: None,
+            })
+        }
     }
 }
 

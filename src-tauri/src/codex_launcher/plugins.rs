@@ -884,6 +884,44 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
     args: &[String],
     envs: &[(String, String)],
 ) -> Result<(), String> {
+    launch_codex_with_cdp_hooks_with_options_and_failure_action(
+        executable_path,
+        hooks,
+        args,
+        envs,
+        CdpHookFailureAction::KillProcess,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn launch_codex_with_optional_cdp_hooks_with_options(
+    executable_path: &Path,
+    hooks: CodexCdpLaunchHooks,
+    args: &[String],
+    envs: &[(String, String)],
+) -> Result<Option<String>, String> {
+    launch_codex_with_cdp_hooks_with_options_and_failure_action(
+        executable_path,
+        hooks,
+        args,
+        envs,
+        CdpHookFailureAction::KeepProcess,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CdpHookFailureAction {
+    KillProcess,
+    KeepProcess,
+}
+
+fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
+    executable_path: &Path,
+    hooks: CodexCdpLaunchHooks,
+    args: &[String],
+    envs: &[(String, String)],
+    failure_action: CdpHookFailureAction,
+) -> Result<Option<String>, String> {
     if !cfg!(windows) {
         return Err("Codex app hook 目前仅支持 Windows 重启入口".to_string());
     }
@@ -921,10 +959,13 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
         .spawn()
         .map_err(|err| format!("启动 Codex app hook 模式失败: {err}"))?;
     if let Err(err) = wait_and_inject_cdp_scripts(debug_port, &scripts) {
-        let _ = child.kill();
-        return Err(err);
+        if failure_action == CdpHookFailureAction::KillProcess {
+            let _ = child.kill();
+            return Err(err);
+        }
+        return Ok(Some(err));
     }
-    Ok(())
+    Ok(None)
 }
 
 fn cdp_scripts_for_hooks(hooks: CodexCdpLaunchHooks) -> CdpScriptBundle {
