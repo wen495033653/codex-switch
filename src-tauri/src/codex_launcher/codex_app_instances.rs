@@ -21,6 +21,7 @@ const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 const MULTI_OPEN_SUPPRESS_SOURCE: &str = "multi_open_target_channel";
 const API_WIRE_RESPONSES: &str = "responses";
 const WINDOWS_SANDBOX_MODE: &str = "elevated";
+#[cfg(any(windows, test))]
 const CODEX_APP_PACKAGE_FAMILY_SUFFIX: &str = "__2p2nqsd0c76g0";
 #[cfg(windows)]
 const CODEX_APP_PACKAGE_REGISTRY_KEY: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
@@ -619,6 +620,7 @@ fn installed_codex_app_package_names() -> Vec<String> {
     Vec::new()
 }
 
+#[cfg(any(windows, test))]
 fn is_codex_app_package_name(name: &str) -> bool {
     name.starts_with("OpenAI.Codex_") && name.ends_with(CODEX_APP_PACKAGE_FAMILY_SUFFIX)
 }
