@@ -13,7 +13,7 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -21,6 +21,9 @@ const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 const MULTI_OPEN_SUPPRESS_SOURCE: &str = "multi_open_target_channel";
 const API_WIRE_RESPONSES: &str = "responses";
 const WINDOWS_SANDBOX_MODE: &str = "elevated";
+const CODEX_APP_PACKAGE_FAMILY_SUFFIX: &str = "__2p2nqsd0c76g0";
+#[cfg(windows)]
+const CODEX_APP_PACKAGE_REGISTRY_KEY: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
 
 struct CodexAppChannel {
     kind: &'static str,
@@ -504,14 +507,31 @@ fn api_key_for_profile(settings: &Value, profile: &Value) -> Result<String, Stri
 }
 
 fn codex_app_executable() -> Result<String, String> {
-    let mut candidates = running_codex_app_executables()?;
-    candidates.extend(installed_codex_app_executable_candidates());
-    candidates.sort_by_key(|path| path.to_ascii_lowercase());
-    candidates.dedup_by_key(|path| path.to_ascii_lowercase());
+    let mut candidates = Vec::new();
+    extend_unique_paths(&mut candidates, running_codex_app_executables()?);
+    extend_unique_paths(
+        &mut candidates,
+        installed_codex_app_desktop_executable_candidates(),
+    );
     candidates
         .into_iter()
         .find(|path| Path::new(path).exists())
-        .ok_or_else(|| "未找到 Codex app 可执行路径，请先安装或打开一次 Codex app".to_string())
+        .ok_or_else(|| "未找到 Codex app 桌面入口，请确认已安装 Codex app".to_string())
+}
+
+fn extend_unique_paths(paths: &mut Vec<String>, candidates: Vec<String>) {
+    for candidate in candidates {
+        if candidate.trim().is_empty() {
+            continue;
+        }
+        if paths
+            .iter()
+            .any(|path| path.eq_ignore_ascii_case(candidate.trim()))
+        {
+            continue;
+        }
+        paths.push(candidate);
+    }
 }
 
 fn running_codex_app_executables() -> Result<Vec<String>, String> {
@@ -524,33 +544,88 @@ fn running_codex_app_executables() -> Result<Vec<String>, String> {
     )
 }
 
-fn installed_codex_app_executable_candidates() -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        let local_app_data = PathBuf::from(local_app_data);
-        candidates.push(
-            local_app_data
-                .join("OpenAI")
-                .join("Codex")
-                .join("bin")
-                .join("codex.exe"),
-        );
-        candidates.push(
-            local_app_data
-                .join("Packages")
-                .join("OpenAI.Codex_2p2nqsd0c76g0")
-                .join("LocalCache")
-                .join("Local")
-                .join("OpenAI")
-                .join("Codex")
-                .join("bin")
-                .join("codex.exe"),
-        );
-    }
-    candidates
+fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
+    installed_codex_app_package_names()
         .into_iter()
-        .map(|path| path.to_string_lossy().to_string())
+        .map(|package_name| {
+            PathBuf::from(r"C:\Program Files\WindowsApps")
+                .join(package_name)
+                .join("app")
+                .join("Codex.exe")
+                .to_string_lossy()
+                .to_string()
+        })
         .collect()
+}
+
+#[cfg(windows)]
+fn installed_codex_app_package_names() -> Vec<String> {
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::{
+        Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS},
+        System::Registry::{
+            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        },
+    };
+
+    let mut key: HKEY = null_mut();
+    let key_name = wide_null(CODEX_APP_PACKAGE_REGISTRY_KEY);
+    let open_result =
+        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key_name.as_ptr(), 0, KEY_READ, &mut key) };
+    if open_result != ERROR_SUCCESS {
+        return Vec::new();
+    }
+
+    let mut packages = Vec::new();
+    let mut index = 0u32;
+    loop {
+        let mut name = vec![0u16; 512];
+        let mut len = name.len() as u32;
+        let result = unsafe {
+            RegEnumKeyExW(
+                key,
+                index,
+                name.as_mut_ptr(),
+                &mut len,
+                null(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        if result == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if result == ERROR_SUCCESS {
+            let package = String::from_utf16_lossy(&name[..len as usize]);
+            if is_codex_app_package_name(&package) {
+                packages.push(package);
+            }
+        } else if result != ERROR_MORE_DATA {
+            break;
+        }
+        index += 1;
+    }
+
+    unsafe {
+        RegCloseKey(key);
+    }
+    packages.sort_by(|left, right| right.cmp(left));
+    packages
+}
+
+#[cfg(not(windows))]
+fn installed_codex_app_package_names() -> Vec<String> {
+    Vec::new()
+}
+
+fn is_codex_app_package_name(name: &str) -> bool {
+    name.starts_with("OpenAI.Codex_") && name.ends_with(CODEX_APP_PACKAGE_FAMILY_SUFFIX)
+}
+
+#[cfg(windows)]
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn prepare_instance_paths(channel: &CodexAppChannel) -> Result<CodexAppInstancePaths, String> {
@@ -1199,6 +1274,40 @@ mod tests {
         assert!(!command_line_matches_user_data_dir(
             r#""C:\Codex\Codex.exe" --user-data-dir=C:\Instances\Codex\web\Codex"#,
             &user_data_dir
+        ));
+    }
+
+    #[test]
+    fn extend_unique_paths_preserves_first_candidate_priority() {
+        let mut paths = vec![r"C:\Codex\app\Codex.exe".to_string()];
+
+        extend_unique_paths(
+            &mut paths,
+            vec![
+                r"c:\codex\app\codex.exe".to_string(),
+                r"C:\CodexPreview\app\Codex.exe".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            paths,
+            vec![
+                r"C:\Codex\app\Codex.exe".to_string(),
+                r"C:\CodexPreview\app\Codex.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_app_package_name_detection_matches_appx_identity() {
+        assert!(is_codex_app_package_name(
+            "OpenAI.Codex_26.623.5175.0_x64__2p2nqsd0c76g0"
+        ));
+        assert!(!is_codex_app_package_name(
+            "OpenAI.Codex_26.623.5175.0_x64__other"
+        ));
+        assert!(!is_codex_app_package_name(
+            "Other.Codex_26.623.5175.0_x64__2p2nqsd0c76g0"
         ));
     }
 
