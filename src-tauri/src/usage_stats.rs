@@ -19,6 +19,8 @@ const OWNER_TYPE_SUBSCRIPTION: &str = "subscription";
 const OWNER_TYPE_API_PROFILE: &str = "api_profile";
 const PROVIDER_SUBSCRIPTION: &str = "openai";
 const PROVIDER_API: &str = "api";
+const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
+const CODEX_APP_INSTANCE_MARKER_FILE: &str = "codex-switch-instance.json";
 const META_STATS_STARTED_AT: &str = "stats_started_at";
 const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
 const PRICING_UPDATED_AT: &str = "2026-06-16";
@@ -100,6 +102,52 @@ struct TokenUsage {
     total_tokens: u64,
 }
 
+impl TokenUsage {
+    fn has_tokens(&self) -> bool {
+        self.total_tokens > 0
+    }
+
+    fn add_assign(&mut self, other: &TokenUsage) {
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(other.cached_input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_output_tokens = self
+            .reasoning_output_tokens
+            .saturating_add(other.reasoning_output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+    }
+
+    fn saturating_delta(&self, previous: &TokenUsage) -> TokenUsage {
+        TokenUsage {
+            input_tokens: self.input_tokens.saturating_sub(previous.input_tokens),
+            cached_input_tokens: self
+                .cached_input_tokens
+                .saturating_sub(previous.cached_input_tokens),
+            output_tokens: self.output_tokens.saturating_sub(previous.output_tokens),
+            reasoning_output_tokens: self
+                .reasoning_output_tokens
+                .saturating_sub(previous.reasoning_output_tokens),
+            total_tokens: self.total_tokens.saturating_sub(previous.total_tokens),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct UsageWindowStarts {
+    today: i64,
+    days_7: i64,
+    days_30: i64,
+}
+
+#[derive(Default)]
+struct TokenUsageWindows {
+    today: TokenUsage,
+    days_7: TokenUsage,
+    days_30: TokenUsage,
+}
+
 #[derive(Clone)]
 struct TimestampValue {
     raw: String,
@@ -115,11 +163,19 @@ struct ParsedSession {
     updated_at: Option<TimestampValue>,
     usage: Option<TokenUsage>,
     model_context_window: Option<u64>,
+    previous_event_usage: Option<TokenUsage>,
+    window_usage: TokenUsageWindows,
 }
 
+#[derive(Clone)]
 struct OwnerAttribution {
     owner_type: String,
     owner_id: String,
+}
+
+struct UsageScanSource {
+    codex_home: PathBuf,
+    attribution_override: Option<OwnerAttribution>,
 }
 
 struct EstimatedCost {
@@ -161,7 +217,6 @@ struct UsageRow {
     owner_type: String,
     owner_id: String,
     model: String,
-    started_at_seconds: i64,
     updated_at: String,
     updated_at_seconds: i64,
     input_tokens: u64,
@@ -169,6 +224,10 @@ struct UsageRow {
     output_tokens: u64,
     reasoning_output_tokens: u64,
     total_tokens: u64,
+    today_usage: TokenUsage,
+    days_7_usage: TokenUsage,
+    days_30_usage: TokenUsage,
+    model_context_window: Option<u64>,
     estimated_cost_usd: Option<f64>,
     priced: bool,
     pricing_context: String,
@@ -218,7 +277,8 @@ pub(crate) fn record_current_attribution_if_available() -> Result<(), String> {
 fn usage_stats_get_impl() -> Result<Value, String> {
     let db_path = usage_db_path()?;
     let codex_home = codex_dir()?;
-    usage_stats_get_for_paths(&db_path, &codex_home, &now_string())
+    let scan_sources = default_usage_scan_sources(&codex_home)?;
+    usage_stats_get_for_scan_sources(&db_path, &scan_sources, &now_string())
 }
 
 fn usage_db_path() -> Result<PathBuf, String> {
@@ -318,6 +378,28 @@ fn ensure_session_usage_columns(connection: &Connection) -> Result<(), String> {
         "unpriced_reason",
         "unpriced_reason TEXT",
     )?;
+    ensure_window_usage_columns(connection, "today")?;
+    ensure_window_usage_columns(connection, "days_7")?;
+    ensure_window_usage_columns(connection, "days_30")?;
+    Ok(())
+}
+
+fn ensure_window_usage_columns(connection: &Connection, prefix: &str) -> Result<(), String> {
+    for (name, definition) in [
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cached_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("total_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let column = format!("{prefix}_{name}");
+        ensure_table_column(
+            connection,
+            "session_usage",
+            &column,
+            &format!("{column} {definition}"),
+        )?;
+    }
     Ok(())
 }
 
@@ -388,28 +470,133 @@ fn record_attribution_at(
     Ok(())
 }
 
+#[cfg(test)]
 fn usage_stats_get_for_paths(
     db_path: &Path,
     codex_home: &Path,
     now: &str,
 ) -> Result<Value, String> {
+    usage_stats_get_for_scan_sources(db_path, &[main_usage_scan_source(codex_home)], now)
+}
+
+fn usage_stats_get_for_scan_sources(
+    db_path: &Path,
+    scan_sources: &[UsageScanSource],
+    now: &str,
+) -> Result<Value, String> {
     let now_seconds =
         parse_rfc3339_seconds(now).ok_or_else(|| "token 统计当前时间无效".to_string())?;
+    let window_starts = usage_window_starts(now_seconds);
     let connection = open_usage_connection(db_path, now)?;
     let stats_started_at = meta_value(&connection, META_STATS_STARTED_AT)?;
     let stats_started_at_seconds = parse_rfc3339_seconds(&stats_started_at)
         .ok_or_else(|| "token 统计起始时间无效".to_string())?;
     let mut warnings = ScanWarnings::default();
-    scan_codex_sessions(
-        &connection,
-        codex_home,
-        stats_started_at_seconds,
-        now,
-        &mut warnings,
-    )?;
+    for source in scan_sources {
+        scan_codex_sessions(
+            &connection,
+            source,
+            &window_starts,
+            stats_started_at_seconds,
+            now,
+            &mut warnings,
+        )?;
+    }
     recompute_existing_costs(&connection)?;
     let response = aggregate_usage(&connection, now_seconds, &warnings)?;
     Ok(response)
+}
+
+fn main_usage_scan_source(codex_home: &Path) -> UsageScanSource {
+    UsageScanSource {
+        codex_home: codex_home.to_path_buf(),
+        attribution_override: None,
+    }
+}
+
+fn default_usage_scan_sources(codex_home: &Path) -> Result<Vec<UsageScanSource>, String> {
+    let mut sources = vec![main_usage_scan_source(codex_home)];
+    let instances_dir = app_data_dir()?.join(CODEX_APP_INSTANCES_DIR);
+    sources.extend(managed_instance_usage_scan_sources(&instances_dir)?);
+    Ok(sources)
+}
+
+fn managed_instance_usage_scan_sources(
+    instances_dir: &Path,
+) -> Result<Vec<UsageScanSource>, String> {
+    if !instances_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(instances_dir).map_err(|err| {
+        format!(
+            "读取 Codex app 多开实例目录失败 {}: {err}",
+            instances_dir.display()
+        )
+    })?;
+    let mut sources = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("读取 Codex app 多开实例条目失败: {err}"))?;
+        let root = entry.path();
+        if !root.is_dir() {
+            continue;
+        }
+        let Some(attribution) = read_instance_owner_attribution(&root)? else {
+            continue;
+        };
+        sources.push(UsageScanSource {
+            codex_home: root.join("codex-home"),
+            attribution_override: Some(attribution),
+        });
+    }
+    sources.sort_by(|left, right| left.codex_home.cmp(&right.codex_home));
+    Ok(sources)
+}
+
+fn read_instance_owner_attribution(root: &Path) -> Result<Option<OwnerAttribution>, String> {
+    let marker_path = root.join(CODEX_APP_INSTANCE_MARKER_FILE);
+    if !marker_path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&marker_path).map_err(|err| {
+        format!(
+            "读取 Codex app 多开实例标记失败 {}: {err}",
+            marker_path.display()
+        )
+    })?;
+    let marker: Value = serde_json::from_str(&raw).map_err(|err| {
+        format!(
+            "解析 Codex app 多开实例标记失败 {}: {err}",
+            marker_path.display()
+        )
+    })?;
+    if string_field(&marker, "managedBy") != "codex-switch" {
+        return Ok(None);
+    }
+
+    let target_id = string_field(&marker, "targetId");
+    if target_id.is_empty() {
+        return Err(format!(
+            "Codex app 多开实例标记缺少 targetId: {}",
+            marker_path.display()
+        ));
+    }
+
+    let owner_type = match string_field(&marker, "kind").as_str() {
+        "account" => OWNER_TYPE_SUBSCRIPTION,
+        "api" => OWNER_TYPE_API_PROFILE,
+        _ => {
+            return Err(format!(
+                "Codex app 多开实例标记 kind 无效: {}",
+                marker_path.display()
+            ))
+        }
+    };
+
+    Ok(Some(OwnerAttribution {
+        owner_type: owner_type.to_string(),
+        owner_id: target_id,
+    }))
 }
 
 fn meta_value(connection: &Connection, key: &str) -> Result<String, String> {
@@ -422,15 +609,16 @@ fn meta_value(connection: &Connection, key: &str) -> Result<String, String> {
 
 fn scan_codex_sessions(
     connection: &Connection,
-    codex_home: &Path,
+    source: &UsageScanSource,
+    window_starts: &UsageWindowStarts,
     stats_started_at_seconds: i64,
     now: &str,
     warnings: &mut ScanWarnings,
 ) -> Result<(), String> {
-    let files = collect_session_files(codex_home)?;
+    let files = collect_session_files(&source.codex_home)?;
     let mut seen_session_ids = HashSet::new();
     for path in files {
-        let parsed = match parse_session_file(&path) {
+        let parsed = match parse_session_file(&path, window_starts) {
             Ok(parsed) => parsed,
             Err(err) => {
                 eprintln!("{err}");
@@ -444,15 +632,21 @@ fn scan_codex_sessions(
             continue;
         }
         let started_at = parsed.started_at.as_ref().expect("checked above");
-        if started_at.seconds < stats_started_at_seconds {
+        let updated_at = parsed.updated_at.as_ref().unwrap_or(started_at);
+        if updated_at.seconds < stats_started_at_seconds {
             warnings.skipped_before_start += 1;
             continue;
         }
-        let Some(attribution) =
-            find_owner_attribution(connection, &parsed.provider, started_at.seconds)?
-        else {
-            warnings.missing_attribution += 1;
-            continue;
+        let attribution = if let Some(attribution) = source.attribution_override.as_ref() {
+            attribution.clone()
+        } else {
+            let Some(attribution) =
+                find_owner_attribution(connection, &parsed.provider, started_at.seconds)?
+            else {
+                warnings.missing_attribution += 1;
+                continue;
+            };
+            attribution
         };
         let usage = parsed.usage.as_ref().expect("checked above");
         let estimated = estimate_cost(&parsed.model, usage, parsed.model_context_window);
@@ -499,7 +693,10 @@ fn collect_jsonl_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result
     Ok(())
 }
 
-fn parse_session_file(path: &Path) -> Result<ParsedSession, String> {
+fn parse_session_file(
+    path: &Path,
+    window_starts: &UsageWindowStarts,
+) -> Result<ParsedSession, String> {
     let file = fs::File::open(path)
         .map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
     let reader = BufReader::new(file);
@@ -507,12 +704,16 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, String> {
     for line in reader.lines() {
         let line =
             line.map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
-        parse_session_line(&line, &mut parsed);
+        parse_session_line(&line, &mut parsed, Some(window_starts));
     }
     Ok(parsed)
 }
 
-fn parse_session_line(line: &str, parsed: &mut ParsedSession) {
+fn parse_session_line(
+    line: &str,
+    parsed: &mut ParsedSession,
+    window_starts: Option<&UsageWindowStarts>,
+) {
     if !line.contains("\"session_meta\"")
         && !line.contains("\"turn_context\"")
         && !line.contains("\"token_count\"")
@@ -525,7 +726,7 @@ fn parse_session_line(line: &str, parsed: &mut ParsedSession) {
     match raw_string_field(&value, "type").as_str() {
         "session_meta" => parse_session_meta_line(&value, parsed),
         "turn_context" => parse_turn_context_line(&value, parsed),
-        "event_msg" => parse_event_msg_line(&value, parsed),
+        "event_msg" => parse_event_msg_line(&value, parsed, window_starts),
         _ => {}
     }
 }
@@ -551,7 +752,11 @@ fn parse_turn_context_line(value: &Value, parsed: &mut ParsedSession) {
     update_model_from_payload(payload, parsed);
 }
 
-fn parse_event_msg_line(value: &Value, parsed: &mut ParsedSession) {
+fn parse_event_msg_line(
+    value: &Value,
+    parsed: &mut ParsedSession,
+    window_starts: Option<&UsageWindowStarts>,
+) {
     let payload = value.get("payload").unwrap_or(&Value::Null);
     if string_field(payload, "type") != "token_count" {
         return;
@@ -575,6 +780,7 @@ fn parse_event_msg_line(value: &Value, parsed: &mut ParsedSession) {
     let Some(timestamp) = timestamp_from_payload(value, payload) else {
         return;
     };
+    apply_token_count_delta_to_windows(parsed, &usage, timestamp.seconds, window_starts);
     let should_update = parsed
         .usage
         .as_ref()
@@ -584,6 +790,42 @@ fn parse_event_msg_line(value: &Value, parsed: &mut ParsedSession) {
         parsed.usage = Some(usage);
         parsed.updated_at = Some(timestamp);
         parsed.model_context_window = optional_u64_field(info, "model_context_window");
+    }
+}
+
+fn apply_token_count_delta_to_windows(
+    parsed: &mut ParsedSession,
+    usage: &TokenUsage,
+    timestamp_seconds: i64,
+    window_starts: Option<&UsageWindowStarts>,
+) {
+    let Some(window_starts) = window_starts else {
+        return;
+    };
+    let delta = parsed
+        .previous_event_usage
+        .as_ref()
+        .map(|previous| {
+            if usage.total_tokens >= previous.total_tokens {
+                usage.saturating_delta(previous)
+            } else {
+                usage.clone()
+            }
+        })
+        .unwrap_or_else(|| usage.clone());
+    parsed.previous_event_usage = Some(usage.clone());
+    if !delta.has_tokens() {
+        return;
+    }
+
+    if timestamp_seconds >= window_starts.today {
+        parsed.window_usage.today.add_assign(&delta);
+    }
+    if timestamp_seconds >= window_starts.days_7 {
+        parsed.window_usage.days_7.add_assign(&delta);
+    }
+    if timestamp_seconds >= window_starts.days_30 {
+        parsed.window_usage.days_30.add_assign(&delta);
     }
 }
 
@@ -685,6 +927,21 @@ fn upsert_session_usage(
                 output_tokens,
                 reasoning_output_tokens,
                 total_tokens,
+                today_input_tokens,
+                today_cached_input_tokens,
+                today_output_tokens,
+                today_reasoning_output_tokens,
+                today_total_tokens,
+                days_7_input_tokens,
+                days_7_cached_input_tokens,
+                days_7_output_tokens,
+                days_7_reasoning_output_tokens,
+                days_7_total_tokens,
+                days_30_input_tokens,
+                days_30_cached_input_tokens,
+                days_30_output_tokens,
+                days_30_reasoning_output_tokens,
+                days_30_total_tokens,
                 model_context_window,
                 estimated_cost_usd,
                 priced,
@@ -692,7 +949,7 @@ fn upsert_session_usage(
                 unpriced_reason,
                 last_scanned_at
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)
             ON CONFLICT(session_id) DO UPDATE SET
                 source_path = excluded.source_path,
                 owner_type = excluded.owner_type,
@@ -708,6 +965,21 @@ fn upsert_session_usage(
                 output_tokens = excluded.output_tokens,
                 reasoning_output_tokens = excluded.reasoning_output_tokens,
                 total_tokens = excluded.total_tokens,
+                today_input_tokens = excluded.today_input_tokens,
+                today_cached_input_tokens = excluded.today_cached_input_tokens,
+                today_output_tokens = excluded.today_output_tokens,
+                today_reasoning_output_tokens = excluded.today_reasoning_output_tokens,
+                today_total_tokens = excluded.today_total_tokens,
+                days_7_input_tokens = excluded.days_7_input_tokens,
+                days_7_cached_input_tokens = excluded.days_7_cached_input_tokens,
+                days_7_output_tokens = excluded.days_7_output_tokens,
+                days_7_reasoning_output_tokens = excluded.days_7_reasoning_output_tokens,
+                days_7_total_tokens = excluded.days_7_total_tokens,
+                days_30_input_tokens = excluded.days_30_input_tokens,
+                days_30_cached_input_tokens = excluded.days_30_cached_input_tokens,
+                days_30_output_tokens = excluded.days_30_output_tokens,
+                days_30_reasoning_output_tokens = excluded.days_30_reasoning_output_tokens,
+                days_30_total_tokens = excluded.days_30_total_tokens,
                 model_context_window = excluded.model_context_window,
                 estimated_cost_usd = excluded.estimated_cost_usd,
                 priced = excluded.priced,
@@ -731,6 +1003,24 @@ fn upsert_session_usage(
                 i64::try_from(usage.output_tokens).unwrap_or(i64::MAX),
                 i64::try_from(usage.reasoning_output_tokens).unwrap_or(i64::MAX),
                 i64::try_from(usage.total_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.today.input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.today.cached_input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.today.output_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.today.reasoning_output_tokens)
+                    .unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.today.total_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_7.input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_7.cached_input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_7.output_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_7.reasoning_output_tokens)
+                    .unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_7.total_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_30.input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_30.cached_input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_30.output_tokens).unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_30.reasoning_output_tokens)
+                    .unwrap_or(i64::MAX),
+                i64::try_from(parsed.window_usage.days_30.total_tokens).unwrap_or(i64::MAX),
                 model_context_window,
                 estimated_cost_usd,
                 if estimated.priced { 1 } else { 0 },
@@ -888,9 +1178,7 @@ fn aggregate_usage(
     now_seconds: i64,
     warnings: &ScanWarnings,
 ) -> Result<Value, String> {
-    let today_start = today_start_seconds(now_seconds);
-    let days_7_start = now_seconds.saturating_sub(7 * 24 * 60 * 60);
-    let days_30_start = now_seconds.saturating_sub(30 * 24 * 60 * 60);
+    let _window_starts = usage_window_starts(now_seconds);
     let mut subscriptions: BTreeMap<String, OwnerUsage> = BTreeMap::new();
     let mut api_profiles: BTreeMap<String, OwnerUsage> = BTreeMap::new();
 
@@ -900,7 +1188,6 @@ fn aggregate_usage(
             SELECT owner_type,
                    owner_id,
                    model,
-                   started_at_seconds,
                    updated_at,
                    updated_at_seconds,
                    input_tokens,
@@ -908,6 +1195,22 @@ fn aggregate_usage(
                    output_tokens,
                    reasoning_output_tokens,
                    total_tokens,
+                   today_input_tokens,
+                   today_cached_input_tokens,
+                   today_output_tokens,
+                   today_reasoning_output_tokens,
+                   today_total_tokens,
+                   days_7_input_tokens,
+                   days_7_cached_input_tokens,
+                   days_7_output_tokens,
+                   days_7_reasoning_output_tokens,
+                   days_7_total_tokens,
+                   days_30_input_tokens,
+                   days_30_cached_input_tokens,
+                   days_30_output_tokens,
+                   days_30_reasoning_output_tokens,
+                   days_30_total_tokens,
+                   model_context_window,
                    estimated_cost_usd,
                    priced,
                    COALESCE(pricing_context, ''),
@@ -922,18 +1225,23 @@ fn aggregate_usage(
                 owner_type: row.get(0)?,
                 owner_id: row.get(1)?,
                 model: row.get(2)?,
-                started_at_seconds: row.get(3)?,
-                updated_at: row.get(4)?,
-                updated_at_seconds: row.get(5)?,
-                input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
-                cached_input_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
-                output_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
-                reasoning_output_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
-                total_tokens: row.get::<_, i64>(10).map(sql_i64_to_u64)?,
-                estimated_cost_usd: row.get(11)?,
-                priced: row.get::<_, i64>(12)? == 1,
-                pricing_context: row.get(13)?,
-                unpriced_reason: row.get(14)?,
+                updated_at: row.get(3)?,
+                updated_at_seconds: row.get(4)?,
+                input_tokens: row.get::<_, i64>(5).map(sql_i64_to_u64)?,
+                cached_input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
+                output_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
+                reasoning_output_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
+                total_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
+                today_usage: token_usage_from_row(row, 10)?,
+                days_7_usage: token_usage_from_row(row, 15)?,
+                days_30_usage: token_usage_from_row(row, 20)?,
+                model_context_window: row
+                    .get::<_, Option<i64>>(25)?
+                    .and_then(|value| u64::try_from(value).ok()),
+                estimated_cost_usd: row.get(26)?,
+                priced: row.get::<_, i64>(27)? == 1,
+                pricing_context: row.get(28)?,
+                unpriced_reason: row.get(29)?,
             })
         })
         .map_err(|err| db_error("读取 session token 统计失败", err))?;
@@ -947,17 +1255,25 @@ fn aggregate_usage(
         };
         apply_row_to_window(&mut target.all, &row);
         apply_row_to_model_window(&mut target.all_by_model, &row);
-        if row.started_at_seconds >= today_start {
-            apply_row_to_window(&mut target.today, &row);
-            apply_row_to_model_window(&mut target.today_by_model, &row);
+        if row.today_usage.has_tokens() {
+            apply_window_usage_to_window(&mut target.today, &row, &row.today_usage);
+            apply_window_usage_to_model_window(&mut target.today_by_model, &row, &row.today_usage);
         }
-        if row.started_at_seconds >= days_7_start {
-            apply_row_to_window(&mut target.days_7, &row);
-            apply_row_to_model_window(&mut target.days_7_by_model, &row);
+        if row.days_7_usage.has_tokens() {
+            apply_window_usage_to_window(&mut target.days_7, &row, &row.days_7_usage);
+            apply_window_usage_to_model_window(
+                &mut target.days_7_by_model,
+                &row,
+                &row.days_7_usage,
+            );
         }
-        if row.started_at_seconds >= days_30_start {
-            apply_row_to_window(&mut target.days_30, &row);
-            apply_row_to_model_window(&mut target.days_30_by_model, &row);
+        if row.days_30_usage.has_tokens() {
+            apply_window_usage_to_window(&mut target.days_30, &row, &row.days_30_usage);
+            apply_window_usage_to_model_window(
+                &mut target.days_30_by_model,
+                &row,
+                &row.days_30_usage,
+            );
         }
     }
 
@@ -975,6 +1291,27 @@ fn sql_i64_to_u64(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
+fn token_usage_from_row(
+    row: &rusqlite::Row<'_>,
+    start_index: usize,
+) -> rusqlite::Result<TokenUsage> {
+    Ok(TokenUsage {
+        input_tokens: row.get::<_, i64>(start_index).map(sql_i64_to_u64)?,
+        cached_input_tokens: row.get::<_, i64>(start_index + 1).map(sql_i64_to_u64)?,
+        output_tokens: row.get::<_, i64>(start_index + 2).map(sql_i64_to_u64)?,
+        reasoning_output_tokens: row.get::<_, i64>(start_index + 3).map(sql_i64_to_u64)?,
+        total_tokens: row.get::<_, i64>(start_index + 4).map(sql_i64_to_u64)?,
+    })
+}
+
+fn usage_window_starts(now_seconds: i64) -> UsageWindowStarts {
+    UsageWindowStarts {
+        today: today_start_seconds(now_seconds),
+        days_7: now_seconds.saturating_sub(7 * 24 * 60 * 60),
+        days_30: now_seconds.saturating_sub(30 * 24 * 60 * 60),
+    }
+}
+
 fn today_start_seconds(now_seconds: i64) -> i64 {
     let Ok(now_utc) = OffsetDateTime::from_unix_timestamp(now_seconds) else {
         return now_seconds;
@@ -989,16 +1326,14 @@ fn today_start_seconds(now_seconds: i64) -> i64 {
 }
 
 fn apply_row_to_window(window: &mut UsageWindow, row: &UsageRow) {
-    window.input_tokens = window.input_tokens.saturating_add(row.input_tokens);
-    window.cached_input_tokens = window
-        .cached_input_tokens
-        .saturating_add(row.cached_input_tokens);
-    window.output_tokens = window.output_tokens.saturating_add(row.output_tokens);
-    window.reasoning_output_tokens = window
-        .reasoning_output_tokens
-        .saturating_add(row.reasoning_output_tokens);
-    window.total_tokens = window.total_tokens.saturating_add(row.total_tokens);
-    window.session_count = window.session_count.saturating_add(1);
+    let usage = TokenUsage {
+        input_tokens: row.input_tokens,
+        cached_input_tokens: row.cached_input_tokens,
+        output_tokens: row.output_tokens,
+        reasoning_output_tokens: row.reasoning_output_tokens,
+        total_tokens: row.total_tokens,
+    };
+    apply_tokens_to_window(window, row, &usage);
     if row.priced {
         window.estimated_cost_usd += row.estimated_cost_usd.unwrap_or(0.0);
         if !row.pricing_context.is_empty() {
@@ -1010,6 +1345,35 @@ fn apply_row_to_window(window: &mut UsageWindow, row: &UsageRow) {
             increment_count(&mut window.unpriced_reasons, &row.unpriced_reason);
         }
     }
+}
+
+fn apply_window_usage_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
+    apply_tokens_to_window(window, row, usage);
+    let estimated = estimate_cost(&row.model, usage, row.model_context_window);
+    if estimated.priced {
+        window.estimated_cost_usd += estimated.cost_usd.unwrap_or(0.0);
+        if let Some(pricing_context) = estimated.pricing_context {
+            increment_count(&mut window.pricing_contexts, pricing_context);
+        }
+    } else {
+        window.has_unpriced = true;
+        if let Some(unpriced_reason) = estimated.unpriced_reason {
+            increment_count(&mut window.unpriced_reasons, unpriced_reason);
+        }
+    }
+}
+
+fn apply_tokens_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
+    window.input_tokens = window.input_tokens.saturating_add(usage.input_tokens);
+    window.cached_input_tokens = window
+        .cached_input_tokens
+        .saturating_add(usage.cached_input_tokens);
+    window.output_tokens = window.output_tokens.saturating_add(usage.output_tokens);
+    window.reasoning_output_tokens = window
+        .reasoning_output_tokens
+        .saturating_add(usage.reasoning_output_tokens);
+    window.total_tokens = window.total_tokens.saturating_add(usage.total_tokens);
+    window.session_count = window.session_count.saturating_add(1);
     if row.updated_at_seconds >= window.last_used_seconds {
         window.last_used_seconds = row.updated_at_seconds;
         window.last_used = row.updated_at.clone();
@@ -1020,6 +1384,16 @@ fn apply_row_to_model_window(windows: &mut BTreeMap<String, UsageWindow>, row: &
     let model = display_model_id(&row.model);
     let window = windows.entry(model).or_default();
     apply_row_to_window(window, row);
+}
+
+fn apply_window_usage_to_model_window(
+    windows: &mut BTreeMap<String, UsageWindow>,
+    row: &UsageRow,
+    usage: &TokenUsage,
+) {
+    let model = display_model_id(&row.model);
+    let window = windows.entry(model).or_default();
+    apply_window_usage_to_window(window, row, usage);
 }
 
 fn increment_count(counts: &mut BTreeMap<String, u64>, key: &str) {
@@ -1243,12 +1617,28 @@ mod tests {
             .unwrap()
     }
 
+    fn write_instance_marker(instance_root: &Path, kind: &str, target_id: &str) {
+        fs::create_dir_all(instance_root).unwrap();
+        fs::write(
+            instance_root.join(CODEX_APP_INSTANCE_MARKER_FILE),
+            json!({
+                "managedBy": "codex-switch",
+                "kind": kind,
+                "targetId": target_id,
+                "instanceKey": format!("{kind}-{target_id}"),
+                "channel": target_id
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn parses_total_token_usage_and_context_window() {
         let line = token_count_line("2026-06-15T01:00:00Z", 100, 25, 50, 20, 150, 258_400);
         let mut parsed = ParsedSession::default();
 
-        parse_session_line(&line, &mut parsed);
+        parse_session_line(&line, &mut parsed, None);
 
         let usage = parsed.usage.unwrap();
         assert_eq!(usage.input_tokens, 100);
@@ -1372,6 +1762,91 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap()
             .is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_instance_sessions_use_marker_attribution() {
+        let root = temp_root("managed-instance");
+        let db_path = root.join("usage.sqlite");
+        let main_codex_home = root.join("codex");
+        let instances_dir = root.join("codex-app-instances");
+        let instance_root = instances_dir.join("api-cpa-plus");
+        let instance_codex_home = instance_root.join("codex-home");
+        set_stats_started_at(&db_path, "2026-06-15T00:00:00Z");
+        write_instance_marker(&instance_root, "api", "cpa-plus");
+        write_session(
+            &instance_codex_home,
+            "15",
+            "rollout-instance",
+            &[
+                session_meta_line(
+                    "session-instance",
+                    PROVIDER_API,
+                    "2026-06-15T01:00:00Z",
+                    None,
+                ),
+                turn_context_line("2026-06-15T01:00:30Z", "gpt-5.5"),
+                token_count_line("2026-06-15T01:05:00Z", 100, 0, 20, 5, 120, 258_400),
+            ],
+        );
+
+        let mut sources = vec![main_usage_scan_source(&main_codex_home)];
+        sources.extend(managed_instance_usage_scan_sources(&instances_dir).unwrap());
+        let response =
+            usage_stats_get_for_scan_sources(&db_path, &sources, "2026-06-15T03:00:00Z").unwrap();
+
+        assert_eq!(
+            window_total(&response, "api_profiles", "cpa-plus", "all"),
+            120
+        );
+        assert!(response
+            .get("warnings")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn today_usage_uses_token_count_delta_timestamp_not_session_start() {
+        let root = temp_root("window-delta");
+        let db_path = root.join("usage.sqlite");
+        let codex_home = root.join("codex");
+        set_stats_started_at(&db_path, "2026-06-14T00:00:00Z");
+        record_attribution_at(
+            &db_path,
+            OWNER_TYPE_API_PROFILE,
+            "api-a",
+            PROVIDER_API,
+            "2026-06-14T00:00:00Z",
+        )
+        .unwrap();
+        write_session(
+            &codex_home,
+            "14",
+            "rollout-cross-day",
+            &[
+                session_meta_line(
+                    "session-cross-day",
+                    PROVIDER_API,
+                    "2026-06-14T10:00:00Z",
+                    None,
+                ),
+                turn_context_line("2026-06-14T10:00:30Z", "gpt-5.5"),
+                token_count_line("2026-06-14T12:00:00Z", 80, 0, 20, 5, 100, 258_400),
+                token_count_line("2026-06-15T17:00:00Z", 240, 0, 60, 15, 300, 258_400),
+            ],
+        );
+
+        let response =
+            usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T18:00:00Z").unwrap();
+
+        assert_eq!(window_total(&response, "api_profiles", "api-a", "all"), 300);
+        assert_eq!(
+            window_total(&response, "api_profiles", "api-a", "today"),
+            200
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
