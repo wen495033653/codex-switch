@@ -40,7 +40,7 @@
       "../build/icon.ico"
     ],
     "resources": {
-      "../resources/voice-pack": "voice-pack"
+      "../resources": "."
     },
     "windows": {
       "nsis": {

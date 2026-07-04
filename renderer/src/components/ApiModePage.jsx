@@ -226,7 +226,6 @@ export default function ApiModePage({
   onAddApiProfile,
   onDeleteApiProfile,
   onEditApiProfile,
-  onOpenCodexConfigToml,
   onOpenUsageStatsDetail,
   onOpenCodexAppInstance,
   openingCodexAppTarget,
@@ -363,13 +362,6 @@ export default function ApiModePage({
             <div className="api-page-actions">
               <button
                 type="button"
-                className="btn btn-secondary api-config-open-button"
-                onClick={onOpenCodexConfigToml}
-              >
-                打开 config.toml
-              </button>
-              <button
-                type="button"
                 className="btn btn-primary api-profile-add-button"
                 onClick={onAddApiProfile}
                 disabled={savingApiMode || switching}
@@ -436,7 +428,7 @@ export default function ApiModePage({
                           <div className="account-card-name" title={profileName}>{profileName}</div>
                           {active && <span className="current-badge">当前</span>}
                           {codexAppInstanceRunning && (
-                            <span className="codex-app-running-badge" title="独立 Codex app 正在运行">
+                            <span className="codex-app-running-badge" title="独立 Codex 正在运行">
                               窗口运行中
                             </span>
                           )}
@@ -488,8 +480,8 @@ export default function ApiModePage({
                           <button
                             type="button"
                             className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
-                            title={configured ? (openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此 API 打开独立 Codex app')) : '配置未完整'}
-                            aria-label={openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此 API 打开独立 Codex app')}
+                            title={configured ? (openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此 API 打开独立 Codex')) : '配置未完整'}
+                            aria-label={openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此 API 打开独立 Codex')}
                             disabled={!configured || openingAnyCodexApp}
                             onClick={() => onOpenCodexAppInstance(profileId)}
                           >

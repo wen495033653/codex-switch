@@ -36,6 +36,9 @@ const COMMAND_BINDINGS = {
   getRefreshAllStatus: ['get_refresh_all_status'],
   getSettings: ['get_settings'],
   updateSettings: ['update_settings', patch => ({ patch })],
+  setCodexModelInstructionsEnabled: ['set_codex_model_instructions_enabled', payload => ({
+    enabled: Boolean(payload && payload.enabled)
+  })],
   captureCurrent: ['capture_current'],
   importRefreshToken: ['import_refresh_token', token => ({ token })],
   deleteAccount: ['delete_account', id => ({ id })],

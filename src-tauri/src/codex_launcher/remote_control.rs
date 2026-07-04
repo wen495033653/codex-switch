@@ -614,7 +614,7 @@ fn remote_control_status_from_backend_environment(environment: &Value) -> Option
         Some("missing") => Some(json!({
             "state": "warning",
             "status": "desktop_missing",
-            "message": "codex app 未找到",
+            "message": "codex 未找到",
             "title": remote_control_environment_status_title(environment)
         })),
         Some("found") => {
@@ -623,14 +623,14 @@ fn remote_control_status_from_backend_environment(environment: &Value) -> Option
                 return Some(json!({
                     "state": "active",
                     "status": "desktop_online",
-                    "message": "codex app 在线",
+                    "message": "codex 在线",
                     "title": title
                 }));
             }
             Some(json!({
                 "state": "warning",
                 "status": "desktop_offline",
-                "message": "codex app 未打开",
+                "message": "codex 未打开",
                 "title": title
             }))
         }
@@ -694,7 +694,7 @@ fn remote_control_status_value(settings: &Value, backend_environment: Option<&Va
     json!({
         "state": "warning",
         "status": "pending_restart",
-        "message": "重启 Codex app 后生效",
+        "message": "重启 Codex 后生效",
         "raw": "远程控制配置待应用"
     })
 }
@@ -800,12 +800,12 @@ pub(crate) fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, S
         "ok": true,
         "message": if enabled {
             if restart_required {
-                "远程控制已启用，重启 Codex app 后生效"
+                "远程控制已启用，重启 Codex 后生效"
             } else {
                 "远程控制已启用"
             }
         } else if restart_required {
-            "远程控制已关闭，重启 Codex app 后恢复 API 模式"
+            "远程控制已关闭，重启 Codex 后恢复 API 模式"
         } else {
             "远程控制已关闭"
         },
@@ -837,7 +837,7 @@ pub(crate) fn set_codex_remote_control_account_id(id: String) -> Result<Value, S
     Ok(json!({
         "ok": true,
         "message": if restart_required {
-            "远程控制账号已更新，重启 Codex app 后生效"
+            "远程控制账号已更新，重启 Codex 后生效"
         } else {
             "远程控制账号已更新"
         },
@@ -962,7 +962,7 @@ mod tests {
         );
         assert_eq!(
             status.get("message").and_then(Value::as_str),
-            Some("codex app 在线")
+            Some("codex 在线")
         );
         assert!(status.get("raw").is_none());
     }
@@ -986,7 +986,7 @@ mod tests {
         );
         assert_eq!(
             status.get("message").and_then(Value::as_str),
-            Some("codex app 未打开")
+            Some("codex 未打开")
         );
     }
 
@@ -1006,7 +1006,7 @@ mod tests {
         );
         assert_eq!(
             status.get("message").and_then(Value::as_str),
-            Some("codex app 未找到")
+            Some("codex 未找到")
         );
     }
 

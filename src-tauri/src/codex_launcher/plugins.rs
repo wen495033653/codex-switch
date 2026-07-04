@@ -747,7 +747,7 @@ const CODEX_DELETE_BUTTON_SCRIPT: &str = r###"
 
   async function requestDelete(ref) {
     if (typeof window.__codexSwitchDeleteBridge !== "function") {
-      throw new Error("删除桥接不可用，请重启 Codex app");
+      throw new Error("删除桥接不可用，请重启 Codex");
     }
     return await window.__codexSwitchDeleteBridge(ref);
   }
@@ -923,13 +923,10 @@ fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
     failure_action: CdpHookFailureAction,
 ) -> Result<Option<String>, String> {
     if !cfg!(windows) {
-        return Err("Codex app hook 目前仅支持 Windows 重启入口".to_string());
+        return Err("Codex hook 目前仅支持 Windows 重启入口".to_string());
     }
     if !executable_path.exists() {
-        return Err(format!(
-            "Codex app 路径不存在: {}",
-            executable_path.display()
-        ));
+        return Err(format!("Codex 路径不存在: {}", executable_path.display()));
     }
 
     let debug_port = select_loopback_port(CODEX_PLUGIN_DEBUG_PORT)?;
@@ -957,7 +954,7 @@ fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
 
     let mut child = command
         .spawn()
-        .map_err(|err| format!("启动 Codex app hook 模式失败: {err}"))?;
+        .map_err(|err| format!("启动 Codex hook 模式失败: {err}"))?;
     if let Err(err) = wait_and_inject_cdp_scripts(debug_port, &scripts) {
         if failure_action == CdpHookFailureAction::KillProcess {
             let _ = child.kill();
@@ -1032,9 +1029,9 @@ fn wait_and_inject_cdp_scripts(port: u16, bundle: &CdpScriptBundle) -> Result<()
     }
 
     Err(if last_error.is_empty() {
-        "等待 Codex app CDP 端口超时".to_string()
+        "等待 Codex CDP 端口超时".to_string()
     } else {
-        format!("注入 Codex app hook 脚本失败: {last_error}")
+        format!("注入 Codex hook 脚本失败: {last_error}")
     })
 }
 

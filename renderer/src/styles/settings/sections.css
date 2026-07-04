@@ -66,6 +66,21 @@
   line-height: 1.25;
 }
 
+.settings-remote-control-mode-badge {
+  min-height: 26px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(96, 165, 250, 0.09);
+  color: #bfdbfe;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
 .settings-remote-control-status-badge.active {
   color: #86efac;
   border-color: rgba(134, 239, 172, 0.3);
@@ -142,6 +157,29 @@
   font-size: 13px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.settings-remote-control-note {
+  margin-top: -4px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  background: rgba(96, 165, 250, 0.07);
+  display: grid;
+  gap: 3px;
+}
+
+.settings-remote-control-note-title {
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.settings-remote-control-note-text {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .settings-remote-control-account-grid {

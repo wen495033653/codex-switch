@@ -34,7 +34,7 @@ fn ide_summary_text(value: &Value) -> String {
         .collect::<Vec<_>>();
 
     if names.is_empty() {
-        "Codex app 或 VS Code".to_string()
+        "Codex 或 VS Code".to_string()
     } else {
         names.join("、")
     }

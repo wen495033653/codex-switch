@@ -23,10 +23,11 @@ export function useSettingsActions({
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
   const [savingCodexRemoteControl, setSavingCodexRemoteControl] = useState(false);
+  const [savingCodexModelInstructions, setSavingCodexModelInstructions] = useState(false);
   const [codexRemoteControlPendingEnabled, setCodexRemoteControlPendingEnabled] = useState(null);
   const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
   const [pluginRestartNoticeMessage, setPluginRestartNoticeMessage] = useState(
-    'Codex app 增强设置已保存，重启 Codex app 后生效。'
+    'Codex 增强设置已保存，重启 Codex 后生效。'
   );
   const [pluginRestartNoticeLoading, setPluginRestartNoticeLoading] = useState(false);
   const [restartingCodexApp, setRestartingCodexApp] = useState(false);
@@ -60,11 +61,11 @@ export function useSettingsActions({
         try {
           processStatus = await window.api.getCurrentCodexAppProcesses();
         } catch (err) {
-          toastError(err, '检测 Codex app 状态失败', 7000);
+          toastError(err, '检测 Codex 状态失败', 7000);
           return;
         }
         if (!hasRunningCodexApp(processStatus)) return;
-        setPluginRestartNoticeMessage('Codex app 增强设置已保存，重启 Codex app 后生效。');
+        setPluginRestartNoticeMessage('Codex 增强设置已保存，重启 Codex 后生效。');
         setPluginRestartNoticeVisible(true);
       }
     } catch (err) {
@@ -91,7 +92,7 @@ export function useSettingsActions({
       applySettings(saveRes);
     } catch (err) {
       setSettingsDraft(settings);
-      toast(getErrorMessage(err, '更新 Codex app 代理设置失败'), 7000);
+      toast(getErrorMessage(err, '更新 Codex 代理设置失败'), 7000);
     } finally {
       setSavingProxySettings(false);
     }
@@ -109,10 +110,10 @@ export function useSettingsActions({
     try {
       const res = await window.api.setCodexProxyEnvEnabled({ enabled, proxyUrl });
       applySettings(res);
-      toast((res && res.message) || (enabled ? 'Codex app 代理已启用' : 'Codex app 代理已关闭'));
+      toast((res && res.message) || (enabled ? 'Codex 代理已启用' : 'Codex 代理已关闭'));
     } catch (err) {
       setSettingsDraft(settings);
-      toast(getErrorMessage(err, enabled ? '启用 Codex app 代理失败' : '关闭 Codex app 代理失败'), 7000);
+      toast(getErrorMessage(err, enabled ? '启用 Codex 代理失败' : '关闭 Codex 代理失败'), 7000);
     } finally {
       setSavingCodexProxyEnv(false);
     }
@@ -137,7 +138,7 @@ export function useSettingsActions({
       applySettings(res);
       toast((res && res.message) || (enabled ? '远程控制已启用' : '远程控制已关闭'));
       if (res && res.restartRequired) {
-        setPluginRestartNoticeMessage('远程控制配置已保存，重启 Codex app 后生效。');
+        setPluginRestartNoticeMessage('远程控制配置已保存，重启 Codex 后生效。');
         setPluginRestartNoticeVisible(true);
       }
     } catch (err) {
@@ -164,7 +165,7 @@ export function useSettingsActions({
       applySettings(res);
       toast((res && res.message) || '远程控制账号已更新');
       if (res && res.restartRequired) {
-        setPluginRestartNoticeMessage('远程控制账号已更新，重启 Codex app 后生效。');
+        setPluginRestartNoticeMessage('远程控制账号已更新，重启 Codex 后生效。');
         setPluginRestartNoticeVisible(true);
       }
     } catch (err) {
@@ -172,6 +173,36 @@ export function useSettingsActions({
       toast(getErrorMessage(err, '更新远程控制账号失败'), 7000);
     } finally {
       setSavingCodexRemoteControl(false);
+    }
+  };
+
+  const setCodexModelInstructionsEnabled = async (enabled) => {
+    if (savingCodexModelInstructions) return;
+    setSettingsDraft(prev => ({ ...prev, codex_model_instructions_enabled: enabled }));
+
+    setSavingCodexModelInstructions(true);
+    try {
+      const res = await window.api.setCodexModelInstructionsEnabled({ enabled });
+      applySettings(res);
+      toast((res && res.message) || (enabled ? 'gpt破限已启用' : 'gpt破限已关闭'));
+      if (res && res.restartRequired) {
+        let processStatus;
+        try {
+          processStatus = await window.api.getCurrentCodexAppProcesses();
+        } catch (err) {
+          toastError(err, '检测 Codex 状态失败', 7000);
+          return;
+        }
+        if (hasRunningCodexApp(processStatus)) {
+          setPluginRestartNoticeMessage('gpt破限配置已保存，重启 Codex 后生效。');
+          setPluginRestartNoticeVisible(true);
+        }
+      }
+    } catch (err) {
+      setSettingsDraft(settings);
+      toast(getErrorMessage(err, enabled ? '启用 gpt破限失败' : '关闭 gpt破限失败'), 7000);
+    } finally {
+      setSavingCodexModelInstructions(false);
     }
   };
 
@@ -205,9 +236,9 @@ export function useSettingsActions({
     try {
       const res = await window.api.restartCurrentCodexAppForPluginSetting();
       setPluginRestartNoticeVisible(false);
-      toast((res && res.message) || 'Codex app 已重启');
+      toast((res && res.message) || 'Codex 已重启');
     } catch (err) {
-      toastError(err, '重启 Codex app 失败', 7000);
+      toastError(err, '重启 Codex 失败', 7000);
     } finally {
       setPluginRestartNoticeLoading(false);
     }
@@ -218,9 +249,9 @@ export function useSettingsActions({
     setRestartingCodexApp(true);
     try {
       const res = await window.api.restartCurrentCodexAppNormal();
-      toast((res && res.message) || 'Codex app 已重启');
+      toast((res && res.message) || 'Codex 已重启');
     } catch (err) {
-      toastError(err, '重启 Codex app 失败', 7000);
+      toastError(err, '重启 Codex 失败', 7000);
     } finally {
       setRestartingCodexApp(false);
     }
@@ -242,8 +273,10 @@ export function useSettingsActions({
     restartCurrentCodexAppNormal,
     codexRemoteControlPendingEnabled,
     savingCodexProxyEnv,
+    savingCodexModelInstructions,
     savingCodexRemoteControl,
     savingProxySettings,
+    setCodexModelInstructionsEnabled,
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,

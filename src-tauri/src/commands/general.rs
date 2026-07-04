@@ -1,4 +1,11 @@
 use super::*;
+use crate::{
+    codex_config::{remove_config_values, set_config_values},
+    model_instructions::{
+        resolve_model_instructions_file, CONFIG_KEY as MODEL_INSTRUCTIONS_CONFIG_KEY,
+        SETTING_KEY as MODEL_INSTRUCTIONS_SETTING_KEY,
+    },
+};
 use std::path::Path;
 use tauri::{path::BaseDirectory, Manager};
 
@@ -75,6 +82,53 @@ pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, Str
         "message": "设置已保存",
         "settings": settings
     }))
+}
+
+#[tauri::command]
+pub(crate) fn set_codex_model_instructions_enabled(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<Value, String> {
+    sync_codex_model_instructions_config(&app, enabled)?;
+
+    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&json!({
+        "codex_model_instructions_enabled": enabled
+    }))?)?;
+    let message = if enabled {
+        "gpt破限已启用，重启 Codex 后生效。"
+    } else {
+        "gpt破限已关闭，重启 Codex 后生效。"
+    };
+
+    Ok(json!({
+        "ok": true,
+        "message": message,
+        "restartRequired": true,
+        "settings": settings
+    }))
+}
+
+pub(crate) fn sync_codex_model_instructions_config_for_current_settings(
+    app: &AppHandle,
+) -> Result<(), String> {
+    let settings = read_settings_value()?;
+    sync_codex_model_instructions_config(app, model_instructions_enabled(&settings))
+}
+
+fn sync_codex_model_instructions_config(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        let path = resolve_model_instructions_file(app)?;
+        set_config_values(vec![(MODEL_INSTRUCTIONS_CONFIG_KEY, path)])
+    } else {
+        remove_config_values(&[MODEL_INSTRUCTIONS_CONFIG_KEY])
+    }
+}
+
+fn model_instructions_enabled(settings: &Value) -> bool {
+    settings
+        .get(MODEL_INSTRUCTIONS_SETTING_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 #[tauri::command]

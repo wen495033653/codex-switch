@@ -6,6 +6,9 @@ use crate::{
     api_config::API_PROVIDER_ID,
     json_file::write_json_file,
     json_util::string_field,
+    model_instructions::{
+        resolve_model_instructions_file, SETTING_KEY as MODEL_INSTRUCTIONS_ENABLED_SETTING_KEY,
+    },
     paths::{app_data_dir, codex_dir},
     session_sync_diagnostics::log_session_sync_event,
     settings::{default_api_mode, read_settings_value},
@@ -16,6 +19,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use tauri::AppHandle;
 
 const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 const MULTI_OPEN_SUPPRESS_SOURCE: &str = "multi_open_target_channel";
@@ -46,25 +50,25 @@ struct CodexAppInstancePaths {
     user_data_dir: PathBuf,
 }
 
-pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
+pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<Value, String> {
     if !cfg!(windows) {
-        return Err("Codex app 多开目前仅支持 Windows".to_string());
+        return Err("Codex 多开目前仅支持 Windows".to_string());
     }
 
     let target_kind = string_field(&payload, "kind");
     let target_id = string_field(&payload, "id");
     if target_id.is_empty() {
-        return Err("Codex app 多开目标不能为空".to_string());
+        return Err("Codex 多开目标不能为空".to_string());
     }
 
     let settings = read_settings_value()?;
     let channel = match target_kind.as_str() {
         "account" => account_channel(&target_id)?,
         "api" => api_channel(&settings, &target_id)?,
-        _ => return Err("Codex app 多开目标类型无效".to_string()),
+        _ => return Err("Codex 多开目标类型无效".to_string()),
     };
     let executable = codex_app_executable()?;
-    let paths = prepare_instance_paths(&channel)?;
+    let paths = prepare_instance_paths(&app, &channel)?;
     let args = vec![format!(
         "--user-data-dir={}",
         paths.user_data_dir.to_string_lossy()
@@ -96,11 +100,11 @@ pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
             let hook_warning = launch.hook_warning.clone();
             let message = if hook_warning.is_some() {
                 format!(
-                    "已用{}打开 Codex app；hook 注入失败，增强功能可能未生效",
+                    "已用{}打开 Codex；hook 注入失败，增强功能可能未生效",
                     channel.label
                 )
             } else {
-                format!("已用{}打开 Codex app", channel.label)
+                format!("已用{}打开 Codex", channel.label)
             };
             log_session_sync_event(
                 "codex_app_multi_open_finish",
@@ -128,7 +132,7 @@ pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
             super::codex_app_watcher::clear_suppressed_codex_app_open_handler(
                 MULTI_OPEN_SUPPRESS_SOURCE,
             );
-            Err("Codex app 可执行路径不存在，无法多开".to_string())
+            Err("Codex 可执行路径不存在，无法多开".to_string())
         }
         Err(err) => {
             super::codex_app_watcher::clear_suppressed_codex_app_open_handler(
@@ -141,7 +145,7 @@ pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
 
 pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
     if !cfg!(windows) {
-        return Err("Codex app 多开目前仅支持 Windows".to_string());
+        return Err("Codex 多开目前仅支持 Windows".to_string());
     }
 
     let target_kind = string_field(&payload, "kind");
@@ -153,13 +157,13 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
     let codex_home = root.join("codex-home");
     let user_data_dir = root.join("user-data");
     if !user_data_dir.exists() {
-        return Err("独立 Codex app 实例不存在，请先打开一次".to_string());
+        return Err("独立 Codex 实例不存在，请先打开一次".to_string());
     }
 
     let processes = super::codex_app_watcher::refresh_current_codex_app_processes()?;
     let pids = instance_pids_for_user_data_dir(&processes, &user_data_dir);
     if pids.is_empty() {
-        return Err("独立 Codex app 窗口未运行，请重新打开一次".to_string());
+        return Err("独立 Codex 窗口未运行，请重新打开一次".to_string());
     }
     focus_instance_window(&pids)?;
     log_session_sync_event(
@@ -175,7 +179,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
     );
     Ok(json!({
         "ok": true,
-        "message": "已打开 Codex app 窗口",
+        "message": "已打开 Codex 窗口",
         "kind": target_kind,
         "targetId": target_id,
         "instanceRoot": root.to_string_lossy().to_string(),
@@ -205,12 +209,12 @@ pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
 fn instance_key_for_target(kind: &str, target_id: &str) -> Result<String, String> {
     let target_id = target_id.trim();
     if target_id.is_empty() {
-        return Err("Codex app 多开目标不能为空".to_string());
+        return Err("Codex 多开目标不能为空".to_string());
     }
     match kind {
         "account" => Ok(format!("account-{}", safe_path_segment(target_id))),
         "api" => Ok(format!("api-{}", safe_path_segment(target_id))),
-        _ => Err("Codex app 多开目标类型无效".to_string()),
+        _ => Err("Codex 多开目标类型无效".to_string()),
     }
 }
 
@@ -224,13 +228,13 @@ fn read_codex_app_instance_statuses(
 
     let entries = fs::read_dir(instances_dir).map_err(|err| {
         format!(
-            "读取 Codex app 多开实例目录失败 {}: {err}",
+            "读取 Codex 多开实例目录失败 {}: {err}",
             instances_dir.display()
         )
     })?;
     let mut instances = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|err| format!("读取 Codex app 多开实例条目失败: {err}"))?;
+        let entry = entry.map_err(|err| format!("读取 Codex 多开实例条目失败: {err}"))?;
         let root = entry.path();
         if !root.is_dir() {
             continue;
@@ -289,13 +293,13 @@ fn read_instance_marker(root: &Path) -> Result<Value, String> {
     }
     let raw = fs::read_to_string(&marker_path).map_err(|err| {
         format!(
-            "读取 Codex app 多开实例标记失败 {}: {err}",
+            "读取 Codex 多开实例标记失败 {}: {err}",
             marker_path.display()
         )
     })?;
     serde_json::from_str(&raw).map_err(|err| {
         format!(
-            "解析 Codex app 多开实例标记失败 {}: {err}",
+            "解析 Codex 多开实例标记失败 {}: {err}",
             marker_path.display()
         )
     })
@@ -376,7 +380,7 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
         .filter_map(|pid| u32::try_from(*pid).ok())
         .collect::<std::collections::HashSet<_>>();
     if pids.is_empty() {
-        return Err("独立 Codex app 窗口未运行，请重新打开一次".to_string());
+        return Err("独立 Codex 窗口未运行，请重新打开一次".to_string());
     }
 
     let mut search = WindowSearch {
@@ -390,7 +394,7 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
         );
     }
     if search.hwnd.is_null() {
-        return Err("未找到独立 Codex app 的可见窗口".to_string());
+        return Err("未找到独立 Codex 的可见窗口".to_string());
     }
 
     unsafe {
@@ -401,7 +405,7 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
         }
         BringWindowToTop(search.hwnd);
         if SetForegroundWindow(search.hwnd) == 0 {
-            return Err("独立 Codex app 窗口激活失败".to_string());
+            return Err("独立 Codex 窗口激活失败".to_string());
         }
     }
     Ok(())
@@ -409,7 +413,7 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn focus_instance_window(_pids: &[u64]) -> Result<(), String> {
-    Err("Codex app 多开目前仅支持 Windows".to_string())
+    Err("Codex 多开目前仅支持 Windows".to_string())
 }
 
 fn account_channel(profile_id: &str) -> Result<CodexAppChannel, String> {
@@ -517,7 +521,7 @@ fn codex_app_executable() -> Result<String, String> {
     candidates
         .into_iter()
         .find(|path| Path::new(path).exists())
-        .ok_or_else(|| "未找到 Codex app 桌面入口，请确认已安装 Codex app".to_string())
+        .ok_or_else(|| "未找到 Codex 桌面入口，请确认已安装 Codex".to_string())
 }
 
 fn extend_unique_paths(paths: &mut Vec<String>, candidates: Vec<String>) {
@@ -630,26 +634,25 @@ fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn prepare_instance_paths(channel: &CodexAppChannel) -> Result<CodexAppInstancePaths, String> {
+fn prepare_instance_paths(
+    app: &AppHandle,
+    channel: &CodexAppChannel,
+) -> Result<CodexAppInstancePaths, String> {
     let root = app_data_dir()?
         .join(CODEX_APP_INSTANCES_DIR)
         .join(&channel.key);
     let codex_home = root.join("codex-home");
     let user_data_dir = root.join("user-data");
 
-    fs::create_dir_all(&codex_home).map_err(|err| {
-        format!(
-            "创建 Codex app 多开 home 失败 {}: {err}",
-            codex_home.display()
-        )
-    })?;
+    fs::create_dir_all(&codex_home)
+        .map_err(|err| format!("创建 Codex 多开 home 失败 {}: {err}", codex_home.display()))?;
     fs::create_dir_all(&user_data_dir).map_err(|err| {
         format!(
-            "创建 Codex app 多开 user-data 失败 {}: {err}",
+            "创建 Codex 多开 user-data 失败 {}: {err}",
             user_data_dir.display()
         )
     })?;
-    sync_instance_codex_home(&codex_home, channel)?;
+    sync_instance_codex_home(app, &codex_home, channel)?;
     write_instance_marker(&root, channel)?;
 
     Ok(CodexAppInstancePaths {
@@ -659,14 +662,28 @@ fn prepare_instance_paths(channel: &CodexAppChannel) -> Result<CodexAppInstanceP
     })
 }
 
-fn sync_instance_codex_home(target_home: &Path, channel: &CodexAppChannel) -> Result<(), String> {
+fn sync_instance_codex_home(
+    app: &AppHandle,
+    target_home: &Path,
+    channel: &CodexAppChannel,
+) -> Result<(), String> {
     let source_home = codex_dir()?;
+    let settings = read_settings_value()?;
+    let model_instructions_file = if model_instructions_enabled(&settings) {
+        Some(resolve_model_instructions_file(app)?)
+    } else {
+        None
+    };
     write_json_file(
         &target_home.join("auth.json"),
         "实例 auth.json",
         &channel.auth,
     )?;
-    sync_instance_config(&target_home.join("config.toml"), &channel.config)?;
+    sync_instance_config(
+        &target_home.join("config.toml"),
+        &channel.config,
+        model_instructions_file.as_deref(),
+    )?;
 
     copy_optional_file(&source_home.join(".env"), &target_home.join(".env"))?;
     copy_optional_file(
@@ -674,6 +691,13 @@ fn sync_instance_codex_home(target_home: &Path, channel: &CodexAppChannel) -> Re
         &target_home.join("AGENTS.md"),
     )?;
     Ok(())
+}
+
+fn model_instructions_enabled(settings: &Value) -> bool {
+    settings
+        .get(MODEL_INSTRUCTIONS_ENABLED_SETTING_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 fn write_instance_marker(root: &Path, channel: &CodexAppChannel) -> Result<(), String> {
@@ -687,14 +711,18 @@ fn write_instance_marker(root: &Path, channel: &CodexAppChannel) -> Result<(), S
     });
     write_json_file(
         &root.join("codex-switch-instance.json"),
-        "Codex app 多开实例标记",
+        "Codex 多开实例标记",
         &marker,
     )
 }
 
-fn sync_instance_config(config_path: &Path, config: &InstanceConfig) -> Result<(), String> {
+fn sync_instance_config(
+    config_path: &Path,
+    config: &InstanceConfig,
+    model_instructions_file: Option<&str>,
+) -> Result<(), String> {
     let lines = read_instance_config_lines(config_path)?;
-    let next_lines = merge_instance_config_lines(&lines, config);
+    let next_lines = merge_instance_config_lines(&lines, config, model_instructions_file);
     write_instance_config_lines(config_path, &next_lines)
 }
 
@@ -717,7 +745,11 @@ fn write_instance_config_lines(config_path: &Path, lines: &[String]) -> Result<(
         .map_err(|err| format!("写入实例 config.toml 失败 {}: {err}", config_path.display()))
 }
 
-fn merge_instance_config_lines(lines: &[String], config: &InstanceConfig) -> Vec<String> {
+fn merge_instance_config_lines(
+    lines: &[String],
+    config: &InstanceConfig,
+    model_instructions_file: Option<&str>,
+) -> Vec<String> {
     let api_provider_table = format!("model_providers.{API_PROVIDER_ID}");
     let mut next_lines = match config {
         InstanceConfig::Subscription => {
@@ -766,6 +798,17 @@ fn merge_instance_config_lines(lines: &[String], config: &InstanceConfig) -> Vec
         }
     };
 
+    next_lines = if let Some(model_instructions_file) = model_instructions_file {
+        upsert_root_config_entries(
+            &next_lines,
+            vec![(
+                "model_instructions_file",
+                toml_string(model_instructions_file),
+            )],
+        )
+    } else {
+        remove_root_config_entries(&next_lines, &["model_instructions_file"])
+    };
     next_lines = upsert_table_config_entries(
         &next_lines,
         "windows",
@@ -863,18 +906,18 @@ fn upsert_root_config_entries(lines: &[String], values: Vec<(&str, String)>) -> 
         return next_lines;
     }
 
-    let insert_at = root_end;
+    let mut insert_at = root_end;
+    while insert_at > 0
+        && next_lines
+            .get(insert_at - 1)
+            .is_some_and(|line| line.trim().is_empty())
+    {
+        insert_at -= 1;
+    }
     let mut insert_lines: Vec<String> = pending
         .into_iter()
         .map(|(key, value)| format!("{key} = {value}"))
         .collect();
-    if insert_at > 0
-        && next_lines
-            .get(insert_at - 1)
-            .is_some_and(|line| !line.trim().is_empty())
-    {
-        insert_lines.insert(0, String::new());
-    }
     if insert_at < next_lines.len()
         && next_lines
             .get(insert_at)
@@ -1002,16 +1045,12 @@ fn copy_optional_file(source: &Path, target: &Path) -> Result<(), String> {
 
 fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "创建 Codex app 多开文件目录失败 {}: {err}",
-                parent.display()
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("创建 Codex 多开文件目录失败 {}: {err}", parent.display()))?;
     }
     fs::copy(source, target).map(|_| ()).map_err(|err| {
         format!(
-            "复制 Codex app 多开文件失败 {} -> {}: {err}",
+            "复制 Codex 多开文件失败 {} -> {}: {err}",
             source.display(),
             target.display()
         )
@@ -1087,6 +1126,10 @@ fn stable_hex_hash(value: &str) -> String {
 mod tests {
     use super::*;
 
+    const TEST_MODEL_INSTRUCTIONS_FILE: &str = "C:/CodexSwitch/gpt5.5-unrestricted.md";
+    const TEST_MODEL_INSTRUCTIONS_CONFIG_LINE: &str =
+        "model_instructions_file = \"C:/CodexSwitch/gpt5.5-unrestricted.md\"";
+
     fn lines(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()
     }
@@ -1126,6 +1169,7 @@ mod tests {
             &lines(&[
                 "model_provider = \"old\"",
                 "cli_auth_credentials_store = \"keyring\"",
+                "model_instructions_file = \"./old.md\"",
                 "preferred_auth_method = \"chatgpt\"",
                 "openai_base_url = \"https://old.example.com\"",
                 "",
@@ -1143,10 +1187,13 @@ mod tests {
             &InstanceConfig::Api {
                 base_url: "https://api.example.com/v1".to_string(),
             },
+            Some(TEST_MODEL_INSTRUCTIONS_FILE),
         ));
 
         assert!(output.contains("model_provider = \"api\""));
         assert!(output.contains("cli_auth_credentials_store = \"file\""));
+        assert!(output.contains(TEST_MODEL_INSTRUCTIONS_CONFIG_LINE));
+        assert!(!output.contains("model_instructions_file = \"./old.md\""));
         assert!(!output.contains("preferred_auth_method"));
         assert!(!output.contains("openai_base_url"));
         assert!(output.contains("[windows]\nsandbox = \"elevated\""));
@@ -1176,11 +1223,13 @@ mod tests {
                 "command = 'node_repl.exe'",
             ]),
             &InstanceConfig::Subscription,
+            Some(TEST_MODEL_INSTRUCTIONS_FILE),
         ));
 
         assert!(!output.contains("model_provider = \"api\""));
         assert!(!output.contains("[model_providers.api]"));
         assert!(output.contains("cli_auth_credentials_store = \"file\""));
+        assert!(output.contains(TEST_MODEL_INSTRUCTIONS_CONFIG_LINE));
         assert!(
             output.contains("[windows]\nsandbox_private_desktop = false\nsandbox = \"elevated\"")
         );
@@ -1201,12 +1250,14 @@ mod tests {
                 "enabled = true",
             ]),
             &InstanceConfig::Subscription,
+            Some(TEST_MODEL_INSTRUCTIONS_FILE),
         );
 
         assert_eq!(
             output,
             lines(&[
                 "cli_auth_credentials_store = \"file\"",
+                TEST_MODEL_INSTRUCTIONS_CONFIG_LINE,
                 "",
                 "[windows]",
                 "sandbox = \"elevated\"",
@@ -1225,6 +1276,7 @@ mod tests {
             &InstanceConfig::Api {
                 base_url: "https://api.example.com/v1".to_string(),
             },
+            Some(TEST_MODEL_INSTRUCTIONS_FILE),
         );
 
         assert_eq!(
@@ -1232,6 +1284,7 @@ mod tests {
             lines(&[
                 "model_provider = \"api\"",
                 "cli_auth_credentials_store = \"file\"",
+                TEST_MODEL_INSTRUCTIONS_CONFIG_LINE,
                 "",
                 "[windows]",
                 "sandbox = \"elevated\"",
@@ -1248,17 +1301,45 @@ mod tests {
 
     #[test]
     fn merge_instance_config_creates_minimal_subscription_config() {
-        let output = merge_instance_config_lines(&[], &InstanceConfig::Subscription);
+        let output = merge_instance_config_lines(
+            &[],
+            &InstanceConfig::Subscription,
+            Some(TEST_MODEL_INSTRUCTIONS_FILE),
+        );
 
         assert_eq!(
             output,
             lines(&[
                 "cli_auth_credentials_store = \"file\"",
+                TEST_MODEL_INSTRUCTIONS_CONFIG_LINE,
                 "",
                 "[windows]",
                 "sandbox = \"elevated\"",
             ])
         );
+    }
+
+    #[test]
+    fn merge_instance_config_removes_model_instructions_when_disabled() {
+        let output = merge_instance_config_lines(
+            &lines(&[
+                "model_provider = \"api\"",
+                "cli_auth_credentials_store = \"file\"",
+                "model_instructions_file = \"./old.md\"",
+                "",
+                "[windows]",
+                "sandbox = \"unelevated\"",
+            ]),
+            &InstanceConfig::Api {
+                base_url: "https://api.example.com/v1".to_string(),
+            },
+            None,
+        );
+
+        let output = joined(output);
+        assert!(!output.contains("model_instructions_file"));
+        assert!(output.contains("model_provider = \"api\""));
+        assert!(output.contains("[windows]\nsandbox = \"elevated\""));
     }
 
     #[test]

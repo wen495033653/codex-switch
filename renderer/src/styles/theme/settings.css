@@ -25,6 +25,22 @@ html[data-theme="light"] .settings-proxy-switch-button.active {
   border-color: rgba(37, 99, 235, 0.42);
 }
 
+html[data-theme="light"] .codex-model-instructions-switch {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 252, 0.86));
+  border-color: var(--border-app);
+}
+
+html[data-theme="light"] .codex-model-instructions-switch:hover {
+  background: rgba(37, 99, 235, 0.04);
+  border-color: rgba(37, 99, 235, 0.22);
+}
+
+html[data-theme="light"] .codex-model-instructions-switch.active {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.42);
+}
+
 html[data-theme="light"] .settings-remote-control-switch {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 252, 0.86));
@@ -104,6 +120,21 @@ html[data-theme="light"] .settings-option-desc {
 
 html[data-theme="light"] .settings-remote-control-status-badge {
   background: rgba(100, 116, 139, 0.08);
+}
+
+html[data-theme="light"] .settings-remote-control-mode-badge {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.24);
+}
+
+html[data-theme="light"] .settings-remote-control-note {
+  background: rgba(37, 99, 235, 0.055);
+  border-color: rgba(37, 99, 235, 0.16);
+}
+
+html[data-theme="light"] .settings-remote-control-note-title {
+  color: #1d4ed8;
 }
 
 html[data-theme="light"] .settings-remote-control-status-badge.error {

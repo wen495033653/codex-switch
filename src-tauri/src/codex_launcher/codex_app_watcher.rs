@@ -75,7 +75,7 @@ fn suppressed_codex_app_open_state() -> &'static Mutex<SuppressedCodexAppOpen> {
 pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
     let snapshot = current_codex_app_processes_state()
         .lock()
-        .map_err(|_| "Codex app watcher 状态锁异常".to_string())?
+        .map_err(|_| "Codex watcher 状态锁异常".to_string())?
         .clone();
     let pids = codex_root_pids(&snapshot.processes);
     let all_pids = codex_pids(&snapshot.processes);
@@ -89,7 +89,7 @@ pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
                 "name": executable_name(&process.executable_path),
                 "executablePath": process.executable_path,
                 "kind": "codex",
-                "displayName": "Codex app"
+                "displayName": "Codex"
             })
         })
         .collect::<Vec<_>>();
@@ -234,7 +234,7 @@ where
         let processes = match running_codex_processes() {
             Ok(processes) => processes,
             Err(err) => {
-                eprintln!("Codex app watcher 检测失败: {err}");
+                eprintln!("Codex watcher 检测失败: {err}");
                 log_session_sync_event(
                     "codex_app_watcher_scan_error",
                     json!({ "error": err.clone() }),
@@ -403,7 +403,7 @@ where
                 );
             }
             Err(err) => {
-                eprintln!("Codex app 打开后处理失败: {err}");
+                eprintln!("Codex 打开后处理失败: {err}");
                 log_session_sync_event("codex_app_watcher_on_open_error", json!({ "error": err }));
             }
         }

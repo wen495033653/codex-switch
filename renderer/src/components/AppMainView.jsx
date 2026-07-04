@@ -1,11 +1,13 @@
 import AccountsPage from './AccountsPage';
 import ApiModePage from './ApiModePage';
+import CodexPage from './CodexPage';
 import SessionManagerPage, { useSessionManagerState } from './SessionManagerPage';
 import SettingsPage from './SettingsPage';
 
 export default function AppMainView({
   accountsPageProps,
   apiModePageProps,
+  codexPageProps,
   sessionManagerPageProps,
   settingsPageProps,
   viewMode
@@ -18,6 +20,10 @@ export default function AppMainView({
 
   if (viewMode === 'api') {
     return <ApiModePage {...apiModePageProps} />;
+  }
+
+  if (viewMode === 'codex') {
+    return <CodexPage {...codexPageProps} />;
   }
 
   if (viewMode === 'sessions') {

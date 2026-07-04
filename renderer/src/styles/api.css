@@ -43,17 +43,8 @@
   align-items: center;
 }
 
-.api-config-open-button {
-  min-width: 132px;
-}
-
 .api-profile-add-button {
   min-width: 112px;
-}
-
-.api-page-actions .api-config-open-button {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .api-profile-panel {

@@ -11,6 +11,7 @@ export default function AppNavbar({
   onDevDiagnosticsToggle,
   onAccountsClick,
   onApiClick,
+  onCodexClick,
   onSessionsClick,
   onSettingsClick,
   subscriptionModeActive,
@@ -43,6 +44,13 @@ export default function AppNavbar({
           onClick={onApiClick}
         >
           API
+        </button>
+        <button
+          type="button"
+          className={`top-nav-item ${viewMode === 'codex' ? 'active' : ''}`}
+          onClick={onCodexClick}
+        >
+          Codex
         </button>
         <button
           type="button"

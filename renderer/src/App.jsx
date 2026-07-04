@@ -34,8 +34,8 @@ import {
 
 const IS_DEV_BUILD = import.meta.env.DEV;
 const CODEX_APP_INSTANCE_REOPEN_ERRORS = [
-  '独立 Codex app 窗口未运行',
-  '未找到独立 Codex app 的可见窗口'
+  '独立 Codex 窗口未运行',
+  '未找到独立 Codex 的可见窗口'
 ];
 
 function shouldReopenCodexAppInstanceAfterShowError(err) {
@@ -121,7 +121,7 @@ function MainApp() {
       setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(res));
       return res;
     } catch (err) {
-      if (!silent) toastError(err, '加载 Codex app 多开状态失败', 7000);
+      if (!silent) toastError(err, '加载 Codex 多开状态失败', 7000);
       return null;
     }
   };
@@ -412,8 +412,10 @@ function MainApp() {
     restartCurrentCodexAppNormal,
     codexRemoteControlPendingEnabled,
     savingCodexProxyEnv,
+    savingCodexModelInstructions,
     savingCodexRemoteControl,
     savingProxySettings,
+    setCodexModelInstructionsEnabled,
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,
@@ -462,10 +464,10 @@ function MainApp() {
       if (usedOpenCommand) {
         setCodexAppInstanceStatus(prev => markCodexAppInstanceRunning(prev, res));
       }
-      toast((res && res.message) || (usedOpenCommand ? '已打开 Codex app' : '已打开 Codex app 窗口'));
+      toast((res && res.message) || (usedOpenCommand ? '已打开 Codex' : '已打开 Codex 窗口'));
       window.setTimeout(() => refreshCodexAppInstanceStatus({ silent: true }), 1200);
     } catch (err) {
-      toastError(err, '打开 Codex app 失败', 7000);
+      toastError(err, '打开 Codex 失败', 7000);
     } finally {
       setOpeningCodexAppTarget(prev => (prev === targetKey ? '' : prev));
     }
@@ -567,8 +569,12 @@ function MainApp() {
         onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
+        onCodexClick={() => setViewMode('codex')}
         onSessionsClick={() => setViewMode('sessions')}
-        onSettingsClick={openSettingsPage}
+        onSettingsClick={() => {
+          setSettingsTab('general');
+          openSettingsPage();
+        }}
         subscriptionModeActive={subscriptionModeActive}
         viewMode={viewMode}
       />
@@ -583,32 +589,40 @@ function MainApp() {
             setSettingsDraft,
             dataDir,
             appVersion,
-            accounts: store.accounts,
             checkingUpdate,
-            codexSessionSyncEnabled,
             isDevBuild: IS_DEV_BUILD,
+            updateSettingsDraftAndSave,
+            normalizeBackgroundRefreshInterval,
+            openDataDir,
+            openRepository,
+            handleCheckUpdate,
+            onOpenGptPool: openGptPoolLanding
+          }}
+          codexPageProps={{
+            accounts: store.accounts,
+            codexSessionSyncEnabled,
+            settingsDraft,
+            setSettingsDraft,
             maskAccountName,
             subscriptionModeActive,
             savingCodexProxyEnv,
+            savingCodexModelInstructions,
             savingCodexRemoteControl,
             savingCodexSessionSync,
             savingProxySettings,
             restartingCodexApp,
             restartCurrentCodexAppNormal,
             codexRemoteControlPendingEnabled,
+            setCodexModelInstructionsEnabled,
             setCodexProxyEnvEnabled,
             setCodexRemoteControlAccountId,
             setCodexRemoteControlEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
             switching,
-            updateSettingsDraftAndSave,
-            normalizeBackgroundRefreshInterval,
-            openDataDir,
             updateCodexProxySettings,
-            openRepository,
-            handleCheckUpdate,
+            updateSettingsDraftAndSave,
             onCodexRemoteControlAutoDisabled: handleCodexRemoteControlAutoDisabled,
-            onOpenGptPool: openGptPoolLanding
+            onOpenCodexConfigToml: openCodexConfigToml
           }}
           apiModePageProps={{
             activeApiProfileId,
@@ -618,7 +632,6 @@ function MainApp() {
             onAddApiProfile: addApiProfile,
             onDeleteApiProfile: openDeleteApiProfileModal,
             onEditApiProfile: editApiProfile,
-            onOpenCodexConfigToml: openCodexConfigToml,
             onOpenUsageStatsDetail: setUsageStatsDetail,
             onOpenCodexAppInstance: profileId => openCodexAppInstance('api', profileId),
             openingCodexAppTarget,

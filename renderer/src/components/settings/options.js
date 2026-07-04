@@ -43,6 +43,5 @@ export const UI_THEME_OPTIONS = [
 export const SETTINGS_TABS = [
     { key: 'general', label: '通用' },
     { key: 'account', label: '账号' },
-    { key: 'proxy', label: 'Codex app' },
     { key: 'about', label: '关于' }
 ];

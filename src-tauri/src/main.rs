@@ -15,6 +15,7 @@ mod desktop;
 mod events;
 mod json_file;
 mod json_util;
+mod model_instructions;
 mod oauth_flow;
 mod paths;
 mod proxy_config;
@@ -73,6 +74,11 @@ fn main() {
             if let Err(err) = accounts::restore_api_mode_if_selected() {
                 eprintln!("恢复 Codex API 模式失败: {err}");
             }
+            if let Err(err) =
+                commands::sync_codex_model_instructions_config_for_current_settings(app.handle())
+            {
+                eprintln!("同步 gpt破限配置失败: {err}");
+            }
             if let Err(err) = usage_stats::record_current_attribution_if_available() {
                 eprintln!("记录当前 token 统计归属失败: {err}");
             }
@@ -109,6 +115,7 @@ fn main() {
             commands::get_refresh_all_status,
             commands::get_settings,
             commands::update_settings,
+            commands::set_codex_model_instructions_enabled,
             commands::capture_current,
             commands::import_refresh_token,
             commands::delete_account,

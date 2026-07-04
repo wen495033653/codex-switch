@@ -32,77 +32,16 @@ function remoteControlRawMessage(...items) {
     return '';
 }
 
-export default function ProxySettingsTab({
-    accounts = [],
-    codexSessionSyncEnabled,
-    maskAccountName,
-    savingCodexProxyEnv,
-    savingCodexRemoteControl,
-    savingCodexSessionSync,
-    savingProxySettings,
-    subscriptionModeActive,
+export function CodexProcessCard({
     restartingCodexApp,
-    restartCurrentCodexAppNormal,
-    codexRemoteControlPendingEnabled,
-    onCodexRemoteControlAutoDisabled,
-    setSettingsDraft,
-    setCodexProxyEnvEnabled,
-    setCodexRemoteControlAccountId,
-    setCodexRemoteControlEnabled,
-    setCodexSessionSyncEnabled,
-    settingsDraft,
-    switching,
-    updateCodexProxySettings,
-    updateSettingsDraftAndSave
+    restartCurrentCodexAppNormal
 }) {
-    const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
-    const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
-    const codexRemoteControlEnabled = settingsDraft.codex_remote_control_enabled === true;
-    const remoteControlBlockedBySubscription = subscriptionModeActive === true;
-    const remoteControlEnabledInCurrentMode = codexRemoteControlEnabled && !remoteControlBlockedBySubscription;
-    const remoteControlAccountId = String(settingsDraft.codex_remote_control_account_id || '').trim();
-    const remoteControlAccounts = Array.isArray(accounts)
-        ? accounts.filter(account => !isApiModeAccount(account) && getAccountId(account))
-        : [];
-    const remoteControlLegacyMatches = remoteControlAccounts
-        .filter(account => getChatgptAccountId(account) === remoteControlAccountId);
-    const remoteControlAccount = remoteControlAccounts.find(account => getAccountId(account) === remoteControlAccountId)
-        || (remoteControlLegacyMatches.length === 1 ? remoteControlLegacyMatches[0] : null);
-    const remoteControlSelectedAccountId = remoteControlAccount
-        ? getAccountId(remoteControlAccount)
-        : remoteControlAccountId;
-    const remoteControlAccountLabel = remoteControlAccount
-        ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName)
-        : remoteControlAccountId
-            ? '账号不存在，请重新选择'
-            : '未选择';
-    const codexDeleteButtonEnabled = settingsDraft.codex_delete_button_enabled === true;
-    const saving = savingProxySettings || savingCodexProxyEnv;
-    const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex app 或 VS Code 前同步会话列表。';
     const [codexAppProcessStatus, setCodexAppProcessStatus] = useState({
         loading: true,
         error: '',
         pids: [],
         processCount: 0
     });
-    const [remoteControlStatus, setRemoteControlStatus] = useState({
-        loading: false,
-        error: '',
-        backendError: null,
-        helperStatus: null,
-        backendEnvironment: null,
-        connectionStatus: null
-    });
-    const remoteControlAutoDisableNotifiedRef = useRef(false);
-    const onRemoteControlAutoDisabledRef = useRef(onCodexRemoteControlAutoDisabled);
-    useEffect(() => {
-        onRemoteControlAutoDisabledRef.current = onCodexRemoteControlAutoDisabled;
-    }, [onCodexRemoteControlAutoDisabled]);
-    useEffect(() => {
-        if (remoteControlEnabledInCurrentMode) {
-            remoteControlAutoDisableNotifiedRef.current = false;
-        }
-    }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
     useEffect(() => {
         let disposed = false;
 
@@ -154,6 +93,103 @@ export default function ProxySettingsTab({
         };
     }, []);
 
+    const codexAppPidText = codexAppProcessStatus.loading
+        ? '检测中'
+        : codexAppProcessStatus.error || (codexAppProcessStatus.pids.length ? codexAppProcessStatus.pids.join(', ') : '未检测到');
+    const codexAppPidTitle = codexAppProcessStatus.processCount > codexAppProcessStatus.pids.length
+        ? `共检测到 ${codexAppProcessStatus.processCount} 个 Codex 进程，这里显示主进程 PID`
+        : '';
+    const codexAppPidState = codexAppProcessStatus.error
+        ? 'error'
+        : codexAppProcessStatus.pids.length
+            ? 'active'
+            : 'empty';
+    const restartCodexAppDisabled = restartingCodexApp
+        || codexAppProcessStatus.loading
+        || Boolean(codexAppProcessStatus.error)
+        || codexAppProcessStatus.pids.length === 0;
+
+    return (
+        <section className="settings-codex-app-pid-card" aria-label="当前 Codex PID">
+            <span className="settings-codex-app-pid-label">当前 Codex PID</span>
+            <span className="settings-codex-app-pid-actions">
+                <span className={`settings-codex-app-pid-value ${codexAppPidState}`} title={codexAppPidTitle}>{codexAppPidText}</span>
+                <button
+                    type="button"
+                    className="settings-codex-app-restart-button"
+                    disabled={restartCodexAppDisabled}
+                    onClick={restartCurrentCodexAppNormal}
+                >
+                    {restartingCodexApp ? '重启中...' : '重启 Codex'}
+                </button>
+            </span>
+        </section>
+    );
+}
+
+export default function ProxySettingsTab({
+    accounts = [],
+    codexSessionSyncEnabled,
+    maskAccountName,
+    savingCodexProxyEnv,
+    savingCodexRemoteControl,
+    savingCodexSessionSync,
+    savingProxySettings,
+    subscriptionModeActive,
+    codexRemoteControlPendingEnabled,
+    onCodexRemoteControlAutoDisabled,
+    setSettingsDraft,
+    setCodexProxyEnvEnabled,
+    setCodexRemoteControlAccountId,
+    setCodexRemoteControlEnabled,
+    setCodexSessionSyncEnabled,
+    settingsDraft,
+    switching,
+    updateCodexProxySettings,
+    updateSettingsDraftAndSave
+}) {
+    const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
+    const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
+    const codexRemoteControlEnabled = settingsDraft.codex_remote_control_enabled === true;
+    const remoteControlBlockedBySubscription = subscriptionModeActive === true;
+    const remoteControlEnabledInCurrentMode = codexRemoteControlEnabled && !remoteControlBlockedBySubscription;
+    const remoteControlAccountId = String(settingsDraft.codex_remote_control_account_id || '').trim();
+    const remoteControlAccounts = Array.isArray(accounts)
+        ? accounts.filter(account => !isApiModeAccount(account) && getAccountId(account))
+        : [];
+    const remoteControlLegacyMatches = remoteControlAccounts
+        .filter(account => getChatgptAccountId(account) === remoteControlAccountId);
+    const remoteControlAccount = remoteControlAccounts.find(account => getAccountId(account) === remoteControlAccountId)
+        || (remoteControlLegacyMatches.length === 1 ? remoteControlLegacyMatches[0] : null);
+    const remoteControlSelectedAccountId = remoteControlAccount
+        ? getAccountId(remoteControlAccount)
+        : remoteControlAccountId;
+    const remoteControlAccountLabel = remoteControlAccount
+        ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName)
+        : remoteControlAccountId
+            ? '账号不存在，请重新选择'
+            : '未选择';
+    const codexDeleteButtonEnabled = settingsDraft.codex_delete_button_enabled === true;
+    const saving = savingProxySettings || savingCodexProxyEnv;
+    const sessionSyncHelp = '切换订阅/API 模式后，重新打开 Codex 或 VS Code 前同步会话列表。';
+    const [remoteControlStatus, setRemoteControlStatus] = useState({
+        loading: false,
+        error: '',
+        backendError: null,
+        helperStatus: null,
+        backendEnvironment: null,
+        connectionStatus: null
+    });
+    const remoteControlAutoDisableNotifiedRef = useRef(false);
+    const onRemoteControlAutoDisabledRef = useRef(onCodexRemoteControlAutoDisabled);
+    useEffect(() => {
+        onRemoteControlAutoDisabledRef.current = onCodexRemoteControlAutoDisabled;
+    }, [onCodexRemoteControlAutoDisabled]);
+    useEffect(() => {
+        if (remoteControlEnabledInCurrentMode) {
+            remoteControlAutoDisableNotifiedRef.current = false;
+        }
+    }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
     useEffect(() => {
         let disposed = false;
 
@@ -229,21 +265,6 @@ export default function ProxySettingsTab({
         };
     }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
 
-    const codexAppPidText = codexAppProcessStatus.loading
-        ? '检测中'
-        : codexAppProcessStatus.error || (codexAppProcessStatus.pids.length ? codexAppProcessStatus.pids.join(', ') : '未检测到');
-    const codexAppPidTitle = codexAppProcessStatus.processCount > codexAppProcessStatus.pids.length
-        ? `共检测到 ${codexAppProcessStatus.processCount} 个 Codex app 进程，这里显示主进程 PID`
-        : '';
-    const codexAppPidState = codexAppProcessStatus.error
-        ? 'error'
-        : codexAppProcessStatus.pids.length
-            ? 'active'
-            : 'empty';
-    const restartCodexAppDisabled = restartingCodexApp
-        || codexAppProcessStatus.loading
-        || Boolean(codexAppProcessStatus.error)
-        || codexAppProcessStatus.pids.length === 0;
     const remoteControlBackendError = remoteControlStatus.backendError;
     const remoteControlHelperStatus = remoteControlStatus.helperStatus;
     const remoteControlConnectionStatus = remoteControlStatus.connectionStatus;
@@ -313,24 +334,9 @@ export default function ProxySettingsTab({
         : remoteControlAccountLabel;
     return (
         <>
-            <section className="settings-codex-app-pid-card" aria-label="当前 Codex app PID">
-                <span className="settings-codex-app-pid-label">当前 Codex app PID</span>
-                <span className="settings-codex-app-pid-actions">
-                    <span className={`settings-codex-app-pid-value ${codexAppPidState}`} title={codexAppPidTitle}>{codexAppPidText}</span>
-                    <button
-                        type="button"
-                        className="settings-codex-app-restart-button"
-                        disabled={restartCodexAppDisabled}
-                        onClick={restartCurrentCodexAppNormal}
-                    >
-                        {restartingCodexApp ? '重启中...' : '重启 Codex app'}
-                    </button>
-                </span>
-            </section>
-
             <section className="settings-section settings-app-card-section settings-proxy-section">
                 <div className="settings-proxy-head">
-                    <div className="settings-section-title">Codex app 代理</div>
+                    <div className="settings-section-title">Codex 代理</div>
                     <button
                         type="button"
                         className={`settings-proxy-switch-button ${proxyEnvEnabled ? 'active' : ''}`}
@@ -386,6 +392,7 @@ export default function ProxySettingsTab({
                 <div className="settings-remote-control-topbar">
                     <div className="settings-remote-control-title-group">
                         <div className="settings-section-title">远程控制</div>
+                        <span className="settings-remote-control-mode-badge">仅 API 模式</span>
                         <div
                             className={`settings-remote-control-status-badge ${remoteControlStatusState}`}
                             title={remoteControlStatusTitle || undefined}
@@ -412,11 +419,12 @@ export default function ProxySettingsTab({
                     </button>
                 </div>
                 <div className="settings-section-desc settings-remote-control-note">
-                    流量走 API，控制走账号
+                    <span className="settings-remote-control-note-title">仅 API 模式下使用</span>
+                    <span className="settings-remote-control-note-text">请求流量走 API，控制操作使用选定的 Codex 登录账号。</span>
                 </div>
                 <div className="settings-remote-control-account-grid">
                     <label className="settings-remote-control-account-field">
-                        <span className="settings-inline-field-label">控制账号（app登录账号）</span>
+                        <span className="settings-inline-field-label">控制账号（Codex 登录账号）</span>
                         <div className="settings-remote-control-account-select-wrap">
                             <select
                                 className="settings-input settings-select settings-remote-control-account-select"

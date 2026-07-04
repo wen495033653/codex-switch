@@ -242,6 +242,34 @@ mod tests {
     }
 
     #[test]
+    fn upsert_root_config_entries_replaces_model_instructions_file() {
+        let output = upsert_root_config_entries(
+            &lines(&[
+                "model_provider = \"api\"",
+                "model_instructions_file = \"./old.md\"",
+                "",
+                "[features]",
+                "remote_control = true",
+            ]),
+            vec![(
+                "model_instructions_file".to_string(),
+                Value::String("C:/CodexSwitch/gpt5.5-unrestricted.md".to_string()),
+            )],
+        );
+
+        assert_eq!(
+            output,
+            lines(&[
+                "model_provider = \"api\"",
+                "model_instructions_file = \"C:/CodexSwitch/gpt5.5-unrestricted.md\"",
+                "",
+                "[features]",
+                "remote_control = true",
+            ])
+        );
+    }
+
+    #[test]
     fn remove_table_config_entries_removes_remote_control_keys_only_from_features() {
         let output = remove_table_config_entries(
             &lines(&[

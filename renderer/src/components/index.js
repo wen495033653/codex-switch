@@ -8,6 +8,7 @@ export { default as ApiProfileModal } from './ApiProfileModal';
 export { default as AppDialogs } from './AppDialogs';
 export { default as AppMainView } from './AppMainView';
 export { default as AppNavbar } from './AppNavbar';
+export { default as CodexPage } from './CodexPage';
 export { default as DevDiagnosticsPanel } from './DevDiagnosticsPanel';
 export { default as RefreshTokenDialog } from './RefreshTokenDialog';
 export { default as SessionManagerPage } from './SessionManagerPage';

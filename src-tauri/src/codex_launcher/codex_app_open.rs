@@ -417,7 +417,7 @@ pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, St
         );
         return Ok(json!({
             "ok": true,
-            "message": "未检测到正在运行的 Codex app"
+            "message": "未检测到正在运行的 Codex"
         }));
     }
 
@@ -443,7 +443,7 @@ pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, St
     );
     Ok(json!({
         "ok": true,
-        "message": if restarted > 0 { "Codex app 已重启" } else { "未能重新打开 Codex app" },
+        "message": if restarted > 0 { "Codex 已重启" } else { "未能重新打开 Codex" },
         "restarted": restarted > 0,
         "restartedCount": restarted
     }))
@@ -469,7 +469,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
         );
         return Ok(json!({
             "ok": true,
-            "message": "未检测到正在运行的 Codex app"
+            "message": "未检测到正在运行的 Codex"
         }));
     }
 
@@ -495,7 +495,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     );
     Ok(json!({
         "ok": true,
-        "message": if restarted > 0 { "Codex app 已重启" } else { "未能重新打开 Codex app" },
+        "message": if restarted > 0 { "Codex 已重启" } else { "未能重新打开 Codex" },
         "restarted": restarted > 0,
         "restartedCount": restarted
     }))
@@ -638,7 +638,7 @@ fn relaunch_running_codex_processes(
     executables.sort_by_key(|path| path.trim().to_ascii_lowercase());
     executables.dedup_by_key(|path| path.trim().to_ascii_lowercase());
     if executables.is_empty() {
-        return Err("未检测到 Codex app 可执行路径".to_string());
+        return Err("未检测到 Codex 可执行路径".to_string());
     }
     log_session_sync_event(
         "codex_app_relaunch_processes_start",
@@ -655,7 +655,7 @@ fn relaunch_running_codex_processes(
     }
     let alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
-        return Err("Codex app 进程未能退出".to_string());
+        return Err("Codex 进程未能退出".to_string());
     }
 
     apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;

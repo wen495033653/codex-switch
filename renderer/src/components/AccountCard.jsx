@@ -89,7 +89,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     <div className="account-card-name" title={displayName}>{displayName}</div>
                     {isCurrent && <span className="current-badge">当前</span>}
                     {codexAppInstanceRunning && (
-                        <span className="codex-app-running-badge" title="独立 Codex app 正在运行">
+                        <span className="codex-app-running-badge" title="独立 Codex 正在运行">
                             窗口运行中
                         </span>
                     )}
@@ -159,8 +159,8 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     {!info.isApiMode && (
                         <button
                             className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
-                            title={openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此账号打开独立 Codex app')}
-                            aria-label={openingThisCodexApp ? '正在打开 Codex app' : (codexAppInstanceRunning ? '打开独立 Codex app 窗口' : '用此账号打开独立 Codex app')}
+                            title={openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此账号打开独立 Codex')}
+                            aria-label={openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此账号打开独立 Codex')}
                             onClick={() => onOpenCodexAppInstance(accountId)}
                             disabled={!accountId || openingAnyCodexApp}
                         >

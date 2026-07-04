@@ -168,6 +168,10 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "codex_proxy_url": codex_proxy_url,
         "codex_proxy_env_enabled": bool_field(data, "codex_proxy_env_enabled"),
         "codex_plugins_enabled": bool_field(data, "codex_plugins_enabled"),
+        "codex_model_instructions_enabled": data
+            .get("codex_model_instructions_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         "codex_remote_control_enabled": bool_field(data, "codex_remote_control_enabled")
             || bool_field(data, "codex_remote_control_hook_enabled"),
         "codex_remote_control_account_id": string_field(data, "codex_remote_control_account_id"),
@@ -269,6 +273,32 @@ mod tests {
                 .get("codex_plugins_enabled")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_enables_codex_model_instructions_by_default() {
+        let settings = normalize_settings(&json!({}));
+
+        assert_eq!(
+            settings
+                .get("codex_model_instructions_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_codex_model_instructions_disabled() {
+        let settings = normalize_settings(&json!({
+            "codex_model_instructions_enabled": false
+        }));
+
+        assert_eq!(
+            settings
+                .get("codex_model_instructions_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 

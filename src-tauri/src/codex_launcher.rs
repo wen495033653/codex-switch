@@ -16,7 +16,7 @@ use std::{
     thread,
     time::{Duration as StdDuration, Instant},
 };
-use tauri::State;
+use tauri::{AppHandle, State};
 use time::OffsetDateTime;
 
 pub(crate) struct IdePending {
@@ -71,8 +71,8 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn open_codex_app_instance(payload: Value) -> Result<Value, String> {
-    codex_app_instances::open_codex_app_instance(payload)
+pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<Value, String> {
+    codex_app_instances::open_codex_app_instance(app, payload)
 }
 
 #[tauri::command]

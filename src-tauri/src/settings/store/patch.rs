@@ -167,6 +167,17 @@ pub(super) fn apply_settings_patch(
             Value::Bool(bool_field(patch, "codex_plugins_enabled")),
         );
     }
+    if has_key(patch, "codex_model_instructions_enabled") {
+        object.insert(
+            "codex_model_instructions_enabled".to_string(),
+            Value::Bool(
+                patch
+                    .get("codex_model_instructions_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            ),
+        );
+    }
     if has_key(patch, "codex_remote_control_enabled")
         || has_key(patch, "codex_remote_control_hook_enabled")
     {
@@ -441,6 +452,26 @@ mod tests {
         assert_eq!(
             object.get("codex_plugins_enabled").and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_codex_model_instructions_enabled() {
+        let mut object = Map::new();
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_model_instructions_enabled": false
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object
+                .get("codex_model_instructions_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 

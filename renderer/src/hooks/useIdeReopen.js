@@ -35,7 +35,7 @@ export function useIdeReopen({
       try {
         const res = await window.api.discardIdeSnapshot(snapshotId);
         if (res && res.store) setStore(requireStore(res));
-        toast('账号已切换，稍后重新打开 Codex app 或 VS Code 后生效');
+        toast('账号已切换，稍后重新打开 Codex 或 VS Code 后生效');
       } catch {
         return;
       }

@@ -206,3 +206,82 @@
 .settings-session-sync-section {
   gap: 16px;
 }
+
+.codex-config-open-button {
+  flex: 0 0 auto;
+  min-width: 132px;
+}
+
+.codex-model-instructions-section {
+  gap: 16px;
+}
+
+.codex-model-instructions-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.codex-model-instructions-switch {
+  min-width: 118px;
+  height: 38px;
+  padding: 0 8px 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-app);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  transition: all 0.2s ease;
+}
+
+.codex-model-instructions-switch:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: var(--bg-row-hover);
+}
+
+.codex-model-instructions-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.codex-model-instructions-switch.active {
+  border-color: rgba(51, 156, 255, 0.46);
+  background: rgba(51, 156, 255, 0.13);
+}
+
+.codex-model-instructions-switch.active .settings-switch {
+  background: var(--accent);
+}
+
+.codex-model-instructions-switch.active .settings-switch-thumb {
+  transform: translateX(20px);
+}
+
+.codex-model-instructions-switch-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .codex-config-open-button {
+    width: 100%;
+  }
+
+  .codex-model-instructions-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .codex-model-instructions-switch {
+    width: 100%;
+  }
+}
