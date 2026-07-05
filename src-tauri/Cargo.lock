@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "codex-switch"
-version = "5.2.22"
+version = "5.2.23"
 dependencies = [
  "arboard",
  "base64 0.22.1",
