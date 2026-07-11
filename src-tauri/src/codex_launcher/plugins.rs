@@ -28,331 +28,129 @@ struct CdpScriptBundle {
 
 const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
 (() => {
-  const version = "6";
+  const version = "7";
   if (window.__codexSwitchPluginUnlockController?.version === version) {
-    window.__codexSwitchPluginUnlockPatch?.();
+    void window.__codexSwitchPluginUnlockPatch?.();
     return;
   }
   window.__codexSwitchPluginUnlockController?.stop?.();
-  window.__codexSwitchPluginUnlockVersion = version;
 
+  const currentFilter = Array.prototype.filter;
+  const legacyFilter = Array.prototype.__codexSwitchPluginMarketplaceOriginalFilter;
+  if (
+    typeof legacyFilter === "function"
+    && currentFilter?.__codexSwitchPluginMarketplacePatched
+  ) {
+    Array.prototype.filter = legacyFilter;
+    delete Array.prototype.__codexSwitchPluginMarketplaceOriginalFilter;
+  }
+  delete window.__codexSwitchPluginUnlockEvents;
+
+  const status = {
+    version,
+    patched: false,
+    attempts: 0,
+    error: "",
+  };
   const controller = {
     version,
-    observer: null,
-    interval: null,
     timeout: null,
     stopped: false,
+    client: null,
+    originalSendRequest: null,
+    patchedSendRequest: null,
     stop() {
+      if (this.stopped) return;
       this.stopped = true;
-      this.observer?.disconnect?.();
-      if (this.interval) clearInterval(this.interval);
       if (this.timeout) clearTimeout(this.timeout);
+      if (
+        this.client
+        && this.patchedSendRequest
+        && this.client.sendRequest === this.patchedSendRequest
+      ) {
+        this.client.sendRequest = this.originalSendRequest;
+      }
     },
   };
+  window.__codexSwitchPluginUnlockVersion = version;
+  window.__codexSwitchPluginUnlockStatus = status;
   window.__codexSwitchPluginUnlockController = controller;
-
-  const modulePromises = new Map();
-  const officialMarketplaceNames = new Set([
-    "openai-bundled",
-    "openai-curated-remote",
-    "openai-primary-runtime",
-  ]);
-
-  function record(event, details = {}) {
-    const item = { event, details, at: new Date().toISOString() };
-    window.__codexSwitchPluginUnlockEvents = window.__codexSwitchPluginUnlockEvents || [];
-    window.__codexSwitchPluginUnlockEvents.push(item);
-    if (window.__codexSwitchPluginUnlockEvents.length > 40) {
-      window.__codexSwitchPluginUnlockEvents.shift();
-    }
-  }
 
   function assetUrl(namePart) {
     const urls = [
-      ...Array.from(document.querySelectorAll("script[src]") || []).map((script) => script.src),
-      ...Array.from(document.querySelectorAll("link[href]") || []).map((link) => link.href),
+      ...Array.from(document.querySelectorAll("script[src]"), (node) => node.src),
+      ...Array.from(document.querySelectorAll("link[href]"), (node) => node.href),
       ...performance.getEntriesByType("resource").map((entry) => entry.name),
     ].filter(Boolean);
-    return urls.find((url) => url.includes("/assets/") && url.includes(namePart) && url.split("?")[0].endsWith(".js")) || "";
+    return urls.find(
+      (url) => url.includes("/assets/")
+        && url.includes(namePart)
+        && url.split("?")[0].endsWith(".js"),
+    ) || "";
   }
 
-  async function loadCodexAppModule(namePart) {
-    if (!modulePromises.has(namePart)) {
-      const promise = Promise.resolve().then(async () => {
-        const url = assetUrl(namePart);
-        if (!url) throw new Error(`未找到 Codex App asset: ${namePart}`);
-        return await import(url);
-      }).catch((error) => {
-        modulePromises.delete(namePart);
-        throw error;
-      });
-      modulePromises.set(namePart, promise);
-    }
-    return await modulePromises.get(namePart);
-  }
-
-  function appServerRequestMethod(method, params) {
-    if (method === "send-cli-request-for-host" && params?.method) return String(params.method);
-    return String(method || "");
-  }
-
-  function directParams(value) {
-    return value && typeof value === "object" ? value : null;
-  }
-
-  function isPluginListMethod(method) {
-    return method === "plugin/list" || method === "plugin/installed";
-  }
-
-  function isPluginInstallMethod(method) {
-    return method === "plugin/install";
-  }
-
-  function isPluginUninstallMethod(method) {
-    return method === "plugin/uninstall";
-  }
-
-  function patchListPluginParams(value) {
-    const params = directParams(value);
-    if (!params) return value;
-    if (isPluginListMethod(params.method) && directParams(params.params)) {
-      return { ...params, params: patchListPluginParams(params.params) };
-    }
-    const hadMarketplaceKinds = Object.prototype.hasOwnProperty.call(params, "marketplaceKinds");
-    if (!hadMarketplaceKinds) return params;
-    const next = { ...params };
-    delete next.marketplaceKinds;
-    record("plugin_marketplace_request_expanded", {
-      cwdCount: Array.isArray(next.cwds) ? next.cwds.length : 0,
-    });
-    return next;
-  }
-
-  function pluginMarketplaceAliasForName(name) {
-    if (name === "openai-curated-remote") return "codex-switch-openai-curated-remote";
-    if (name === "openai-primary-runtime") return "codex-switch-openai-primary-runtime";
-    return "";
-  }
-
-  function restorePluginMarketplaceName(name) {
-    if (name === "codex-switch-openai-curated-remote") return "openai-curated-remote";
-    if (name === "codex-switch-openai-primary-runtime") return "openai-primary-runtime";
-    return name;
-  }
-
-  function isOfficialMarketplaceName(name) {
-    return officialMarketplaceNames.has(restorePluginMarketplaceName(name));
-  }
-
-  function displayNameForMarketplace(name, fallback) {
-    if (name === "openai-bundled") return fallback || "OpenAI Bundled";
-    if (name === "openai-curated-remote" || name === "codex-switch-openai-curated-remote") return "OpenAI Curated";
-    if (name === "openai-primary-runtime" || name === "codex-switch-openai-primary-runtime") return "OpenAI Runtime";
-    return fallback;
-  }
-
-  function patchMarketplaceObject(marketplace) {
-    if (!marketplace || typeof marketplace !== "object" || marketplace.__codexSwitchPluginMarketplacePatched) return false;
-    const originalName = String(marketplace.name || "");
-    const alias = pluginMarketplaceAliasForName(originalName);
-    if (alias) marketplace.name = alias;
-    const displayName = displayNameForMarketplace(originalName, marketplace.displayName || marketplace.title || marketplace.label || marketplace.name);
-    if (displayName) {
-      marketplace.displayName = displayName;
-      marketplace.title = displayName;
-      marketplace.label = displayName;
-      marketplace.interface = {
-        ...(marketplace.interface && typeof marketplace.interface === "object" ? marketplace.interface : {}),
-        displayName,
-        name: displayName,
-        title: displayName,
-        label: displayName,
-      };
-    }
-    marketplace.__codexSwitchPluginMarketplacePatched = true;
-    return true;
-  }
-
-  function isBuildFlavorFilter(callback, sample) {
-    if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
-    let source = "";
-    try {
-      source = Function.prototype.toString.call(callback);
-    } catch {
-      return false;
-    }
-    if (!source.includes("!u(e.marketplaceName)||e.marketplaceName===r")) return false;
-    if (!sample.some((plugin) => isOfficialMarketplaceName(plugin?.marketplaceName))) return false;
-    return sample.some((plugin) => isOfficialMarketplaceName(plugin?.marketplaceName) && !callback(plugin));
-  }
-
-  function isMarketplaceHiddenFilter(callback, sample) {
-    if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
-    let source = "";
-    try {
-      source = Function.prototype.toString.call(callback);
-    } catch {
-      return false;
-    }
-    if (!source.includes("!t.includes(e.name)")) return false;
-    if (!sample.some((marketplace) => isOfficialMarketplaceName(marketplace?.name))) return false;
-    return sample.some((marketplace) => isOfficialMarketplaceName(marketplace?.name) && !callback(marketplace));
-  }
-
-  function installPluginMarketplaceFilterPatch() {
-    if (Array.prototype.filter.__codexSwitchPluginMarketplacePatched === version) return;
-    const originalFilter = Array.prototype.__codexSwitchPluginMarketplaceOriginalFilter || Array.prototype.filter;
-    if (!Array.prototype.__codexSwitchPluginMarketplaceOriginalFilter) {
-      Object.defineProperty(Array.prototype, "__codexSwitchPluginMarketplaceOriginalFilter", {
-        value: originalFilter,
-        configurable: true,
-        writable: true,
-      });
-    }
-    const patchedFilter = function codexSwitchPluginMarketplaceFilterPatch(callback, thisArg) {
-      if (isBuildFlavorFilter(callback, this)) {
-        record("plugin_build_flavor_filter_bypassed", { pluginCount: this.length });
-        return Array.from(this);
-      }
-      if (isMarketplaceHiddenFilter(callback, this)) {
-        record("plugin_marketplace_hidden_filter_bypassed", { marketplaceCount: this.length });
-        return Array.from(this);
-      }
-      return originalFilter.call(this, callback, thisArg);
-    };
-    patchedFilter.__codexSwitchPluginMarketplacePatched = version;
-    Array.prototype.filter = patchedFilter;
-    record("plugin_marketplace_filter_patch_installed");
-  }
-
-  function restorePluginRequestParams(value, method = "") {
-    const params = directParams(value);
-    if (!params) return value;
-    if (params.method && directParams(params.params)) {
-      return { ...params, params: restorePluginRequestParams(params.params, String(params.method)) };
-    }
-    let next = params;
-    if (Array.isArray(params.marketplaceKinds)) {
-      next = { ...next, marketplaceKinds: Array.from(new Set(params.marketplaceKinds.map((kind) => {
-        if (kind === "remote:codex-switch-openai-curated-remote") return "openai-curated-remote";
-        if (kind === "remote:codex-switch-openai-primary-runtime") return "openai-primary-runtime";
-        return restorePluginMarketplaceName(kind);
-      }))) };
-    }
-    if (isPluginInstallMethod(method)) {
-      next = next === params ? { ...params } : { ...next };
-      if (next.remoteMarketplaceName) {
-        next.remoteMarketplaceName = restorePluginMarketplaceName(next.remoteMarketplaceName);
-      }
-      if (typeof next.marketplacePath === "string" && next.marketplacePath.startsWith("remote:")) {
-        const restoredName = restorePluginMarketplaceName(next.marketplacePath.slice("remote:".length));
-        delete next.marketplacePath;
-        next.remoteMarketplaceName = restoredName;
-      }
-    }
-    return next;
-  }
-
-  function patchPluginMarketplaceResult(method, result) {
-    if (!isPluginListMethod(method)) return result;
-    try {
-      let patchedCount = 0;
-      if (Array.isArray(result?.marketplaces)) {
-        result.marketplaces.forEach((marketplace) => {
-          if (patchMarketplaceObject(marketplace)) patchedCount += 1;
-        });
-      }
-      if (patchedCount > 0) {
-        record("plugin_marketplace_response_expanded", { patchedCount });
-      }
-    } catch (error) {
-      record("plugin_marketplace_response_patch_failed", {
-        errorName: error?.name || "",
-        errorMessage: error?.message || String(error),
-      });
-    }
-    return result;
+  function shouldExpandPluginCatalog(params) {
+    const kinds = params?.marketplaceKinds;
+    return Array.isArray(kinds)
+      && kinds.length === 2
+      && kinds.includes("local")
+      && kinds.includes("vertical");
   }
 
   function patchRequestClient(client) {
-    if (!client || typeof client.sendRequest !== "function") return false;
-    if (client.__codexSwitchPluginMarketplacePatch === version) return true;
-    const originalSendRequest = client.__codexSwitchPluginMarketplaceOriginalSendRequest || client.sendRequest.bind(client);
-    client.__codexSwitchPluginMarketplaceOriginalSendRequest = originalSendRequest;
-    client.sendRequest = async function codexSwitchPluginMarketplacePatchedSendRequest(method, params, options) {
-      const requestMethod = appServerRequestMethod(String(method || ""), params);
-      if (isPluginUninstallMethod(requestMethod)) {
-        return await originalSendRequest(method, params, options);
+    if (controller.stopped || !client || typeof client.sendRequest !== "function") return false;
+    const originalSendRequest = client.sendRequest;
+    const patchedSendRequest = async function codexSwitchPluginListRequest(method, params) {
+      if (method === "list-plugins" && shouldExpandPluginCatalog(params)) {
+        const nextParams = { ...params };
+        delete nextParams.marketplaceKinds;
+        return await originalSendRequest.call(this, method, nextParams);
       }
-      const restoredParams = restorePluginRequestParams(params, requestMethod);
-      const requestParams = isPluginListMethod(requestMethod)
-        ? patchListPluginParams(restoredParams)
-        : restoredParams;
-      const result = await originalSendRequest(method, requestParams, options);
-      return patchPluginMarketplaceResult(requestMethod, result);
+      return await originalSendRequest.call(this, method, params);
     };
-    client.__codexSwitchPluginMarketplacePatch = version;
+    client.sendRequest = patchedSendRequest;
+    controller.client = client;
+    controller.originalSendRequest = originalSendRequest;
+    controller.patchedSendRequest = patchedSendRequest;
     return true;
   }
 
-  async function patchRequestClients() {
+  async function installPatch() {
+    const url = assetUrl("use-host-config-");
+    if (!url) return false;
+    const module = await import(url);
+    if (controller.stopped) return false;
+    const client = Object.values(module).find(
+      (value) => value
+        && typeof value === "object"
+        && typeof value.sendRequest === "function"
+        && typeof value.setMessageHandler === "function",
+    );
+    return patchRequestClient(client);
+  }
+
+  const maxAttempts = 40;
+  let patching = false;
+  async function patch() {
+    if (controller.stopped || status.patched || patching) return status.patched;
+    patching = true;
+    status.attempts += 1;
     try {
-      const module = await loadCodexAppModule("app-server-manager-signals-");
-      const candidates = Object.values(module).filter((value) => value && typeof value === "object");
-      let patchedCount = 0;
-      for (const candidate of candidates) {
-        if (patchRequestClient(candidate)) patchedCount += 1;
-        if (typeof candidate.sendRequest !== "function" && typeof candidate.get === "function") {
-          try {
-            if (patchRequestClient(candidate.get())) patchedCount += 1;
-          } catch {
-          }
-        }
-      }
-      if (patchedCount > 0) {
-        record("plugin_marketplace_request_patch_installed", {
-          candidateCount: candidates.length,
-          patchedCount,
-        });
-      } else {
-        record("plugin_marketplace_request_patch_not_found", {
-          exportCount: Object.keys(module || {}).length,
-          candidateCount: candidates.length,
-        });
-      }
+      status.patched = await installPatch();
+      status.error = status.patched ? "" : "Plugin request client not ready";
     } catch (error) {
-      record("plugin_marketplace_request_patch_failed", {
-        errorName: error?.name || "",
-        errorMessage: error?.message || String(error),
-      });
+      status.error = error?.message || String(error);
+    } finally {
+      patching = false;
     }
-  }
-
-  let patchScheduled = false;
-  function patch() {
-    patchScheduled = false;
-    if (controller.stopped) return;
-    installPluginMarketplaceFilterPatch();
-    void patchRequestClients();
-  }
-
-  function schedulePatch() {
-    if (controller.stopped || patchScheduled) return;
-    patchScheduled = true;
-    controller.timeout = setTimeout(() => {
-      controller.timeout = null;
-      requestAnimationFrame(patch);
-    }, 250);
+    if (!controller.stopped && !status.patched && status.attempts < maxAttempts) {
+      controller.timeout = setTimeout(patch, 250);
+    }
+    return status.patched;
   }
 
   window.__codexSwitchPluginUnlockPatch = patch;
-  controller.observer = new MutationObserver(schedulePatch);
-  controller.observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
-  controller.interval = setInterval(schedulePatch, 5000);
-  patch();
+  void patch();
 })();
 "###;
 
@@ -951,15 +749,20 @@ mod tests {
     }
 
     #[test]
-    fn plugin_unlock_script_supports_current_app_server_rpc_names() {
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/list"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/installed"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/install"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/uninstall"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("openai-curated-remote"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("codex-switch-openai-curated-remote"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("list-plugins"));
+    fn plugin_unlock_script_uses_minimal_current_catalog_hook() {
+        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("use-host-config-"));
+        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("list-plugins"));
+        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("marketplaceKinds"));
+        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("setMessageHandler"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("app-server-manager-signals-"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/list"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/installed"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/install"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/uninstall"));
         assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("install-plugin"));
         assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("uninstall-plugin"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("codex-switch-openai-curated-remote"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("MutationObserver"));
+        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("setInterval"));
     }
 }
