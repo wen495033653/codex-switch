@@ -725,7 +725,13 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
 }
 
 #[tauri::command]
-pub(crate) fn get_codex_remote_control_status() -> Result<Value, String> {
+pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(get_codex_remote_control_status_impl)
+        .await
+        .map_err(|err| format!("后台检测远程控制状态失败: {err}"))?
+}
+
+fn get_codex_remote_control_status_impl() -> Result<Value, String> {
     let mut settings = read_settings_value()?;
     let backend_environment = remote_control_backend_environment_status(&settings);
     let mut connection_status =
