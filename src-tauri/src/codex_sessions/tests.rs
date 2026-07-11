@@ -688,7 +688,8 @@ fn preview_state_provider_counts_changes_without_writing() {
     create_state_db(&state_db);
 
     let updated =
-        preview_codex_state_threads_to_provider_with_diagnostics(&state_db, "api", None).unwrap();
+        preview_codex_state_threads_to_provider_with_diagnostics(&state_db, "api", None, true)
+            .unwrap();
     let connection = Connection::open(&state_db).unwrap();
     let mut rows = connection
         .prepare("SELECT id, model_provider FROM threads ORDER BY id")
@@ -714,6 +715,55 @@ fn preview_state_provider_counts_changes_without_writing() {
             ("thread-openai".to_string(), "openai".to_string()),
         ]
     );
+}
+
+#[test]
+fn preview_state_provider_ignores_metadata_for_relaunch_gate() {
+    let temp_dir = unique_sessions_dir("preview-state-db-relaunch");
+    let state_db = temp_dir.join("state_5.sqlite");
+    let rollout = temp_dir.join("sessions").join("rollout-user.jsonl");
+    write_rollout_file_with_user_event(&rollout, "api", "E:\\Project\\current");
+
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    connection
+        .execute(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                has_user_event INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                "thread-user",
+                rollout.to_string_lossy().to_string(),
+                "api",
+                "old-cwd",
+                0,
+            ),
+        )
+        .unwrap();
+    drop(connection);
+
+    let all_updates =
+        preview_codex_state_threads_to_provider_with_diagnostics(&state_db, "api", None, true)
+            .unwrap();
+    let relaunch_updates =
+        preview_codex_state_threads_to_provider_with_diagnostics(&state_db, "api", None, false)
+            .unwrap();
+
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(all_updates, 2);
+    assert_eq!(relaunch_updates, 0);
 }
 
 #[test]

@@ -326,6 +326,8 @@ fn preview_codex_state_threads_to_provider_if_exists(
         &state_db,
         target_provider,
         Some(trigger),
+        // Auxiliary cwd/user-event repairs must not force a Codex relaunch.
+        false,
     )
 }
 
@@ -1304,6 +1306,7 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
     state_db: &Path,
     target_provider: &str,
     trigger: Option<&str>,
+    count_metadata_updates: bool,
 ) -> Result<usize, String> {
     if !state_db.exists() {
         if let Some(trigger) = trigger {
@@ -1353,7 +1356,11 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
         }
         return Ok(0);
     }
-    let thread_metadata = collect_state_thread_sync_metadata(&connection, state_db, &columns)?;
+    let thread_metadata = if count_metadata_updates {
+        collect_state_thread_sync_metadata(&connection, state_db, &columns)?
+    } else {
+        StateThreadSyncMetadata::default()
+    };
     let mut counts = StateThreadUpdateCounts {
         provider_rows: connection
             .query_row(
@@ -1407,7 +1414,12 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
                 })? as usize;
         }
     }
-    let updated = counts.total();
+    let detected = counts.total();
+    let updated = if count_metadata_updates {
+        detected
+    } else {
+        counts.provider_rows
+    };
     if let Some(trigger) = trigger {
         log_session_sync_event(
             "session_sync_preflight_state_db_summary",
@@ -1418,6 +1430,8 @@ fn preview_codex_state_threads_to_provider_with_diagnostics(
                 "providerRowsUpdated": counts.provider_rows,
                 "userEventRowsUpdated": counts.user_event_rows,
                 "cwdRowsUpdated": counts.cwd_rows,
+                "detected": detected,
+                "countMetadataUpdates": count_metadata_updates,
                 "updated": updated
             }),
         );

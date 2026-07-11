@@ -266,9 +266,7 @@ fn inject_cdp_script_bundle(
 }
 
 fn command_line_has_cdp_launch(command_line: &str) -> bool {
-    let normalized = command_line.to_ascii_lowercase();
-    normalized.contains("--remote-debugging-port")
-        && normalized.contains("--remote-allow-origins=http://127.0.0.1:")
+    cdp_debug_port_from_command_line(command_line).is_some()
 }
 
 fn cdp_debug_port_from_command_line(command_line: &str) -> Option<u16> {
@@ -695,12 +693,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_line_has_cdp_launch_requires_cdp_launch_args() {
+    fn command_line_has_cdp_launch_accepts_valid_debug_port() {
         assert!(command_line_has_cdp_launch(
             r#""C:\Codex\codex.exe" --remote-debugging-port=9229 --remote-allow-origins=http://127.0.0.1:9229"#
         ));
-        assert!(!command_line_has_cdp_launch(
+        assert!(command_line_has_cdp_launch(
             r#""C:\Codex\codex.exe" --remote-debugging-port=9229"#
+        ));
+        assert!(!command_line_has_cdp_launch(
+            r#""C:\Codex\codex.exe" --remote-debugging-port=invalid"#
         ));
         assert!(!command_line_has_cdp_launch(r#""C:\Codex\codex.exe""#));
     }
