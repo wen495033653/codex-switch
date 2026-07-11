@@ -121,7 +121,12 @@ fn normalize_auto_start_launch_mode() -> String {
 pub(crate) fn normalize_settings(data: &Value) -> Value {
     let ui_theme = match string_field(data, "ui_theme").as_str() {
         "dark" => "dark",
-        _ => "light",
+        "light" => "light",
+        _ => "system",
+    };
+    let ui_language = match string_field(data, "ui_language").as_str() {
+        "en" => "en",
+        _ => "zh-CN",
     };
     let api_profiles_state = normalize_api_profiles_state(data);
     let background_refresh_interval_minutes = normalize_background_refresh_interval_minutes(
@@ -175,7 +180,6 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "codex_remote_control_enabled": bool_field(data, "codex_remote_control_enabled")
             || bool_field(data, "codex_remote_control_hook_enabled"),
         "codex_remote_control_account_id": string_field(data, "codex_remote_control_account_id"),
-        "codex_delete_button_enabled": bool_field(data, "codex_delete_button_enabled"),
         "codex_session_sync_enabled": data
             .get("codex_session_sync_enabled")
             .and_then(Value::as_bool)
@@ -183,6 +187,7 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "codex_active_mode": normalize_codex_active_mode(data),
         "mask_account_name": bool_field(data, "mask_account_name"),
         "ui_theme": ui_theme,
+        "ui_language": ui_language,
         "active_api_profile_id": api_profiles_state.active_id,
         "api_profiles": api_profiles_state.profiles,
         "api_mode": api_profiles_state.active_profile,
@@ -211,6 +216,58 @@ mod tests {
         assert_eq!(
             settings.get("codex_proxy_url").and_then(Value::as_str),
             Some(DEFAULT_CODEX_PROXY_URL)
+        );
+    }
+
+    #[test]
+    fn normalize_settings_uses_system_theme_by_default() {
+        let settings = normalize_settings(&json!({}));
+
+        assert_eq!(
+            settings.get("ui_theme").and_then(Value::as_str),
+            Some("system")
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_supported_ui_themes() {
+        for theme in ["system", "light", "dark"] {
+            let settings = normalize_settings(&json!({ "ui_theme": theme }));
+            assert_eq!(
+                settings.get("ui_theme").and_then(Value::as_str),
+                Some(theme)
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_settings_uses_simplified_chinese_by_default() {
+        let settings = normalize_settings(&json!({}));
+
+        assert_eq!(
+            settings.get("ui_language").and_then(Value::as_str),
+            Some("zh-CN")
+        );
+    }
+
+    #[test]
+    fn normalize_settings_preserves_supported_ui_languages() {
+        for language in ["zh-CN", "en"] {
+            let settings = normalize_settings(&json!({ "ui_language": language }));
+            assert_eq!(
+                settings.get("ui_language").and_then(Value::as_str),
+                Some(language)
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_settings_migrates_legacy_system_language_to_simplified_chinese() {
+        let settings = normalize_settings(&json!({ "ui_language": "system" }));
+
+        assert_eq!(
+            settings.get("ui_language").and_then(Value::as_str),
+            Some("zh-CN")
         );
     }
 
@@ -323,20 +380,6 @@ mod tests {
         assert_eq!(
             settings
                 .get("codex_remote_control_enabled")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn normalize_settings_preserves_codex_delete_button_enabled() {
-        let settings = normalize_settings(&json!({
-            "codex_delete_button_enabled": true
-        }));
-
-        assert_eq!(
-            settings
-                .get("codex_delete_button_enabled")
                 .and_then(Value::as_bool),
             Some(true)
         );

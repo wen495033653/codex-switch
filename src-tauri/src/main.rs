@@ -82,16 +82,37 @@ fn main() {
             if let Err(err) = usage_stats::record_current_attribution_if_available() {
                 eprintln!("记录当前 token 统计归属失败: {err}");
             }
-            if let Err(err) =
-                codex_launcher::sync_remote_control_runtime_for_current_settings("app_start")
-            {
-                session_sync_diagnostics::log_session_sync_event(
-                    "codex_remote_control_helper_error",
-                    json!({
-                        "context": "app_start",
-                        "error": err
-                    }),
-                );
+            let codex_desktop_status = codex_launcher::codex_desktop_support_status();
+            let codex_desktop_supported = codex_desktop_status
+                .get("supported")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            session_sync_diagnostics::log_session_sync_event(
+                "codex_desktop_support_status",
+                codex_desktop_status,
+            );
+            if codex_desktop_supported {
+                match session_manager::migrate_legacy_codex_data_for_current_home() {
+                    Ok(report) => session_sync_diagnostics::log_session_sync_event(
+                        "codex_desktop_data_migration",
+                        report,
+                    ),
+                    Err(err) => session_sync_diagnostics::log_session_sync_event(
+                        "codex_desktop_data_migration_error",
+                        json!({ "error": err }),
+                    ),
+                }
+                if let Err(err) =
+                    codex_launcher::sync_remote_control_runtime_for_current_settings("app_start")
+                {
+                    session_sync_diagnostics::log_session_sync_event(
+                        "codex_remote_control_helper_error",
+                        json!({
+                            "context": "app_start",
+                            "error": err
+                        }),
+                    );
+                }
             }
             start_account_token_auto_refresher(app.handle().clone());
             start_active_quota_auto_refresher(app.handle().clone());
@@ -151,17 +172,9 @@ fn main() {
             usage_stats::usage_stats_get,
             session_manager::session_manager_scan,
             session_manager::session_manager_preview,
-            session_manager::session_manager_preview_deleted,
-            session_manager::session_manager_select_root,
-            session_manager::session_manager_select_workdir,
             session_manager::session_manager_export,
             session_manager::session_manager_import,
-            session_manager::session_manager_delete,
-            session_manager::session_manager_list_deleted,
-            session_manager::session_manager_restore_deleted,
-            session_manager::session_manager_purge_deleted,
             session_manager::session_manager_set_status,
-            session_manager::session_manager_update_cwd,
             oauth_flow::oauth_start,
             oauth_flow::oauth_cancel,
             oauth_flow::oauth_submit_callback

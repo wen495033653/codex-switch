@@ -1,4 +1,4 @@
-use super::detect_ide_app;
+use super::{codex_desktop_display_name, codex_desktop_support_status, detect_ide_app};
 use crate::session_sync_diagnostics::log_session_sync_event;
 use crate::time_util::now_string;
 use serde_json::{json, Value};
@@ -73,6 +73,7 @@ fn suppressed_codex_app_open_state() -> &'static Mutex<SuppressedCodexAppOpen> {
 }
 
 pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
+    let support = codex_desktop_support_status();
     let snapshot = current_codex_app_processes_state()
         .lock()
         .map_err(|_| "Codex watcher 状态锁异常".to_string())?
@@ -89,7 +90,7 @@ pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
                 "name": executable_name(&process.executable_path),
                 "executablePath": process.executable_path,
                 "kind": "codex",
-                "displayName": "Codex"
+                "displayName": codex_desktop_display_name(&process.executable_path)
             })
         })
         .collect::<Vec<_>>();
@@ -100,7 +101,12 @@ pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
         "allPids": all_pids,
         "processCount": snapshot.processes.len(),
         "entries": entries,
-        "error": snapshot.error
+        "error": snapshot.error,
+        "compatibilityStatus": support.get("status").cloned().unwrap_or(Value::Null),
+        "supported": support.get("supported").cloned().unwrap_or(Value::Bool(false)),
+        "requiresUpdate": support.get("requiresUpdate").cloned().unwrap_or(Value::Bool(false)),
+        "compatibilityMessage": support.get("message").cloned().unwrap_or(Value::Null),
+        "installedExecutable": support.get("executable").cloned().unwrap_or(Value::Null)
     }))
 }
 
@@ -200,10 +206,10 @@ pub(crate) fn start_codex_app_open_watcher<F>(on_open: F)
 where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String> + Send + 'static,
 {
-    if !cfg!(windows) {
+    if !cfg!(any(windows, target_os = "macos")) {
         log_session_sync_event(
             "codex_app_watcher_not_started",
-            json!({ "reason": "non_windows" }),
+            json!({ "reason": "unsupported_platform" }),
         );
         return;
     }
@@ -499,7 +505,7 @@ fn take_suppressed_codex_app_open_source(now: Instant) -> Option<String> {
 }
 
 fn normalize_executable_key(path: &str) -> String {
-    path.trim().to_ascii_lowercase().replace('/', "\\")
+    path.trim().to_ascii_lowercase().replace('\\', "/")
 }
 
 fn executable_name(path: &str) -> String {
@@ -633,7 +639,7 @@ mod tests {
 
         assert_eq!(
             codex_executable_keys(&processes),
-            vec![r"c:\codex\codex.exe"]
+            vec!["c:/codex/codex.exe"]
         );
     }
 

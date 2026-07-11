@@ -27,6 +27,8 @@ const FORBIDDEN_PATTERNS = [
   { label: 'local user path', pattern: /C:\\Users\\|\/Users\/[A-Za-z0-9._-]+/i },
   { label: 'local project path', pattern: /E:\\Project\\/i }
 ];
+const I18N_FILE = path.join(ROOT, 'renderer/src/i18n.jsx');
+const I18N_SOURCE_EXTENSIONS = new Set(['.js', '.jsx']);
 
 function collectFiles(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -83,6 +85,73 @@ function collectHygieneFiles(dir) {
   return files;
 }
 
+function collectI18nSourceFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const sourceFiles = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (IGNORED_DIR_NAMES.has(entry.name)) continue;
+      sourceFiles.push(...collectI18nSourceFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && I18N_SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
+      sourceFiles.push(fullPath);
+    }
+  }
+
+  return sourceFiles;
+}
+
+function unescapeSingleQuotedText(value) {
+  return value.replace(/\\'/g, "'");
+}
+
+function interpolationKeys(value) {
+  return [...String(value).matchAll(/\{([a-zA-Z0-9_]+)\}/g)]
+    .map(match => match[1])
+    .sort();
+}
+
+function validateI18nKeys() {
+  if (!fs.existsSync(I18N_FILE)) return;
+  const i18nText = fs.readFileSync(I18N_FILE, 'utf8');
+  const translationKeys = new Set();
+  let failed = false;
+
+  for (const match of i18nText.matchAll(/^\s*'((?:\\.|[^'])*)':\s*'((?:\\.|[^'])*)',?$/gm)) {
+    const key = unescapeSingleQuotedText(match[1]);
+    const translation = unescapeSingleQuotedText(match[2]);
+    if (translationKeys.has(key)) {
+      console.error(`i18n check failed: duplicate English translation key: ${key}`);
+      failed = true;
+    }
+    translationKeys.add(key);
+
+    const sourceInterpolationKeys = interpolationKeys(key);
+    const translationInterpolationKeys = interpolationKeys(translation);
+    if (sourceInterpolationKeys.join('\n') !== translationInterpolationKeys.join('\n')) {
+      console.error(`i18n check failed: interpolation keys differ for "${key}"`);
+      failed = true;
+    }
+  }
+
+  for (const file of collectI18nSourceFiles(path.join(ROOT, 'renderer/src'))) {
+    if (file === I18N_FILE) continue;
+    const source = fs.readFileSync(file, 'utf8');
+    for (const match of source.matchAll(/\bt\('((?:\\'|[^'])*)'/g)) {
+      const key = unescapeSingleQuotedText(match[1]);
+      if (translationKeys.has(key)) continue;
+      console.error(`i18n check failed: missing English translation for "${key}" in ${path.relative(ROOT, file)}`);
+      failed = true;
+    }
+  }
+
+  if (failed) process.exit(1);
+}
+
 const hygieneFiles = [
   ...HYGIENE_FILES.map(file => path.join(ROOT, file)),
   ...HYGIENE_DIRS.flatMap(dir => collectHygieneFiles(path.join(ROOT, dir)))
@@ -100,5 +169,7 @@ for (const file of hygieneFiles) {
 }
 
 if (hygieneFailed) process.exit(1);
+
+validateI18nKeys();
 
 console.log(`Checked ${files.length} JavaScript files and ${hygieneFiles.length} hygiene files.`);

@@ -2,6 +2,7 @@ import AccountSettingsTab from './settings/AccountSettingsTab';
 import AboutSettingsTab from './settings/AboutSettingsTab';
 import GeneralSettingsTab from './settings/GeneralSettingsTab';
 import { SETTINGS_TABS } from './settings/options';
+import { useI18n } from '../i18n';
 
 export default function SettingsPage({
     settingsTab,
@@ -19,6 +20,7 @@ export default function SettingsPage({
     handleCheckUpdate,
     onOpenGptPool
 }) {
+    const { t } = useI18n();
     const activeSettingsTab = SETTINGS_TABS.some(tab => tab.key === settingsTab)
         ? settingsTab
         : 'general';
@@ -26,10 +28,6 @@ export default function SettingsPage({
     return (
         <div className="settings-page">
             <div className="settings-page-panel">
-                <div className="settings-page-head">
-                    <div className="settings-page-title">设置</div>
-                </div>
-
                 <div className="settings-page-toolbar">
                     <div className="settings-tabs">
                         {SETTINGS_TABS.map(tab => (
@@ -39,7 +37,7 @@ export default function SettingsPage({
                                 className={`settings-tab ${activeSettingsTab === tab.key ? 'active' : ''}`}
                                 onClick={() => setSettingsTab(tab.key)}
                             >
-                                {tab.label}
+                                {t(tab.label)}
                             </button>
                         ))}
                     </div>

@@ -44,19 +44,14 @@ export function useSettingsActions({
 
   const updateSettingsDraftAndSave = async (patch) => {
     const pluginEnabledBeforeSave = settingsDraft.codex_plugins_enabled === true;
-    const deleteButtonEnabledBeforeSave = settingsDraft.codex_delete_button_enabled === true;
     const enablesPlugin = Object.prototype.hasOwnProperty.call(patch, 'codex_plugins_enabled')
       && pluginEnabledBeforeSave === false
       && patch.codex_plugins_enabled === true;
-    const enablesDeleteButton = Object.prototype.hasOwnProperty.call(patch, 'codex_delete_button_enabled')
-      && deleteButtonEnabledBeforeSave === false
-      && patch.codex_delete_button_enabled === true;
-    const shouldCheckPluginRestartNotice = enablesPlugin || enablesDeleteButton;
     setSettingsDraft(prev => ({ ...prev, ...patch }));
     try {
       const res = await window.api.updateSettings(patch);
       applySettings(res);
-      if (shouldCheckPluginRestartNotice) {
+      if (enablesPlugin) {
         let processStatus;
         try {
           processStatus = await window.api.getCurrentCodexAppProcesses();
@@ -69,7 +64,18 @@ export function useSettingsActions({
         setPluginRestartNoticeVisible(true);
       }
     } catch (err) {
-      setSettingsDraft(settings);
+      setSettingsDraft(prev => {
+        const next = { ...prev };
+        for (const key of Object.keys(patch)) {
+          if (!Object.is(prev[key], patch[key])) continue;
+          if (Object.prototype.hasOwnProperty.call(settingsDraft, key)) {
+            next[key] = settingsDraft[key];
+          } else {
+            delete next[key];
+          }
+        }
+        return next;
+      });
       toastError(err, '设置保存失败');
     }
   };

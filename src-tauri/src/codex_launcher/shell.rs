@@ -9,6 +9,7 @@ pub(crate) fn hide_command_window(command: &mut Command) {
 #[cfg(not(windows))]
 pub(crate) fn hide_command_window(_command: &mut Command) {}
 
+#[cfg(windows)]
 pub(crate) fn run_pwsh(script: &str) -> Result<String, String> {
     let mut command = Command::new("pwsh.exe");
     command
@@ -42,6 +43,7 @@ pub(crate) fn run_pwsh(script: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+#[cfg(windows)]
 pub(crate) fn parse_json_output(output: &str, fallback: Value) -> Result<Value, String> {
     let text = output.trim();
     if text.is_empty() {
@@ -50,6 +52,7 @@ pub(crate) fn parse_json_output(output: &str, fallback: Value) -> Result<Value, 
     serde_json::from_str(text).map_err(|err| format!("解析 PowerShell JSON 输出失败: {err}"))
 }
 
+#[cfg(windows)]
 pub(crate) fn json_as_array(value: Value) -> Vec<Value> {
     match value {
         Value::Array(items) => items,

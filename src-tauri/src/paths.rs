@@ -8,9 +8,12 @@ const CODEX_SQLITE_DIR_NAME: &str = "sqlite";
 const CODEX_STATE_DB_FILE_NAME: &str = "state_5.sqlite";
 
 pub(crate) fn home_dir() -> Result<PathBuf, String> {
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
+    #[cfg(windows)]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+
+    home.map(PathBuf::from)
         .ok_or_else(|| "无法定位用户目录".to_string())
 }
 
@@ -56,27 +59,44 @@ pub(crate) fn codex_state_db_path() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn codex_state_db_path_from_home(home: &Path) -> PathBuf {
-    let sqlite_path = home
-        .join(CODEX_SQLITE_DIR_NAME)
-        .join(CODEX_STATE_DB_FILE_NAME);
-    if sqlite_path.exists() {
-        return sqlite_path;
-    }
+    home.join(CODEX_STATE_DB_FILE_NAME)
+}
 
-    let legacy_path = home.join(CODEX_STATE_DB_FILE_NAME);
-    if legacy_path.exists() {
-        legacy_path
+pub(crate) fn codex_state_db_path_for_root(root: &Path) -> Result<PathBuf, String> {
+    let global_home = codex_dir()?;
+    if paths_equal(root, &global_home) {
+        codex_state_db_path()
     } else {
-        sqlite_path
+        Ok(codex_state_db_path_from_home(root))
     }
 }
 
+pub(crate) fn legacy_codex_state_db_path_from_home(home: &Path) -> PathBuf {
+    home.join(CODEX_SQLITE_DIR_NAME)
+        .join(CODEX_STATE_DB_FILE_NAME)
+}
+
 pub(crate) fn codex_home_from_state_db_path(state_db: &Path) -> PathBuf {
-    let parent = state_db.parent().unwrap_or_else(|| Path::new(""));
-    if parent.file_name().and_then(|name| name.to_str()) == Some(CODEX_SQLITE_DIR_NAME) {
-        parent.parent().unwrap_or(parent).to_path_buf()
-    } else {
-        parent.to_path_buf()
+    if let (Ok(global_state_db), Ok(global_home)) = (codex_state_db_path(), codex_dir()) {
+        if paths_equal(state_db, &global_state_db) {
+            return global_home;
+        }
+    }
+    state_db
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_path_buf()
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
     }
 }
 
@@ -109,45 +129,29 @@ mod tests {
     }
 
     #[test]
-    fn codex_state_db_path_prefers_sqlite_dir() {
-        let home = temp_home("prefers-sqlite");
-        let sqlite_db = home.join("sqlite").join("state_5.sqlite");
-        let legacy_db = home.join("state_5.sqlite");
-        fs::create_dir_all(sqlite_db.parent().unwrap()).unwrap();
-        fs::write(&sqlite_db, "").unwrap();
-        fs::write(&legacy_db, "").unwrap();
-
-        assert_eq!(codex_state_db_path_from_home(&home), sqlite_db);
-
-        fs::remove_dir_all(&home).unwrap();
-    }
-
-    #[test]
-    fn codex_state_db_path_falls_back_to_legacy() {
-        let home = temp_home("legacy");
-        let legacy_db = home.join("state_5.sqlite");
-        fs::create_dir_all(&home).unwrap();
-        fs::write(&legacy_db, "").unwrap();
-
-        assert_eq!(codex_state_db_path_from_home(&home), legacy_db);
-
-        fs::remove_dir_all(&home).unwrap();
-    }
-
-    #[test]
-    fn missing_codex_state_db_uses_new_default_path() {
-        let home = temp_home("missing");
+    fn codex_state_db_path_always_uses_current_root_path() {
+        let home = temp_home("current-root");
 
         assert_eq!(
             codex_state_db_path_from_home(&home),
-            home.join("sqlite").join("state_5.sqlite")
+            home.join("state_5.sqlite")
         );
     }
 
     #[test]
-    fn codex_home_from_nested_state_db_path_returns_home() {
+    fn missing_codex_state_db_uses_current_root_path() {
+        let home = temp_home("missing");
+
+        assert_eq!(
+            codex_state_db_path_from_home(&home),
+            home.join("state_5.sqlite")
+        );
+    }
+
+    #[test]
+    fn codex_home_from_root_state_db_path_returns_parent() {
         let home = temp_home("home-from-state");
-        let state_db = home.join("sqlite").join("state_5.sqlite");
+        let state_db = home.join("state_5.sqlite");
 
         assert_eq!(codex_home_from_state_db_path(&state_db), home);
     }

@@ -58,6 +58,7 @@ fn dev_log_source(event: &str) -> &'static str {
     if event.starts_with("session_sync_") {
         "会话同步"
     } else if event.starts_with("codex_app_")
+        || event.starts_with("codex_desktop_")
         || event.starts_with("codex_remote_control_")
         || event == "app_start"
     {
@@ -153,6 +154,8 @@ fn dev_log_message(event: &str) -> &'static str {
         "ide_reopen_discard_without_config_apply" => "忽略 IDE 重开",
         "codex_app_watcher_scan_error" => "Codex App Watcher 扫描失败",
         "codex_app_watcher_on_open_error" => "Codex App Watcher 打开处理失败",
+        "codex_desktop_data_migration_error" => "Codex Desktop 数据迁移失败",
+        "codex_app_instance_data_migration_error" => "Codex 多开数据迁移失败",
         _ => "未知调试事件",
     }
 }
@@ -460,6 +463,14 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
         "codex_app_watcher_scan_error" | "codex_app_watcher_on_open_error" => {
             Some(pick_labeled_details(details, &[("error", "错误")]))
         }
+        "codex_desktop_data_migration_error" => Some(pick_labeled_details(
+            details,
+            &[("root", "Codex home"), ("error", "错误")],
+        )),
+        "codex_app_instance_data_migration_error" => Some(pick_labeled_details(
+            details,
+            &[("codexHome", "Codex home"), ("error", "错误")],
+        )),
         _ => None,
     }
 }

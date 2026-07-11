@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AppDialogs, AppMainView, AppNavbar, DevDiagnosticsPanel, UsageStatsDetailDrawer } from './components';
+import { DEFAULT_UI_LANGUAGE, getStoredLanguagePreference, I18nProvider } from './i18n';
 import {
   DEFAULT_CODEX_STATE,
   DEFAULT_SETTINGS,
@@ -20,6 +21,7 @@ import {
   useAccountPagination,
   useAppBootstrap,
   useApiModeDraft,
+  useAsyncPolling,
   useCodexSessionSync,
   useCurrentModeSummary,
   useDevDiagnostics,
@@ -47,7 +49,11 @@ function shouldReopenCodexAppInstanceAfterShowError(err) {
 
 export default function App() {
   if (IS_DEV_BUILD && isDevLogWindow()) {
-    return <DevLogWindow />;
+    return (
+      <I18nProvider preference={getStoredLanguagePreference()}>
+        <DevLogWindow />
+      </I18nProvider>
+    );
   }
 
   return <MainApp />;
@@ -247,7 +253,6 @@ function MainApp() {
     apiProfileDeleteModal,
     apiProfileModal,
     apiProfiles,
-    clearApiAutoSaveTimer,
     closeApiProfileModal,
     closeDeleteApiProfileModal,
     confirmDeleteApiProfile,
@@ -335,7 +340,6 @@ function MainApp() {
     apiProfiles,
     apiTestResults: settings.api_test_results,
     applySettings,
-    clearApiAutoSaveTimer,
     handleRes,
     onSaveApiTestResults: saveApiTestResults,
     onUsageStatsRefresh: () => refreshUsageStats({ silent: true }),
@@ -486,42 +490,31 @@ function MainApp() {
     toastError
   });
 
-  useEffect(() => {
-    refreshUsageStats({ silent: true });
-    refreshCodexAppInstanceStatus({ silent: true });
-
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'hidden') return;
-      refreshUsageStats({ silent: true });
-      refreshCodexAppInstanceStatus({ silent: true });
-    };
-    const refreshCodexAppInstanceWhenVisible = () => {
-      if (document.visibilityState === 'hidden') return;
-      refreshCodexAppInstanceStatus({ silent: true });
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refreshUsageStats({ silent: true });
-        refreshCodexAppInstanceStatus({ silent: true });
-      }
-    };
-    const intervalId = window.setInterval(refreshWhenVisible, 30000);
-    const codexAppInstanceIntervalId = window.setInterval(refreshCodexAppInstanceWhenVisible, 3000);
-
-    window.addEventListener('focus', refreshWhenVisible);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.clearInterval(codexAppInstanceIntervalId);
-      window.removeEventListener('focus', refreshWhenVisible);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
+  useAsyncPolling(
+    () => refreshUsageStats({ silent: true }),
+    { intervalMs: 30000, refreshOnFocus: true }
+  );
+  useAsyncPolling(
+    () => refreshCodexAppInstanceStatus({ silent: true }),
+    { intervalMs: 3000, refreshOnFocus: true }
+  );
 
   useEffect(() => {
-    const nextTheme = (viewMode === 'settings' ? settingsDraft.ui_theme : settings.ui_theme) || DEFAULT_SETTINGS.ui_theme;
-    document.documentElement.dataset.theme = nextTheme;
+    const themePreference = (viewMode === 'settings' ? settingsDraft.ui_theme : settings.ui_theme) || DEFAULT_SETTINGS.ui_theme;
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const resolvedTheme = themePreference === 'system'
+        ? (systemTheme.matches ? 'dark' : 'light')
+        : themePreference;
+      document.documentElement.dataset.theme = resolvedTheme;
+      document.documentElement.dataset.themePreference = themePreference;
+    };
+
+    applyTheme();
+    if (themePreference !== 'system') return undefined;
+
+    systemTheme.addEventListener('change', applyTheme);
+    return () => systemTheme.removeEventListener('change', applyTheme);
   }, [settings.ui_theme, settingsDraft.ui_theme, viewMode]);
 
   useEffect(() => {
@@ -555,8 +548,10 @@ function MainApp() {
   });
 
   const apiProfileBusy = savingApiMode || savingApiProfile;
+  const languagePreference = settingsDraft.ui_language || settings.ui_language || DEFAULT_UI_LANGUAGE;
 
   return (
+    <I18nProvider preference={languagePreference}>
     <div className={`app${IS_DEV_BUILD ? ' dev-build' : ''}`}>
       <AppNavbar
         apiModeActive={apiModeActive}
@@ -579,7 +574,7 @@ function MainApp() {
         viewMode={viewMode}
       />
 
-      <div className="main-content">
+      <div className="main-content" data-view={viewMode}>
         <AppMainView
           viewMode={viewMode}
           settingsPageProps={{
@@ -756,5 +751,6 @@ function MainApp() {
         />
       </div>
     </div>
+    </I18nProvider>
   );
 }

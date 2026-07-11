@@ -2,6 +2,7 @@ import QuotaItem from './QuotaItem';
 import UsageStatsSummary from './UsageStatsSummary';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, maskAccountDisplayName } from '../utils/auth';
+import { useI18n } from '../i18n';
 
 const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
 
@@ -10,44 +11,44 @@ function authErrorIncludes(message, patterns) {
     return patterns.some(pattern => value.includes(String(pattern).toLowerCase()));
 }
 
-function getAuthErrorLabel(info) {
+function getAuthErrorLabel(info, t) {
     const message = typeof info.authStatusMessage === 'string' ? info.authStatusMessage : '';
     if (info.isApiMode) {
-        return message.includes('API Key') ? 'API Key 未配置' : 'API 配置异常';
+        return message.includes('API Key') ? t('未配置 API Key') : t('API 配置异常');
     }
 
     if (message.includes('账号数据异常') || authErrorIncludes(message, ['id_token', 'claims'])) {
-        return '账号数据异常';
+        return t('账号数据异常');
     }
     if (message.includes('刷新后账号标识不一致')) {
-        return '账号不匹配';
+        return t('账号不匹配');
     }
     if (authErrorIncludes(message, ['timeout', 'timed out', 'dns', 'proxy', 'connect', 'connection', 'tls', 'network'])) {
-        return '网络刷新失败';
+        return t('网络刷新失败');
     }
     if (authErrorIncludes(message, ['too many requests', 'http 429'])) {
-        return '刷新太频繁';
+        return t('刷新太频繁');
     }
     if (authErrorIncludes(message, ['service temporarily unavailable', 'http 500', 'http 502', 'http 503', 'http 504'])) {
-        return '服务暂不可用';
+        return t('服务暂不可用');
     }
     if (authErrorIncludes(message, ['deactivated_workspace', 'workspace has been deactivated'])) {
-        return 'Workspace 已停用';
+        return t('Workspace 已停用');
     }
     if (authErrorIncludes(message, ['invalid_grant', 'unauthorized', 'authorization expired', '缺少 refreshtoken', '缺少 refresh_token', '刷新结果缺少 refresh_token'])) {
-        return '登录已失效';
+        return t('登录已失效');
     }
 
-    return '刷新失败';
+    return t('刷新失败');
 }
 
-function getAuthBadge(info) {
+function getAuthBadge(info, t, translateRuntimeText) {
     if (info.authStatus === 'error') {
-        const label = getAuthErrorLabel(info);
+        const label = getAuthErrorLabel(info, t);
         const message = typeof info.authStatusMessage === 'string' ? info.authStatusMessage.trim() : '';
         return {
             label,
-            title: message ? `${label}：${message}` : label,
+            title: message ? `${label}: ${translateRuntimeText(message)}` : label,
             className: 'status-badge auth-error'
         };
     }
@@ -56,9 +57,10 @@ function getAuthBadge(info) {
 }
 
 export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail }) {
+    const { language, t, translateRuntimeText } = useI18n();
     const info = parseAuthInfo(acc);
     const plan = info.planType;
-    const authBadge = getAuthBadge(info);
+    const authBadge = getAuthBadge(info, t, translateRuntimeText);
     const normalizedPlan = typeof plan === 'string' ? plan.toLowerCase() : '';
     const isPersonalPlan = normalizedPlan === 'personal';
     const showAccountTag = accountId => {
@@ -81,16 +83,17 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
     const usageNoticeTitle = info.usageNotice
         ? (info.usageNotice.detail || info.usageNotice.message)
         : '';
+    const localizedUsageNoticeTitle = translateRuntimeText(usageNoticeTitle);
 
     return (
         <div className={`account-card ${isCurrent ? 'active' : ''}`}>
             <div className="account-card-head">
                 <div className="account-card-name-row">
                     <div className="account-card-name" title={displayName}>{displayName}</div>
-                    {isCurrent && <span className="current-badge">当前</span>}
+                    {isCurrent && <span className="current-badge">{t('当前')}</span>}
                     {codexAppInstanceRunning && (
-                        <span className="codex-app-running-badge" title="独立 Codex 正在运行">
-                            窗口运行中
+                        <span className="codex-app-running-badge" title={t('独立 Codex 正在运行')}>
+                            {t('窗口运行中')}
                         </span>
                     )}
                 </div>
@@ -106,13 +109,13 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                         </span>
                     )}
                     {showAccountTag(chatgptAccountId) && accountTag && (
-                        <span className="account-id-badge" title={`账号ID: ${chatgptAccountId}`}>
+                        <span className="account-id-badge" title={t('账号ID: {id}', { id: chatgptAccountId })}>
                             {accountTag}
                         </span>
                     )}
                     {info.showExpiresAt && info.expiresAt && (
-                        <span className="expire-date" title="订阅到期日期">
-                            到期 {new Date(info.expiresAt).toLocaleDateString()}
+                        <span className="expire-date" title={t('订阅到期日期')}>
+                            {t('到期 {date}', { date: new Date(info.expiresAt).toLocaleDateString(language) })}
                         </span>
                     )}
                 </div>
@@ -123,11 +126,11 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     {info.usageNotice ? (
                         <div
                             className={info.usageNotice.tone === 'error' ? 'quota-error' : 'quota-status quota-status-info'}
-                            title={usageNoticeTitle}
-                            aria-label={usageNoticeTitle}
+                            title={localizedUsageNoticeTitle}
+                            aria-label={localizedUsageNoticeTitle}
                         >
                             <span className="error-icon">{info.usageNotice.tone === 'error' ? '⚠️' : 'ℹ️'}</span>
-                            <span className="error-msg" title={usageNoticeTitle}>{info.usageNotice.message}</span>
+                            <span className="error-msg" title={localizedUsageNoticeTitle}>{translateRuntimeText(info.usageNotice.message)}</span>
                         </div>
                     ) : (
                         <>
@@ -148,7 +151,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     stats={usageStats}
                     onOpenDetails={() => onOpenUsageStatsDetail?.({
                         ownerName: displayName,
-                        ownerTypeLabel: '订阅账号',
+                        ownerTypeLabel: t('订阅账号'),
                         stats: usageStats
                     })}
                 />
@@ -158,9 +161,10 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                 <div className="action-btns">
                     {!info.isApiMode && (
                         <button
+                            type="button"
                             className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
-                            title={openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此账号打开独立 Codex')}
-                            aria-label={openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此账号打开独立 Codex')}
+                            title={openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此账号打开独立 Codex'))}
+                            aria-label={openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此账号打开独立 Codex'))}
                             onClick={() => onOpenCodexAppInstance(accountId)}
                             disabled={!accountId || openingAnyCodexApp}
                         >
@@ -171,7 +175,13 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                         </button>
                     )}
                     {!info.isApiMode && (
-                        <button className="icon-btn" title="查看 Refresh Token" onClick={() => onViewRefreshToken(acc)}>
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            title={t('查看 Refresh Token')}
+                            aria-label={t('查看 Refresh Token')}
+                            onClick={() => onViewRefreshToken(acc)}
+                        >
                             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M1.5 12s3.75-7.5 10.5-7.5S22.5 12 22.5 12s-3.75 7.5-10.5 7.5S1.5 12 1.5 12Z" />
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15.75A3.75 3.75 0 1 0 12 8.25a3.75 3.75 0 0 0 0 7.5Z" />
@@ -180,9 +190,10 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     )}
                     {!info.isApiMode && (
                         <button
+                            type="button"
                             className="icon-btn"
-                            title={refreshing ? '刷新配额中' : '刷新配额'}
-                            aria-label={refreshing ? '刷新配额中' : '刷新配额'}
+                            title={refreshing ? t('刷新配额中') : t('刷新配额')}
+                            aria-label={refreshing ? t('刷新配额中') : t('刷新配额')}
                             onClick={() => onRefresh(accountId)}
                             disabled={refreshing}
                         >
@@ -192,12 +203,25 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                         </button>
                     )}
                     {!isCurrent && (
-                        <button className="icon-btn" title="切换到此账号" onClick={() => onSwitch(accountId)} disabled={switching}>
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            title={t('切换到此账号')}
+                            aria-label={t('切换到此账号')}
+                            onClick={() => onSwitch(accountId)}
+                            disabled={switching}
+                        >
                             ⚡
                         </button>
                     )}
                     {!info.isApiMode && (
-                        <button className="icon-btn danger" title="删除" onClick={() => onDelete(acc)}>
+                        <button
+                            type="button"
+                            className="icon-btn danger"
+                            title={t('删除')}
+                            aria-label={t('删除')}
+                            onClick={() => onDelete(acc)}
+                        >
                             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12m-9 0V5.75A1.75 1.75 0 0 1 10.75 4h2.5A1.75 1.75 0 0 1 15 5.75V7m-7.75 0 .75 12.25A1.75 1.75 0 0 0 9.75 21h4.5A1.75 1.75 0 0 0 16 19.25L16.75 7M10 11v6m4-6v6" />
                             </svg>

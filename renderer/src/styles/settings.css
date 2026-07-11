@@ -15,20 +15,6 @@
   align-content: start;
 }
 
-.settings-page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.settings-page-title {
-  color: #fff;
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
 .settings-page-toolbar {
   display: flex;
   align-items: center;

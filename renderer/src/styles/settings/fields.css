@@ -138,14 +138,15 @@
 }
 
 .settings-proxy-section {
-  gap: 16px;
+  grid-template-columns: minmax(140px, 0.45fr) minmax(300px, 1.55fr) auto;
+  align-items: center;
+  gap: 18px;
 }
 
-.settings-proxy-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+.settings-proxy-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
 }
 
 .settings-proxy-switch-button {
@@ -160,6 +161,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
+  justify-self: end;
   gap: 12px;
   transition: all 0.2s ease;
 }
@@ -196,9 +198,14 @@
 
 .settings-proxy-field {
   min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
 }
 
 .settings-proxy-input {
+  min-width: 0;
   height: 42px;
   border-radius: 12px;
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getRuntimeLanguage, translateRuntimeText } from '../i18n';
 
 const MAX_DEV_LOG_ENTRIES = 160;
 const CONSOLE_METHODS = ['debug', 'log', 'info', 'warn', 'error'];
@@ -7,7 +8,7 @@ function formatDebugArg(value) {
   if (value instanceof Error) {
     return value.stack || value.message;
   }
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return translateRuntimeText(value);
   if (value === undefined) return 'undefined';
   if (value === null) return 'null';
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
@@ -25,7 +26,7 @@ function formatDebugObject(value, depth = 0, seen = new WeakSet()) {
   seen.add(value);
 
   if (Array.isArray(value)) {
-    if (value.length === 0) return '无';
+    if (value.length === 0) return translateRuntimeText('无');
     return value
       .map(item => {
         if (item && typeof item === 'object') {
@@ -37,7 +38,7 @@ function formatDebugObject(value, depth = 0, seen = new WeakSet()) {
   }
 
   const entries = Object.entries(value).filter(([_key, item]) => hasVisibleDetails(item));
-  if (entries.length === 0) return '无';
+  if (entries.length === 0) return translateRuntimeText('无');
   return entries
     .map(([key, item]) => {
       if (item && typeof item === 'object') {
@@ -71,10 +72,10 @@ function formatEntryTime(timestamp) {
   if (typeof timestamp === 'string' && timestamp.trim()) {
     const date = new Date(timestamp);
     if (!Number.isNaN(date.getTime())) {
-      return date.toLocaleTimeString('zh-CN', { hour12: false });
+      return date.toLocaleTimeString(getRuntimeLanguage(), { hour12: false });
     }
   }
-  return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  return new Date().toLocaleTimeString(getRuntimeLanguage(), { hour12: false });
 }
 
 function hasVisibleDetails(value) {
@@ -129,7 +130,7 @@ export function useDevDiagnostics({ enabled }) {
       id: nextIdRef.current,
       level,
       source,
-      time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      time: new Date().toLocaleTimeString(getRuntimeLanguage(), { hour12: false }),
       message: normalizeMessage(args).slice(0, 4000)
     };
     nextIdRef.current += 1;

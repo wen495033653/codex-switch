@@ -1,4 +1,5 @@
 import { ACCOUNT_NAME_DISPLAY_OPTIONS, DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES } from './options';
+import { useI18n } from '../../i18n';
 
 export default function AccountSettingsTab({
     normalizeBackgroundRefreshInterval,
@@ -6,11 +7,13 @@ export default function AccountSettingsTab({
     settingsDraft,
     updateSettingsDraftAndSave
 }) {
+    const { t } = useI18n();
+
     return (
         <>
             <section className="settings-section">
                 <div className="settings-section-head">
-                    <div className="settings-section-title">账号显示</div>
+                    <div className="settings-section-title">{t('账号显示')}</div>
                 </div>
 
                 <div className="settings-option-list settings-option-list-inline">
@@ -27,8 +30,8 @@ export default function AccountSettingsTab({
                                     <span className="settings-option-dot" />
                                 </span>
                                 <span className="settings-option-text">
-                                    <span className="settings-option-title">{option.title}</span>
-                                    <span className="settings-option-desc">{option.desc}</span>
+                                    <span className="settings-option-title">{t(option.title)}</span>
+                                    <span className="settings-option-desc">{t(option.desc)}</span>
                                 </span>
                             </button>
                         );
@@ -52,8 +55,8 @@ export default function AccountSettingsTab({
                         </svg>
                     </span>
                     <span className="settings-toggle-copy">
-                        <span className="settings-toggle-title">定时刷新全部账号</span>
-                        <span className="settings-toggle-desc">按间隔刷新所有账号的配额信息</span>
+                        <span className="settings-toggle-title">{t('定时刷新全部账号')}</span>
+                        <span className="settings-toggle-desc">{t('按间隔刷新所有账号的配额信息')}</span>
                     </span>
                     <span className="settings-switch" aria-hidden="true">
                         <span className="settings-switch-thumb" />
@@ -61,7 +64,7 @@ export default function AccountSettingsTab({
                 </button>
 
                 <div className="settings-inline-field-row">
-                    <span className="settings-inline-field-label">刷新间隔（分钟）</span>
+                    <span className="settings-inline-field-label">{t('刷新间隔（分钟）')}</span>
                     <input
                         className="settings-input settings-number-input"
                         type="number"

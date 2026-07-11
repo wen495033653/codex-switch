@@ -1,7 +1,9 @@
 use crate::{
     codex_sessions::lock_codex_session_io,
     json_util::raw_string_field,
-    paths::{app_data_dir, codex_dir, codex_state_db_path_from_home},
+    paths::{
+        app_data_dir, codex_dir, codex_state_db_path_for_root, legacy_codex_state_db_path_from_home,
+    },
     time_util::{now_string, parse_rfc3339_seconds},
 };
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
@@ -11,8 +13,9 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader, Read, Seek, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::AppHandle;
@@ -28,7 +31,28 @@ const ZIP_CENTRAL_DIRECTORY_HEADER: u32 = 0x0201_4b50;
 const ZIP_END_OF_CENTRAL_DIRECTORY: u32 = 0x0605_4b50;
 const ZIP_UTF8_FLAG: u16 = 1 << 11;
 const SESSION_MANAGER_DATA_DIR: &str = "session-manager";
-const DELETED_SESSIONS_DIR: &str = "deleted-sessions";
+const CODEX_DESKTOP_MIGRATION_VERSION: u32 = 2;
+const CODEX_DESKTOP_MIGRATION_DIR: &str = "migrations";
+const CODEX_DESKTOP_MIGRATION_FILE_PREFIX: &str = "codex-chatgpt-desktop-final-v2";
+const CURRENT_STATE_MIN_SQLX_MIGRATION: i64 = 40;
+const PREVIEW_MESSAGE_LIMIT_DEFAULT: usize = 80;
+const PREVIEW_MESSAGE_LIMIT_MAX: usize = 200;
+const PREVIEW_REVERSE_READ_BLOCK_BYTES: usize = 64 * 1024;
+const PREVIEW_CANCELLED_ERROR: &str = "会话预览请求已取消";
+const CURRENT_STATE_REQUIRED_COLUMNS: &[&str] = &[
+    "id",
+    "rollout_path",
+    "title",
+    "cwd",
+    "archived",
+    "updated_at",
+    "updated_at_ms",
+    "preview",
+    "recency_at",
+    "recency_at_ms",
+    "history_mode",
+];
+static LATEST_PREVIEW_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
 struct ConversationItem {
@@ -45,27 +69,44 @@ struct ConversationItem {
     parse_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DeletedSessionRecord {
-    delete_id: String,
-    id: String,
-    title: String,
-    deleted_at: String,
-    updated_at: Option<String>,
-    original_status: String,
-    original_relative_path: String,
-    deleted_relative_path: String,
-    root_path: String,
-    size_bytes: u64,
-    cwd: Option<String>,
-    session_file: String,
-}
-
 #[derive(Debug, Clone, Serialize)]
 struct ConversationMessage {
     role: String,
     text: String,
     timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum PreviewMessageSource {
+    Event,
+    Response,
+}
+
+impl PreviewMessageSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Response => "response",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PreviewMessagePage {
+    messages: Vec<ConversationMessage>,
+    source: PreviewMessageSource,
+    next_before: Option<u64>,
+    has_more: bool,
+    file_size: u64,
+}
+
+#[derive(Debug)]
+struct CurrentStateCatalog {
+    conversations: Vec<ConversationItem>,
+    indexed_paths: HashSet<String>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -75,13 +116,22 @@ struct SessionSummary {
     created_at: Option<String>,
     updated_at: Option<String>,
     cwd: Option<String>,
+    source: Option<String>,
+    thread_source: Option<String>,
     model_provider: Option<String>,
     sandbox_policy: Option<String>,
     approval_mode: Option<String>,
+    cli_version: Option<String>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+    agent_path: Option<String>,
+    history_mode: Option<String>,
+    parent_thread_id: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
     first_user_message: Option<String>,
     preview: Option<String>,
+    dynamic_tools: Vec<ThreadDynamicToolMetadata>,
     messages: Vec<ConversationMessage>,
     parse_error: Option<String>,
 }
@@ -137,40 +187,35 @@ struct ThreadMetadata {
     has_user_event: i64,
     archived: i64,
     archived_at: Option<i64>,
+    cli_version: String,
     first_user_message: String,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    agent_path: Option<String>,
+    thread_source: Option<String>,
+    preview: String,
+    history_mode: String,
+    parent_thread_id: Option<String>,
+    dynamic_tools: Vec<ThreadDynamicToolMetadata>,
 }
 
-#[derive(Debug, Clone)]
-struct DeleteCandidate {
-    id: String,
-    title: String,
-    updated_at: Option<String>,
-    source_path: PathBuf,
-    relative_path: PathBuf,
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ThreadDynamicToolMetadata {
+    name: String,
+    description: String,
+    input_schema: String,
+    defer_loading: bool,
+    namespace: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct StatusMove {
     id: String,
     target_id: String,
-    title: String,
-    updated_at: Option<String>,
     source_path: PathBuf,
     target_path: PathBuf,
-    rewrite_id: Option<(String, String)>,
-    overwritten_id: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct RestoreCandidate {
-    record: DeletedSessionRecord,
-    record_dir: PathBuf,
-    source_file: PathBuf,
-    target_path: PathBuf,
-    target_relative: String,
-    target_id: String,
     rewrite_id: Option<(String, String)>,
     overwritten_id: Option<String>,
 }
@@ -184,10 +229,12 @@ enum ConflictStrategy {
 }
 
 #[derive(Debug, Clone)]
-struct IndexEntry {
+struct SessionIndexEntry {
     thread_name: Option<String>,
     updated_at: Option<String>,
 }
+
+type SessionIndex = HashMap<String, SessionIndexEntry>;
 
 fn blocking_task_error(action: &str, err: impl std::fmt::Display) -> String {
     let message = err.to_string();
@@ -227,52 +274,26 @@ pub(crate) async fn session_manager_scan(root: Option<String>) -> Result<Value, 
 pub(crate) async fn session_manager_preview(
     root: String,
     relative_path: String,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<String>,
+    request_id: Option<u64>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || preview_conversation_impl(root, relative_path))
-        .await
-        .map_err(|err| blocking_task_error("读取预览", err))?
-}
-
-#[tauri::command]
-pub(crate) async fn session_manager_preview_deleted(delete_id: String) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || preview_deleted_conversation_impl(delete_id))
-        .await
-        .map_err(|err| blocking_task_error("读取已删除预览", err))?
-}
-
-#[tauri::command]
-pub(crate) fn session_manager_select_root(app: AppHandle) -> Result<Value, String> {
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("选择 Codex 数据目录")
-        .blocking_pick_folder()
-        .ok_or_else(|| "选择目录已取消".to_string())?;
-    let path = selected
-        .into_path()
-        .map_err(|err| format!("选择目录路径无效: {err}"))?;
-    validate_codex_root(&path)?;
-    Ok(json!({
-        "ok": true,
-        "path": path.to_string_lossy().to_string()
-    }))
-}
-
-#[tauri::command]
-pub(crate) fn session_manager_select_workdir(app: AppHandle) -> Result<Value, String> {
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("选择工作目录")
-        .blocking_pick_folder()
-        .ok_or_else(|| "选择工作目录已取消".to_string())?;
-    let path = selected
-        .into_path()
-        .map_err(|err| format!("选择工作目录路径无效: {err}"))?;
-    Ok(json!({
-        "ok": true,
-        "path": path.to_string_lossy().to_string()
-    }))
+    begin_preview_request(request_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_conversation_impl(
+            root,
+            relative_path,
+            before_cursor,
+            snapshot_size,
+            limit,
+            message_source,
+            request_id,
+        )
+    })
+    .await
+    .map_err(|err| blocking_task_error("读取预览", err))?
 }
 
 #[tauri::command]
@@ -296,69 +317,6 @@ pub(crate) async fn session_manager_import(app: AppHandle, root: String) -> Resu
 }
 
 #[tauri::command]
-pub(crate) async fn session_manager_delete(
-    root: String,
-    relative_paths: Vec<String>,
-) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || delete_conversations_impl(root, relative_paths))
-        .await
-        .map_err(|err| blocking_task_error("删除会话", err))?
-}
-
-pub(crate) fn delete_codex_session_for_bridge(
-    session_id: &str,
-    title: &str,
-) -> Result<Value, String> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err("未找到会话 ID".to_string());
-    }
-
-    let root = resolve_codex_root(None)?;
-    validate_codex_root(&root)?;
-    let relative_paths = find_session_relative_paths_by_id(&root, session_id)?;
-    if relative_paths.is_empty() {
-        let label = title.trim();
-        return Err(if label.is_empty() {
-            format!("未找到会话: {session_id}")
-        } else {
-            format!("未找到会话: {label}")
-        });
-    }
-
-    delete_conversations_impl(root.to_string_lossy().to_string(), relative_paths)
-}
-
-#[tauri::command]
-pub(crate) async fn session_manager_list_deleted() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(list_deleted_sessions_impl)
-        .await
-        .map_err(|err| blocking_task_error("读取已删除会话", err))?
-}
-
-#[tauri::command]
-pub(crate) async fn session_manager_restore_deleted(
-    root: String,
-    delete_ids: Vec<String>,
-    conflict_strategy: Option<String>,
-) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        restore_deleted_sessions_impl(root, delete_ids, conflict_strategy)
-    })
-    .await
-    .map_err(|err| blocking_task_error("恢复会话", err))?
-}
-
-#[tauri::command]
-pub(crate) async fn session_manager_purge_deleted(
-    delete_ids: Vec<String>,
-) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || purge_deleted_sessions_impl(delete_ids))
-        .await
-        .map_err(|err| blocking_task_error("彻底删除会话", err))?
-}
-
-#[tauri::command]
 pub(crate) async fn session_manager_set_status(
     root: String,
     relative_paths: Vec<String>,
@@ -372,27 +330,575 @@ pub(crate) async fn session_manager_set_status(
     .map_err(|err| blocking_task_error("切换会话状态", err))?
 }
 
-#[tauri::command]
-pub(crate) async fn session_manager_update_cwd(
-    root: String,
-    relative_paths: Vec<String>,
-    cwd: String,
-) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        update_conversation_cwd_impl(root, relative_paths, cwd)
+pub(crate) fn migrate_legacy_codex_data_for_current_home() -> Result<Value, String> {
+    let root = codex_dir()?;
+    migrate_legacy_codex_data_for_root(&root)
+}
+
+pub(crate) fn migrate_legacy_codex_data_for_root(root: &Path) -> Result<Value, String> {
+    let marker = codex_desktop_migration_marker_path(root)?;
+    if let Some(report) = read_completed_codex_desktop_migration(&marker)? {
+        return Ok(report);
+    }
+
+    let legacy_state_db = legacy_codex_state_db_path_from_home(root);
+    let current_state_db = codex_state_db_path_for_root(root)?;
+    if normalized_path_identity(&legacy_state_db) == normalized_path_identity(&current_state_db) {
+        return Err("新版 Codex 数据库路径不能与旧版 nested 数据库相同".to_string());
+    }
+    if !current_state_db.exists() {
+        return Ok(json!({
+            "ok": false,
+            "completed": false,
+            "migrationVersion": CODEX_DESKTOP_MIGRATION_VERSION,
+            "action": "waiting_for_new_desktop_database",
+            "message": "请先启动一次新版 ChatGPT Desktop，初始化新版 Codex 数据库后再迁移",
+            "root": root.to_string_lossy(),
+            "source": legacy_state_db.to_string_lossy(),
+            "target": current_state_db.to_string_lossy()
+        }));
+    }
+
+    let _io_guard = lock_codex_session_io("迁移旧版 Codex 数据")?;
+    if let Some(report) = read_completed_codex_desktop_migration(&marker)? {
+        return Ok(report);
+    }
+    let mut current_connection = Connection::open_with_flags(
+        &current_state_db,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| {
+        format!(
+            "打开新版 Codex state 数据库失败 {}: {err}",
+            current_state_db.display()
+        )
+    })?;
+    current_connection
+        .busy_timeout(Duration::from_millis(5000))
+        .map_err(|err| format!("配置新版 Codex state 数据库等待超时失败: {err}"))?;
+    let Some(current_schema) = state_threads_schema(&current_connection)? else {
+        return Ok(waiting_for_current_state_schema(
+            root,
+            &legacy_state_db,
+            &current_state_db,
+        ));
+    };
+    if CURRENT_STATE_REQUIRED_COLUMNS
+        .iter()
+        .any(|column| !current_schema.contains_key(*column))
+        || !state_database_has_current_migrations(&current_connection)?
+    {
+        return Ok(waiting_for_current_state_schema(
+            root,
+            &legacy_state_db,
+            &current_state_db,
+        ));
+    }
+
+    if !legacy_state_db.exists() {
+        validate_state_database_connection(&current_connection, &current_state_db)?;
+        let report = json!({
+            "ok": true,
+            "completed": true,
+            "migrationVersion": CODEX_DESKTOP_MIGRATION_VERSION,
+            "action": "no_legacy_data",
+            "root": root.to_string_lossy(),
+            "target": current_state_db.to_string_lossy(),
+            "completedAt": now_string()
+        });
+        write_codex_desktop_migration_marker(&marker, &report)?;
+        return Ok(report);
+    }
+
+    let backup_path =
+        backup_state_database_with_reason(&current_connection, "desktop-final-v2-migration")?;
+    let inserted =
+        merge_legacy_state_metadata(&mut current_connection, &legacy_state_db, &current_schema)?;
+    let existing_thread_ids = read_state_thread_ids(&current_connection)?;
+    drop(current_connection);
+
+    let (missing_thread_metadata, rollout_errors, rollout_files, rollout_skipped_existing) =
+        collect_thread_metadata_for_migration(root, &existing_thread_ids);
+    let rollout_indexed = insert_missing_state_threads(root, &missing_thread_metadata)?;
+    validate_state_database(&current_state_db)?;
+
+    let report = json!({
+        "ok": true,
+        "completed": true,
+        "migrationVersion": CODEX_DESKTOP_MIGRATION_VERSION,
+        "action": "migrated_to_chatgpt_desktop",
+        "root": root.to_string_lossy(),
+        "source": legacy_state_db.to_string_lossy(),
+        "target": current_state_db.to_string_lossy(),
+        "backup": backup_path.to_string_lossy(),
+        "inserted": inserted,
+        "metadataOnlyRows": inserted.get("threads").copied().unwrap_or(0),
+        "rolloutFiles": rollout_files,
+        "rolloutRowsIndexed": rollout_indexed,
+        "rolloutRowsSkippedExisting": rollout_skipped_existing,
+        "rolloutErrors": rollout_errors,
+        "completedAt": now_string()
+    });
+    write_codex_desktop_migration_marker(&marker, &report)?;
+    Ok(report)
+}
+
+fn read_state_thread_ids(connection: &Connection) -> Result<HashSet<String>, String> {
+    let mut statement = connection
+        .prepare("SELECT id FROM threads")
+        .map_err(|err| format!("读取新版 Codex thread id 失败: {err}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|err| format!("查询新版 Codex thread id 失败: {err}"))?;
+    rows.collect::<Result<HashSet<_>, _>>()
+        .map_err(|err| format!("解析新版 Codex thread id 失败: {err}"))
+}
+
+fn waiting_for_current_state_schema(root: &Path, source: &Path, target: &Path) -> Value {
+    json!({
+        "ok": false,
+        "completed": false,
+        "migrationVersion": CODEX_DESKTOP_MIGRATION_VERSION,
+        "action": "waiting_for_new_desktop_schema",
+        "message": "新版 Codex 数据库尚未完成初始化，请打开新版 ChatGPT Desktop 后重试",
+        "root": root.to_string_lossy(),
+        "source": source.to_string_lossy(),
+        "target": target.to_string_lossy()
     })
-    .await
-    .map_err(|err| blocking_task_error("修改工作目录", err))?
+}
+
+fn merge_legacy_state_metadata(
+    current_connection: &mut Connection,
+    legacy_state_db: &Path,
+    current_schema: &HashMap<String, StateThreadColumn>,
+) -> Result<HashMap<String, usize>, String> {
+    current_connection
+        .execute(
+            "ATTACH DATABASE ?1 AS legacy",
+            params![legacy_state_db.to_string_lossy()],
+        )
+        .map_err(|err| {
+            format!(
+                "挂载旧版 Codex state 数据库失败 {}: {err}",
+                legacy_state_db.display()
+            )
+        })?;
+    let result = (|| {
+        let legacy_schema = state_threads_schema_for(&*current_connection, "legacy")?
+            .ok_or_else(|| "旧版 Codex state 数据库缺少 threads 表".to_string())?;
+        let mut insert_columns = legacy_schema
+            .keys()
+            .filter(|column| current_schema.contains_key(*column))
+            .cloned()
+            .collect::<Vec<_>>();
+        insert_columns.sort();
+        let mut select_expressions = insert_columns
+            .iter()
+            .map(|column| format!("legacy_thread.{}", quote_sqlite_identifier(column)))
+            .collect::<Vec<_>>();
+
+        for (column, expression) in [
+            ("recency_at", "legacy_thread.updated_at".to_string()),
+            (
+                "recency_at_ms",
+                if legacy_schema.contains_key("updated_at_ms") {
+                    "COALESCE(legacy_thread.updated_at_ms, legacy_thread.updated_at * 1000)"
+                        .to_string()
+                } else {
+                    "legacy_thread.updated_at * 1000".to_string()
+                },
+            ),
+            ("history_mode", "'legacy'".to_string()),
+        ] {
+            if current_schema.contains_key(column)
+                && !insert_columns.iter().any(|item| item == column)
+            {
+                insert_columns.push(column.to_string());
+                select_expressions.push(expression);
+            }
+        }
+        if !insert_columns.iter().any(|column| column == "id") {
+            return Err("旧版 Codex state 数据库 threads 表缺少 id".to_string());
+        }
+        let columns = insert_columns
+            .iter()
+            .map(|column| quote_sqlite_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT OR IGNORE INTO main.threads ({columns}) SELECT {} FROM legacy.threads AS legacy_thread
+             WHERE legacy_thread.id IN (SELECT id FROM codex_switch_migrated_thread_ids)",
+            select_expressions.join(", ")
+        );
+        let transaction = current_connection
+            .transaction()
+            .map_err(|err| format!("开始旧版 Codex 数据迁移事务失败: {err}"))?;
+        transaction
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS codex_switch_migrated_thread_ids (id TEXT PRIMARY KEY);
+                 DELETE FROM codex_switch_migrated_thread_ids;
+                 INSERT OR IGNORE INTO codex_switch_migrated_thread_ids (id)
+                 SELECT legacy_thread.id FROM legacy.threads AS legacy_thread
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM main.threads AS current_thread
+                   WHERE current_thread.id = legacy_thread.id
+                 );",
+            )
+            .map_err(|err| format!("准备旧版 Codex threads 迁移失败: {err}"))?;
+        let mut inserted = HashMap::new();
+        let thread_count = transaction
+            .execute(&sql, [])
+            .map_err(|err| format!("迁移旧版 Codex threads metadata 失败: {err}"))?;
+        inserted.insert("threads".to_string(), thread_count);
+        inserted.insert(
+            "thread_spawn_edges".to_string(),
+            merge_legacy_table_rows(
+                &transaction,
+                "thread_spawn_edges",
+                Some("child_thread_id IN (SELECT id FROM codex_switch_migrated_thread_ids)"),
+            )?,
+        );
+        inserted.insert(
+            "thread_dynamic_tools".to_string(),
+            merge_legacy_table_rows(
+                &transaction,
+                "thread_dynamic_tools",
+                Some("thread_id IN (SELECT id FROM codex_switch_migrated_thread_ids)"),
+            )?,
+        );
+        let (jobs, job_items) = merge_legacy_agent_jobs(&transaction)?;
+        inserted.insert("agent_jobs".to_string(), jobs);
+        inserted.insert("agent_job_items".to_string(), job_items);
+        transaction
+            .execute_batch("DROP TABLE codex_switch_migrated_thread_ids;")
+            .map_err(|err| format!("清理旧版 Codex threads 迁移临时表失败: {err}"))?;
+        transaction
+            .commit()
+            .map_err(|err| format!("保存旧版 Codex threads metadata 失败: {err}"))?;
+        Ok(inserted)
+    })();
+    let detach_result = current_connection.execute_batch("DETACH DATABASE legacy");
+    match (result, detach_result) {
+        (Ok(inserted), Ok(())) => Ok(inserted),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(format!("卸载旧版 Codex state 数据库失败: {err}")),
+    }
+}
+
+fn merge_legacy_table_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    where_clause: Option<&str>,
+) -> Result<usize, String> {
+    let Some(current_columns) = state_table_columns_for(transaction, "main", table)? else {
+        return Ok(0);
+    };
+    let Some(legacy_columns) = state_table_columns_for(transaction, "legacy", table)? else {
+        return Ok(0);
+    };
+    let current_set = current_columns
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let common_columns = legacy_columns
+        .into_iter()
+        .filter(|column| current_set.contains(column.as_str()))
+        .collect::<Vec<_>>();
+    if common_columns.is_empty() {
+        return Ok(0);
+    }
+    let columns = common_columns
+        .iter()
+        .map(|column| quote_sqlite_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let where_sql = where_clause
+        .map(|value| format!(" WHERE {value}"))
+        .unwrap_or_default();
+    let table_identifier = quote_sqlite_identifier(table);
+    let sql = format!(
+        "INSERT OR IGNORE INTO main.{table_identifier} ({columns}) SELECT {columns} FROM legacy.{table_identifier}{where_sql}"
+    );
+    transaction
+        .execute(&sql, [])
+        .map_err(|err| format!("迁移旧版 Codex 表 {table} 失败: {err}"))
+}
+
+fn merge_legacy_agent_jobs(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<(usize, usize), String> {
+    if state_table_columns_for(transaction, "main", "agent_jobs")?.is_none()
+        || state_table_columns_for(transaction, "legacy", "agent_jobs")?.is_none()
+    {
+        return Ok((0, 0));
+    }
+    transaction
+        .execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS codex_switch_migrated_job_ids (id TEXT PRIMARY KEY);
+             DELETE FROM codex_switch_migrated_job_ids;
+             INSERT OR IGNORE INTO codex_switch_migrated_job_ids (id)
+             SELECT legacy.id FROM legacy.agent_jobs AS legacy
+             WHERE NOT EXISTS (SELECT 1 FROM main.agent_jobs AS current WHERE current.id = legacy.id);",
+        )
+        .map_err(|err| format!("准备旧版 Codex agent jobs 迁移失败: {err}"))?;
+    let jobs = merge_legacy_table_rows(
+        transaction,
+        "agent_jobs",
+        Some("id IN (SELECT id FROM codex_switch_migrated_job_ids)"),
+    )?;
+    let items = merge_legacy_table_rows(
+        transaction,
+        "agent_job_items",
+        Some("job_id IN (SELECT id FROM codex_switch_migrated_job_ids)"),
+    )?;
+    transaction
+        .execute_batch("DROP TABLE codex_switch_migrated_job_ids;")
+        .map_err(|err| format!("清理旧版 Codex agent jobs 迁移临时表失败: {err}"))?;
+    Ok((jobs, items))
+}
+
+fn state_table_columns_for(
+    connection: &Connection,
+    schema: &str,
+    table: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let schema_identifier = quote_sqlite_identifier(schema);
+    let exists = connection
+        .query_row(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM {schema_identifier}.sqlite_master WHERE type = 'table' AND name = ?1)"
+            ),
+            [table],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("检查 Codex state 表 {schema}.{table} 失败: {err}"))?;
+    if exists == 0 {
+        return Ok(None);
+    }
+    let mut statement = connection
+        .prepare(&format!(
+            "PRAGMA {schema_identifier}.table_info({})",
+            quote_sqlite_identifier(table)
+        ))
+        .map_err(|err| format!("读取 Codex state 表结构 {schema}.{table} 失败: {err}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| format!("查询 Codex state 表结构 {schema}.{table} 失败: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map(Some)
+        .map_err(|err| format!("解析 Codex state 表结构 {schema}.{table} 失败: {err}"))
+}
+
+fn collect_thread_metadata_for_migration(
+    root: &Path,
+    existing_thread_ids: &HashSet<String>,
+) -> (Vec<ThreadMetadata>, Vec<String>, usize, usize) {
+    let mut warnings = Vec::new();
+    let index = read_session_index(root, &mut warnings);
+    let mut errors = warnings;
+    let mut files = Vec::new();
+    collect_conversation_files(&root.join("sessions"), "active", &mut files, &mut errors);
+    collect_conversation_files(
+        &root.join("archived_sessions"),
+        "archived",
+        &mut files,
+        &mut errors,
+    );
+    let rollout_files = files.len();
+    let mut skipped_existing = 0usize;
+    let mut items = Vec::new();
+    for (status, path) in files {
+        if extract_uuid_like(&path.to_string_lossy()).is_some_and(|id| {
+            session_id_variants(&id)
+                .iter()
+                .any(|variant| existing_thread_ids.contains(variant))
+        }) {
+            skipped_existing += 1;
+            continue;
+        }
+        let summary = match parse_session_file_for_list(&path) {
+            Ok(summary) => summary,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        let Some(id) = summary
+            .id
+            .clone()
+            .or_else(|| extract_uuid_like(&path.to_string_lossy()))
+        else {
+            errors.push(format!("迁移时无法识别会话 ID: {}", path.display()));
+            continue;
+        };
+        if session_id_variants(&id)
+            .iter()
+            .any(|variant| existing_thread_ids.contains(variant))
+        {
+            skipped_existing += 1;
+            continue;
+        }
+        let index_entry = session_index_entry(&index, &id);
+        let title = index_entry
+            .and_then(|entry| entry.thread_name.clone())
+            .or_else(|| summary.title.clone())
+            .or_else(|| summary.first_user_message.clone())
+            .map(|value| truncate_text(&value, 80))
+            .unwrap_or_else(|| "未命名会话".to_string());
+        let relative_path = path
+            .strip_prefix(root)
+            .map(path_to_slash)
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+        let session = ManifestSession {
+            id,
+            title,
+            updated_at: index_entry
+                .and_then(|entry| entry.updated_at.clone())
+                .or_else(|| summary.updated_at.clone())
+                .or_else(|| {
+                    path.metadata()
+                        .ok()
+                        .and_then(|metadata| system_time_to_rfc3339(metadata.modified().ok()))
+                }),
+            status,
+            relative_path,
+            size_bytes: path.metadata().map(|metadata| metadata.len()).unwrap_or(0),
+            sha256: String::new(),
+        };
+        items.push(thread_metadata_from_manifest(&session, &path, &summary));
+    }
+    (items, errors, rollout_files, skipped_existing)
+}
+
+fn validate_state_database(path: &Path) -> Result<(), String> {
+    let connection = Connection::open(path).map_err(|err| {
+        format!(
+            "打开迁移后的 Codex state 数据库失败 {}: {err}",
+            path.display()
+        )
+    })?;
+    validate_state_database_connection(&connection, path)
+}
+
+fn validate_state_database_connection(connection: &Connection, path: &Path) -> Result<(), String> {
+    let result: String = connection
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|err| {
+            format!(
+                "校验迁移后的 Codex state 数据库失败 {}: {err}",
+                path.display()
+            )
+        })?;
+    if !result.eq_ignore_ascii_case("ok") {
+        return Err(format!(
+            "迁移后的 Codex state 数据库校验失败 {}: {result}",
+            path.display()
+        ));
+    }
+    let mut statement = connection
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(|err| format!("检查 Codex state 外键失败 {}: {err}", path.display()))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|err| format!("查询 Codex state 外键失败 {}: {err}", path.display()))?;
+    if rows
+        .next()
+        .map_err(|err| format!("读取 Codex state 外键检查失败 {}: {err}", path.display()))?
+        .is_some()
+    {
+        return Err(format!(
+            "迁移后的 Codex state 数据库存在外键异常: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn state_database_has_current_migrations(connection: &Connection) -> Result<bool, String> {
+    let has_table = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM sqlite_master
+               WHERE type = 'table' AND name = '_sqlx_migrations'
+             )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("检查 Codex SQLx migration 表失败: {err}"))?;
+    if has_table == 0 {
+        return Ok(false);
+    }
+    let (max_version, failed): (i64, i64) = connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0),
+                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+             FROM _sqlx_migrations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|err| format!("读取 Codex SQLx migration 状态失败: {err}"))?;
+    Ok(max_version >= CURRENT_STATE_MIN_SQLX_MIGRATION && failed == 0)
+}
+
+fn codex_desktop_migration_marker_path(root: &Path) -> Result<PathBuf, String> {
+    let identity = normalized_path_identity(root);
+    let digest = Sha256::digest(identity.as_bytes());
+    let key = &hex_bytes(&digest)[..16];
+    Ok(app_data_dir()?
+        .join(CODEX_DESKTOP_MIGRATION_DIR)
+        .join(format!("{CODEX_DESKTOP_MIGRATION_FILE_PREFIX}-{key}.json")))
+}
+
+fn read_completed_codex_desktop_migration(path: &Path) -> Result<Option<Value>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|err| format!("读取 Codex 数据迁移标记失败 {}: {err}", path.display()))?;
+    let Ok(value) = serde_json::from_str::<Value>(&content) else {
+        return Ok(None);
+    };
+    let completed = value.get("completed").and_then(Value::as_bool) == Some(true);
+    let version = value.get("migrationVersion").and_then(Value::as_u64);
+    if completed && version == Some(u64::from(CODEX_DESKTOP_MIGRATION_VERSION)) {
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
+}
+
+fn write_codex_desktop_migration_marker(path: &Path, report: &Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("创建 Codex 数据迁移目录失败 {}: {err}", parent.display()))?;
+    }
+    let temp_path = path.with_extension("tmp");
+    let mut content = serde_json::to_string_pretty(report)
+        .map_err(|err| format!("序列化 Codex 数据迁移标记失败: {err}"))?;
+    content.push('\n');
+    fs::write(&temp_path, content)
+        .map_err(|err| format!("写入 Codex 数据迁移标记失败 {}: {err}", temp_path.display()))?;
+    if path.exists() {
+        fs::remove_file(path)
+            .map_err(|err| format!("替换 Codex 数据迁移标记失败 {}: {err}", path.display()))?;
+    }
+    fs::rename(&temp_path, path)
+        .map_err(|err| format!("保存 Codex 数据迁移标记失败 {}: {err}", path.display()))
 }
 
 fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
     let root = resolve_codex_root(root.as_deref())?;
     validate_codex_root(&root)?;
-
     let mut warnings = Vec::new();
-    let index = read_session_index(&root, &mut warnings);
+    let session_index = read_session_index(&root, &mut warnings);
+
+    let CurrentStateCatalog {
+        mut conversations,
+        indexed_paths,
+        warnings: mut state_warnings,
+    } = read_current_state_conversations(&root, &session_index)?;
+    warnings.append(&mut state_warnings);
     let mut errors = Vec::new();
-    let mut conversations = Vec::new();
 
     let mut files = Vec::new();
     collect_conversation_files(&root.join("sessions"), "active", &mut files, &mut errors);
@@ -403,14 +909,22 @@ fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
         &mut errors,
     );
 
+    let mut reconciled = 0usize;
     for (status, path) in files {
-        match conversation_from_path(&root, &path, &status, &index, false) {
+        if indexed_paths.contains(&conversation_path_key(&path)) {
+            continue;
+        }
+        match conversation_from_path(&root, &path, &status, false, &session_index) {
             Ok(item) => conversations.push(item),
             Err(err) => errors.push(err),
         }
+        reconciled += 1;
     }
-    append_missing_state_thread_conversations(&root, &mut conversations, &mut warnings);
-    warn_archived_session_index_entries(&conversations, &index, &mut warnings);
+    if reconciled > 0 {
+        warnings.push(format!(
+            "发现 {reconciled} 个尚未写入新版 state_5.sqlite 的会话文件，已临时补充显示"
+        ));
+    }
 
     conversations.sort_by(|a, b| {
         conversation_sort_key(b)
@@ -428,7 +942,15 @@ fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
     }))
 }
 
-fn preview_conversation_impl(root: String, relative_path: String) -> Result<Value, String> {
+fn preview_conversation_impl(
+    root: String,
+    relative_path: String,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<String>,
+    request_id: Option<u64>,
+) -> Result<Value, String> {
     let root = resolve_codex_root(Some(&root))?;
     validate_codex_root(&root)?;
     let relative = normalize_relative_path(&relative_path)?;
@@ -438,61 +960,34 @@ fn preview_conversation_impl(root: String, relative_path: String) -> Result<Valu
         return Err(format!("会话文件不存在: {}", relative.display()));
     }
 
-    let mut warnings = Vec::new();
-    let index = read_session_index(&root, &mut warnings);
+    let mut index_warnings = Vec::new();
+    let session_index = read_session_index(&root, &mut index_warnings);
     let status = status_from_relative_path(&relative)?;
-    let item = conversation_from_path(&root, &path, &status, &index, false)?;
-    let summary = parse_session_file(&path, true)?;
+    let item = current_state_conversation_for_path(&root, &path, &session_index)?.unwrap_or(
+        conversation_from_path(&root, &path, &status, false, &session_index)?,
+    );
+    let page = read_preview_message_page(
+        &path,
+        before_cursor,
+        snapshot_size,
+        limit,
+        message_source.as_deref(),
+        request_id,
+    )?;
 
     Ok(json!({
         "ok": true,
         "conversation": item,
-        "messages": summary.messages,
-        "warnings": warnings,
-        "parse_error": summary.parse_error
-    }))
-}
-
-fn preview_deleted_conversation_impl(delete_id: String) -> Result<Value, String> {
-    let record_dir = deleted_session_record_dir(&delete_id)?;
-    preview_deleted_conversation_from_record_dir(&record_dir)
-}
-
-fn preview_deleted_conversation_from_record_dir(record_dir: &Path) -> Result<Value, String> {
-    let record = read_deleted_session_record(record_dir)?;
-    let session_file = record_dir.join(&record.session_file);
-    if !session_file.exists() {
-        return Err(format!("已删除会话备份文件缺失: {}", record.title));
-    }
-    let summary = parse_session_file(&session_file, true)?;
-    let size_bytes = session_file
-        .metadata()
-        .map(|item| item.len())
-        .unwrap_or(record.size_bytes);
-    let title = if should_rebuild_deleted_title(&record.title) {
-        deleted_title_from_summary(&summary)
-    } else {
-        record.title.clone()
-    };
-    let conversation = ConversationItem {
-        id: record.id,
-        title,
-        updated_at: Some(record.deleted_at),
-        status: "deleted".to_string(),
-        source_path: session_file.to_string_lossy().to_string(),
-        relative_path: record.original_relative_path,
-        size_bytes,
-        cwd: summary.cwd.clone().or(record.cwd),
-        preview: summary.preview.clone(),
-        sha256: None,
-        parse_error: summary.parse_error.clone(),
-    };
-
-    Ok(json!({
-        "ok": true,
-        "conversation": conversation,
-        "messages": summary.messages,
-        "parse_error": summary.parse_error
+        "messages": page.messages,
+        "message_page": {
+            "source": page.source.as_str(),
+            "next_before": page.next_before,
+            "has_more": page.has_more,
+            "file_size": page.file_size,
+            "limit": normalize_preview_limit(limit)
+        },
+        "warnings": [],
+        "parse_error": null
     }))
 }
 
@@ -521,7 +1016,14 @@ fn export_conversations_impl(
         .map_err(|err| format!("导出文件路径无效: {err}"))?;
 
     let mut warnings = Vec::new();
-    let index = read_session_index(&root, &mut warnings);
+    let session_index = read_session_index(&root, &mut warnings);
+    let catalog = read_current_state_conversations(&root, &session_index)?;
+    warnings.extend(catalog.warnings);
+    let state_by_path = catalog
+        .conversations
+        .into_iter()
+        .map(|item| (conversation_path_key(Path::new(&item.source_path)), item))
+        .collect::<HashMap<_, _>>();
     let mut seen = HashSet::new();
     let mut entries = Vec::new();
     let mut sessions = Vec::new();
@@ -551,7 +1053,16 @@ fn export_conversations_impl(
                 continue;
             }
         };
-        match conversation_from_path(&root, &path, &status, &index, true) {
+        let item = state_by_path
+            .get(&conversation_path_key(&path))
+            .cloned()
+            .map(|mut item| {
+                item.sha256 = sha256_file(&path).ok();
+                item
+            })
+            .map(Ok)
+            .unwrap_or_else(|| conversation_from_path(&root, &path, &status, true, &session_index));
+        match item {
             Ok(item) => match fs::read(&path) {
                 Ok(data) => {
                     let sha256 = item.sha256.clone().unwrap_or_else(|| sha256_bytes(&data));
@@ -702,17 +1213,7 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
     }
 
     let _io_guard = lock_codex_session_io("导入会话")?;
-    let index_backup_path = if candidates.iter().any(|candidate| {
-        matches!(
-            candidate.action,
-            ImportAction::Import | ImportAction::SkipSame
-        )
-    }) {
-        backup_session_index(&root)?
-    } else {
-        None
-    };
-    let state_db = codex_state_db_path_from_home(&root);
+    let state_db = codex_state_db_path_for_root(&root)?;
     let state_backup_path = if state_db.exists()
         && candidates.iter().any(|candidate| {
             matches!(
@@ -743,7 +1244,7 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
         imported += 1;
     }
 
-    let index_updates: Vec<ManifestSession> = candidates
+    let imported_sessions: Vec<ManifestSession> = candidates
         .iter()
         .filter(|candidate| {
             matches!(
@@ -753,13 +1254,10 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
         })
         .map(|candidate| candidate.manifest.clone())
         .collect();
-    if !index_updates.is_empty() {
-        update_session_index_from_manifest(&root, &index_updates)?;
-    }
 
     let mut sqlite_updated = 0usize;
     let mut sqlite_error = None;
-    if state_db.exists() && !index_updates.is_empty() {
+    if state_db.exists() && !imported_sessions.is_empty() {
         let mut thread_metadata = Vec::new();
         for candidate in candidates.iter().filter(|candidate| {
             matches!(
@@ -767,7 +1265,7 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
                 ImportAction::Import | ImportAction::SkipSame
             )
         }) {
-            let summary = parse_session_file(&candidate.target_path, false).unwrap_or_default();
+            let summary = parse_session_file_for_list(&candidate.target_path).unwrap_or_default();
             thread_metadata.push(thread_metadata_from_manifest(
                 &candidate.manifest,
                 &candidate.target_path,
@@ -791,551 +1289,8 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
             "errors": errors,
             "sqlite_updated": sqlite_updated,
             "sqlite_error": sqlite_error,
-            "index_backup_path": index_backup_path.map(|path| path.to_string_lossy().to_string()),
             "state_backup_path": state_backup_path.map(|path| path.to_string_lossy().to_string())
         }
-    }))
-}
-
-fn delete_conversations_impl(root: String, relative_paths: Vec<String>) -> Result<Value, String> {
-    let root = resolve_codex_root(Some(&root))?;
-    validate_codex_root(&root)?;
-    if relative_paths.is_empty() {
-        return Err("请先选择要删除的会话".to_string());
-    }
-
-    let _io_guard = lock_codex_session_io("删除会话")?;
-    let deleted_at = now_string();
-    let mut errors = Vec::new();
-    let mut candidates = Vec::new();
-    let mut deleted_records = Vec::new();
-    let mut cleanup_ids = Vec::new();
-    let mut warnings = Vec::new();
-    let index = read_session_index(&root, &mut warnings);
-
-    for relative_path in relative_paths {
-        match normalize_relative_path(&relative_path).and_then(|relative| {
-            ensure_session_relative_path(&relative)?;
-            Ok(relative)
-        }) {
-            Ok(relative) => {
-                let source_path = root.join(&relative);
-                if !source_path.exists() {
-                    if let Some(id) = extract_uuid_like(&relative_path) {
-                        cleanup_ids.push(id);
-                    }
-                    continue;
-                }
-
-                if let Err(err) = validate_session_file_path(&root, &source_path) {
-                    errors.push(err);
-                    continue;
-                }
-                let summary = parse_session_file(&source_path, false).unwrap_or_default();
-                let id = summary
-                    .id
-                    .clone()
-                    .or_else(|| extract_uuid_like(&relative_path))
-                    .unwrap_or_else(|| path_to_slash(&relative));
-                let index_entry = index.get(&id);
-                let title = index_entry
-                    .and_then(|entry| entry.thread_name.clone())
-                    .or_else(|| summary.title.clone())
-                    .or_else(|| {
-                        summary
-                            .first_user_message
-                            .clone()
-                            .map(|text| truncate_text(&text, 48))
-                    })
-                    .unwrap_or_else(|| "未命名会话".to_string());
-                let updated_at = index_entry
-                    .and_then(|entry| entry.updated_at.clone())
-                    .or_else(|| summary.updated_at.clone())
-                    .or_else(|| {
-                        source_path
-                            .metadata()
-                            .ok()
-                            .and_then(|metadata| system_time_to_rfc3339(metadata.modified().ok()))
-                    });
-                candidates.push(DeleteCandidate {
-                    id,
-                    title,
-                    updated_at,
-                    source_path,
-                    relative_path: relative,
-                });
-            }
-            Err(err) => errors.push(err),
-        }
-    }
-
-    let mut prepared_candidates = Vec::new();
-    for candidate in candidates {
-        if candidate.source_path.exists() {
-            let original_status = status_from_relative_path(&candidate.relative_path)
-                .unwrap_or_else(|_| "active".to_string());
-            let summary = parse_session_file(&candidate.source_path, false).unwrap_or_default();
-            match save_deleted_session_record(DeletedSessionRecordInput {
-                root: &root,
-                id: &candidate.id,
-                session_path: &candidate.source_path,
-                original_relative: &candidate.relative_path,
-                deleted_relative: &candidate.relative_path,
-                original_status: &original_status,
-                summary: &summary,
-                title: &candidate.title,
-                updated_at: candidate.updated_at.as_deref(),
-                deleted_at: &deleted_at,
-            }) {
-                Ok(record) => {
-                    deleted_records.push(record);
-                    prepared_candidates.push(candidate);
-                }
-                Err(err) => errors.push(err),
-            }
-        }
-    }
-
-    let mut deleted = 0usize;
-    let mut file_delete_failed_ids = HashSet::new();
-    let mut deleted_candidates = Vec::new();
-    for candidate in prepared_candidates {
-        if candidate.source_path.exists() {
-            match fs::remove_file(&candidate.source_path) {
-                Ok(_) => {
-                    remove_empty_parent_dirs(&root, candidate.source_path.parent());
-                    deleted += 1;
-                    deleted_candidates.push(candidate);
-                }
-                Err(err) => {
-                    file_delete_failed_ids.insert(candidate.id.clone());
-                    errors.push(format!(
-                        "删除失败 {}: {err}",
-                        candidate.relative_path.display()
-                    ));
-                }
-            }
-        } else {
-            deleted += 1;
-            deleted_candidates.push(candidate);
-        }
-    }
-    if !file_delete_failed_ids.is_empty() {
-        let failed_records = deleted_records
-            .iter()
-            .filter(|record| file_delete_failed_ids.contains(&record.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        remove_deleted_session_records(&failed_records);
-    }
-
-    let state_rollout_paths = deleted_candidates
-        .iter()
-        .map(|candidate| candidate.source_path.clone())
-        .collect::<Vec<_>>();
-    let mut removed_ids = deleted_candidates
-        .iter()
-        .map(|candidate| candidate.id.clone())
-        .chain(cleanup_ids)
-        .collect::<Vec<_>>();
-    removed_ids = expand_session_id_variants(&removed_ids);
-    dedupe_strings(&mut removed_ids);
-
-    let index_removed = match remove_session_index_ids(&root, &removed_ids) {
-        Ok(removed) => removed,
-        Err(err) => {
-            remove_deleted_session_records(&deleted_records);
-            return Err(err);
-        }
-    };
-    let (state_delete, desktop_error) =
-        match delete_state_threads_for_sessions(&root, &removed_ids, &state_rollout_paths) {
-            Ok(report) => (report, None),
-            Err(err) => (StateThreadDeleteReport::default(), Some(err)),
-        };
-    removed_ids.extend(state_delete.ids.iter().cloned());
-    dedupe_strings(&mut removed_ids);
-    let (global_state_backup_path, global_state_removed, global_state_error) =
-        match remove_from_global_state(&root, &removed_ids, "delete") {
-            Ok(Some(cleanup)) => (Some(cleanup.backup_path), cleanup.removed, None),
-            Ok(None) => (None, 0, None),
-            Err(err) => (None, 0, Some(err)),
-        };
-
-    let soft_deleted = deleted_records
-        .len()
-        .saturating_sub(file_delete_failed_ids.len());
-
-    Ok(json!({
-        "ok": errors.is_empty(),
-        "message": if errors.is_empty() {
-            format!("已删除 {} 个会话", deleted)
-        } else {
-            format!("已删除 {} 个会话，{} 个失败", deleted, errors.len())
-        },
-        "report": {
-            "deleted": deleted,
-            "index_removed": index_removed,
-            "sqlite_deleted": state_delete.deleted,
-            "state_backup_path": state_delete.backup_path.map(|path| path.to_string_lossy().to_string()),
-            "desktop_error": desktop_error,
-            "global_state_removed": global_state_removed,
-            "global_state_backup_path": global_state_backup_path.map(|path| path.to_string_lossy().to_string()),
-            "global_state_error": global_state_error,
-            "soft_deleted": soft_deleted,
-            "failed": errors.len(),
-            "errors": errors,
-            "warnings": warnings
-        }
-    }))
-}
-
-fn list_deleted_sessions_impl() -> Result<Value, String> {
-    let mut records = read_deleted_session_records()?;
-    for record in &mut records {
-        if should_rebuild_deleted_title(&record.title) {
-            let record_dir = deleted_session_record_dir(&record.delete_id)?;
-            let session_file = record_dir.join(&record.session_file);
-            if let Ok(summary) = parse_session_file(&session_file, false) {
-                record.title = deleted_title_from_summary(&summary);
-                record.updated_at = record.updated_at.clone().or(summary.updated_at);
-            }
-        }
-    }
-    records.sort_by(|a, b| {
-        b.deleted_at
-            .cmp(&a.deleted_at)
-            .then_with(|| a.title.cmp(&b.title))
-            .then_with(|| a.delete_id.cmp(&b.delete_id))
-    });
-    Ok(json!({
-        "ok": true,
-        "deleted": records
-    }))
-}
-
-fn restore_deleted_sessions_impl(
-    root: String,
-    delete_ids: Vec<String>,
-    conflict_strategy: Option<String>,
-) -> Result<Value, String> {
-    let root = resolve_codex_root(Some(&root))?;
-    validate_codex_root(&root)?;
-    if delete_ids.is_empty() {
-        return Err("请先选择要恢复的会话".to_string());
-    }
-    let conflict_strategy = parse_conflict_strategy(conflict_strategy)?;
-
-    let _io_guard = lock_codex_session_io("恢复会话")?;
-    let mut restored = 0usize;
-    let mut skipped = 0usize;
-    let mut errors = Vec::new();
-    let mut conflicts = Vec::new();
-    let mut candidates = Vec::new();
-    let mut index_updates = Vec::new();
-    let mut thread_updates = Vec::new();
-    let mut overwritten_ids = Vec::new();
-
-    for delete_id in delete_ids {
-        match build_restore_deleted_candidate(&root, &delete_id, conflict_strategy) {
-            Ok(Some(candidate)) => candidates.push(candidate),
-            Ok(None) => skipped += 1,
-            Err(err) => {
-                if let Some(conflict) = err.strip_prefix("CONFLICT:") {
-                    conflicts.push(json!({
-                        "delete_id": delete_id,
-                        "target": conflict
-                    }));
-                } else {
-                    errors.push(err);
-                }
-            }
-        }
-    }
-
-    if !conflicts.is_empty() && conflict_strategy == ConflictStrategy::Ask {
-        return Ok(json!({
-            "ok": true,
-            "message": format!("发现 {} 个恢复冲突", conflicts.len()),
-            "report": {
-                "restored": 0,
-                "skipped": 0,
-                "conflict_action_required": true,
-                "operation": "restore",
-                "conflicts": conflicts,
-                "failed": errors.len(),
-                "errors": errors
-            }
-        }));
-    }
-
-    for candidate in candidates {
-        if let Some(parent) = candidate.target_path.parent() {
-            if let Err(err) = fs::create_dir_all(parent) {
-                errors.push(format!("创建恢复目录失败 {}: {err}", parent.display()));
-                continue;
-            }
-        }
-        if candidate.target_path.exists() && conflict_strategy == ConflictStrategy::Overwrite {
-            if let Err(err) = fs::remove_file(&candidate.target_path) {
-                errors.push(format!(
-                    "覆盖恢复目标失败 {}: {err}",
-                    candidate.target_path.display()
-                ));
-                continue;
-            }
-        }
-        let restore_result = if let Some((old_id, new_id)) = &candidate.rewrite_id {
-            copy_session_with_new_id(
-                &candidate.source_file,
-                &candidate.target_path,
-                old_id,
-                new_id,
-            )
-        } else {
-            fs::copy(&candidate.source_file, &candidate.target_path)
-                .map(|_| ())
-                .map_err(|err| {
-                    format!(
-                        "恢复会话失败 {} -> {}: {err}",
-                        candidate.source_file.display(),
-                        candidate.target_path.display()
-                    )
-                })
-        };
-        match restore_result {
-            Ok(()) => {
-                if let Some(id) = &candidate.overwritten_id {
-                    overwritten_ids.push(id.clone());
-                }
-                let summary = parse_session_file(&candidate.target_path, false).unwrap_or_default();
-                let size_bytes = candidate
-                    .target_path
-                    .metadata()
-                    .map(|item| item.len())
-                    .unwrap_or(0);
-                let sha256 = sha256_file(&candidate.target_path).unwrap_or_default();
-                let manifest = ManifestSession {
-                    id: candidate.target_id.clone(),
-                    title: if should_rebuild_deleted_title(&candidate.record.title) {
-                        deleted_title_from_summary(&summary)
-                    } else {
-                        candidate.record.title.clone()
-                    },
-                    updated_at: candidate.record.updated_at.clone(),
-                    status: candidate.record.original_status.clone(),
-                    relative_path: candidate.target_relative.clone(),
-                    size_bytes,
-                    sha256,
-                };
-                thread_updates.push(thread_metadata_from_manifest(
-                    &manifest,
-                    &candidate.target_path,
-                    &summary,
-                ));
-                index_updates.push(manifest);
-                let _ = fs::remove_dir_all(candidate.record_dir);
-                restored += 1;
-            }
-            Err(err) => errors.push(err),
-        }
-    }
-
-    if !index_updates.is_empty() {
-        let mut sqlite_updated = 0usize;
-        let mut sqlite_error = None;
-        if !overwritten_ids.is_empty() {
-            let active_ids: HashSet<&str> = index_updates
-                .iter()
-                .map(|session| session.id.as_str())
-                .collect();
-            overwritten_ids.retain(|id| !active_ids.contains(id.as_str()));
-            dedupe_strings(&mut overwritten_ids);
-            let _ = remove_session_index_ids(&root, &overwritten_ids);
-            let _ = delete_state_threads_for_sessions(&root, &overwritten_ids, &[]);
-            let _ = remove_from_global_state(&root, &overwritten_ids, "restore-overwrite");
-        }
-        update_session_index_from_manifest(&root, &index_updates)?;
-        match upsert_state_threads(&root, &thread_updates) {
-            Ok(updated) => sqlite_updated = updated,
-            Err(err) => sqlite_error = Some(err),
-        }
-
-        Ok(json!({
-            "ok": true,
-            "message": format!("已恢复 {} 个会话", restored),
-            "report": {
-                "restored": restored,
-                "skipped": skipped,
-                "failed": errors.len(),
-                "errors": errors,
-                "sqlite_updated": sqlite_updated,
-                "sqlite_error": sqlite_error
-            }
-        }))
-    } else {
-        Ok(json!({
-            "ok": true,
-            "message": format!("已恢复 {} 个会话", restored),
-            "report": {
-                "restored": restored,
-                "skipped": skipped,
-                "failed": errors.len(),
-                "errors": errors,
-                "sqlite_updated": 0,
-                "sqlite_error": null
-            }
-        }))
-    }
-}
-
-fn purge_deleted_sessions_impl(delete_ids: Vec<String>) -> Result<Value, String> {
-    if delete_ids.is_empty() {
-        return Err("请先选择要彻底删除的会话".to_string());
-    }
-    let mut purged = 0usize;
-    let mut errors = Vec::new();
-    for delete_id in delete_ids {
-        match deleted_session_record_dir(&delete_id).and_then(|dir| {
-            if !dir.exists() {
-                return Err(format!("已删除会话不存在: {delete_id}"));
-            }
-            fs::remove_dir_all(&dir).map_err(|err| format!("彻底删除失败 {}: {err}", dir.display()))
-        }) {
-            Ok(()) => purged += 1,
-            Err(err) => errors.push(err),
-        }
-    }
-    Ok(json!({
-        "ok": true,
-        "message": format!("已彻底删除 {} 个会话", purged),
-        "report": {
-            "purged": purged,
-            "failed": errors.len(),
-            "errors": errors
-        }
-    }))
-}
-
-struct DeletedSessionRecordInput<'a> {
-    root: &'a Path,
-    id: &'a str,
-    session_path: &'a Path,
-    original_relative: &'a Path,
-    deleted_relative: &'a Path,
-    original_status: &'a str,
-    summary: &'a SessionSummary,
-    title: &'a str,
-    updated_at: Option<&'a str>,
-    deleted_at: &'a str,
-}
-
-fn save_deleted_session_record(
-    input: DeletedSessionRecordInput<'_>,
-) -> Result<DeletedSessionRecord, String> {
-    let delete_id = unique_delete_id(input.id);
-    let record_dir = deleted_session_record_dir(&delete_id)?;
-    fs::create_dir_all(&record_dir)
-        .map_err(|err| format!("创建已删除会话目录失败 {}: {err}", record_dir.display()))?;
-    let session_file = record_dir.join("session.jsonl");
-    fs::copy(input.session_path, &session_file).map_err(|err| {
-        format!(
-            "备份已删除会话失败 {} -> {}: {err}",
-            input.session_path.display(),
-            session_file.display()
-        )
-    })?;
-    let size_bytes = input
-        .session_path
-        .metadata()
-        .map(|item| item.len())
-        .unwrap_or(0);
-    let record = DeletedSessionRecord {
-        delete_id,
-        id: input.id.to_string(),
-        title: if input.title.trim().is_empty() {
-            "未命名会话".to_string()
-        } else {
-            input.title.to_string()
-        },
-        deleted_at: input.deleted_at.to_string(),
-        updated_at: input
-            .updated_at
-            .map(str::to_string)
-            .or_else(|| input.summary.updated_at.clone()),
-        original_status: input.original_status.to_string(),
-        original_relative_path: path_to_slash(input.original_relative),
-        deleted_relative_path: path_to_slash(input.deleted_relative),
-        root_path: input.root.to_string_lossy().to_string(),
-        size_bytes,
-        cwd: input.summary.cwd.clone(),
-        session_file: "session.jsonl".to_string(),
-    };
-    write_deleted_session_record(&record_dir, &record)?;
-    Ok(record)
-}
-
-fn build_restore_deleted_candidate(
-    root: &Path,
-    delete_id: &str,
-    conflict_strategy: ConflictStrategy,
-) -> Result<Option<RestoreCandidate>, String> {
-    let record_dir = deleted_session_record_dir(delete_id)?;
-    let record = read_deleted_session_record(&record_dir)?;
-    let relative = normalize_relative_path(&record.original_relative_path)?;
-    ensure_session_relative_path(&relative)?;
-    let session_file = record_dir.join(&record.session_file);
-    if !session_file.exists() {
-        return Err(format!("已删除会话备份文件缺失: {}", record.title));
-    }
-    let original_target_path = root.join(&relative);
-    let mut target_path = original_target_path.clone();
-    let mut target_relative = path_to_slash(&relative);
-    let mut target_id = record.id.clone();
-    let mut rewrite_id = None;
-    let mut overwritten_id = None;
-
-    if original_target_path.exists() {
-        match conflict_strategy {
-            ConflictStrategy::Ask => {
-                return Err(format!("CONFLICT:{}", record.original_relative_path));
-            }
-            ConflictStrategy::Skip => return Ok(None),
-            ConflictStrategy::Overwrite => {
-                overwritten_id = parse_session_file(&original_target_path, false)
-                    .ok()
-                    .and_then(|summary| summary.id)
-                    .or_else(|| extract_uuid_like(&record.original_relative_path));
-            }
-            ConflictStrategy::ModifyId => {
-                let new_id = new_session_id(&record.id);
-                let reassigned = reassigned_relative_path(&relative, &record.id, &new_id)?;
-                target_path = root.join(&reassigned);
-                target_relative = path_to_slash(&reassigned);
-                target_id = new_id.clone();
-                rewrite_id = Some((record.id.clone(), new_id));
-            }
-        }
-    }
-
-    while target_path.exists() && conflict_strategy == ConflictStrategy::ModifyId {
-        let new_id = new_session_id(&target_id);
-        let reassigned = reassigned_relative_path(&relative, &record.id, &new_id)?;
-        target_path = root.join(&reassigned);
-        target_relative = path_to_slash(&reassigned);
-        target_id = new_id.clone();
-        rewrite_id = Some((record.id.clone(), new_id));
-    }
-
-    Ok(Some(RestoreCandidate {
-        record,
-        record_dir,
-        source_file: session_file,
-        target_path,
-        target_relative,
-        target_id,
-        rewrite_id,
-        overwritten_id,
     }))
 }
 
@@ -1359,7 +1314,6 @@ fn set_conversation_status_impl(
     let mut errors = Vec::new();
     let mut conflicts = Vec::new();
     let mut moves = Vec::new();
-    let mut status_index_updates = Vec::new();
 
     for relative_path in relative_paths {
         let relative = match normalize_relative_path(&relative_path).and_then(|relative| {
@@ -1388,7 +1342,7 @@ fn set_conversation_status_impl(
             errors.push(err);
             continue;
         }
-        let summary = parse_session_file(&source_path, false).unwrap_or_default();
+        let summary = parse_session_file_for_list(&source_path).unwrap_or_default();
         let id = summary
             .id
             .clone()
@@ -1399,15 +1353,6 @@ fn set_conversation_status_impl(
             continue;
         };
         if current_status == target_status {
-            status_index_updates.push(ManifestSession {
-                id,
-                title: deleted_title_from_summary(&summary),
-                updated_at: summary.updated_at.clone(),
-                status: target_status.clone(),
-                relative_path: path_to_slash(&relative),
-                size_bytes: source_path.metadata().map(|item| item.len()).unwrap_or(0),
-                sha256: String::new(),
-            });
             skipped += 1;
             continue;
         }
@@ -1432,7 +1377,7 @@ fn set_conversation_status_impl(
                     conflicts.push(json!({
                         "relative_path": path_to_slash(&relative),
                         "target": path_to_slash(&target_relative),
-                        "title": deleted_title_from_summary(&summary)
+                        "title": conversation_title_from_summary(&summary)
                     }));
                     continue;
                 }
@@ -1441,7 +1386,7 @@ fn set_conversation_status_impl(
                     continue;
                 }
                 ConflictStrategy::Overwrite => {
-                    overwritten_id = parse_session_file(&target_path, false)
+                    overwritten_id = parse_session_file_for_list(&target_path)
                         .ok()
                         .and_then(|summary| summary.id)
                         .or_else(|| extract_uuid_like(&target_relative.to_string_lossy()));
@@ -1467,8 +1412,6 @@ fn set_conversation_status_impl(
         moves.push(StatusMove {
             id,
             target_id,
-            title: deleted_title_from_summary(&summary),
-            updated_at: summary.updated_at.clone(),
             source_path,
             target_path: final_target_path,
             rewrite_id,
@@ -1507,15 +1450,19 @@ fn set_conversation_status_impl(
                 continue;
             }
         }
-        if status_move.target_path.exists() && conflict_strategy == ConflictStrategy::Overwrite {
-            if let Some(id) = &status_move.overwritten_id {
-                overwritten_ids.push(id.clone());
-            }
-            if let Err(err) = fs::remove_file(&status_move.target_path) {
-                errors.push(format!("覆盖目标会话失败 {}: {err}", target_relative));
+        let overwrite_backup_path = if status_move.target_path.exists()
+            && conflict_strategy == ConflictStrategy::Overwrite
+        {
+            let backup_path =
+                status_overwrite_backup_path(&status_move.target_path, &status_move.id);
+            if let Err(err) = fs::rename(&status_move.target_path, &backup_path) {
+                errors.push(format!("备份覆盖目标会话失败 {}: {err}", target_relative));
                 continue;
             }
-        }
+            Some(backup_path)
+        } else {
+            None
+        };
         let move_result = if let Some((old_id, new_id)) = &status_move.rewrite_id {
             copy_session_with_new_id(
                 &status_move.source_path,
@@ -1541,8 +1488,33 @@ fn set_conversation_status_impl(
             })
         };
         if let Err(err) = move_result {
-            errors.push(err.to_string());
+            let mut error = err.to_string();
+            if let Some(backup_path) = &overwrite_backup_path {
+                if status_move.target_path.exists() {
+                    if let Err(remove_err) = fs::remove_file(&status_move.target_path) {
+                        error.push_str(&format!(
+                            "；清理未完成目标失败 {}: {remove_err}",
+                            status_move.target_path.display()
+                        ));
+                    }
+                }
+                if let Err(restore_err) = fs::rename(backup_path, &status_move.target_path) {
+                    error.push_str(&format!(
+                        "；恢复原目标会话失败 {}: {restore_err}",
+                        status_move.target_path.display()
+                    ));
+                }
+            }
+            errors.push(error);
             continue;
+        }
+        if let Some(backup_path) = &overwrite_backup_path {
+            if let Some(id) = &status_move.overwritten_id {
+                overwritten_ids.push(id.clone());
+            }
+            if let Err(err) = fs::remove_file(backup_path) {
+                errors.push(format!("清理覆盖备份失败 {}: {err}", backup_path.display()));
+            }
         }
         remove_empty_parent_dirs(&root, status_move.source_path.parent());
         completed_moves.push(status_move.clone());
@@ -1556,58 +1528,8 @@ fn set_conversation_status_impl(
             .collect();
         overwritten_ids.retain(|id| !active_ids.contains(id.as_str()));
         dedupe_strings(&mut overwritten_ids);
-        let _ = remove_session_index_ids(&root, &overwritten_ids);
         let _ = delete_state_threads_for_sessions(&root, &overwritten_ids, &[]);
         let _ = remove_from_global_state(&root, &overwritten_ids, "status-overwrite");
-    }
-
-    let reassign_moves = completed_moves
-        .iter()
-        .filter(|status_move| status_move.id != status_move.target_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    if !reassign_moves.is_empty() {
-        let old_ids = reassign_moves
-            .iter()
-            .map(|status_move| status_move.id.clone())
-            .collect::<Vec<_>>();
-        let _ = remove_session_index_ids(&root, &old_ids);
-    }
-
-    status_index_updates.extend(completed_moves.iter().map(|status_move| {
-        ManifestSession {
-            id: status_move.target_id.clone(),
-            title: status_move.title.clone(),
-            updated_at: status_move.updated_at.clone(),
-            status: target_status.clone(),
-            relative_path: status_move
-                .target_path
-                .strip_prefix(&root)
-                .map(path_to_slash)
-                .unwrap_or_else(|_| status_move.target_path.to_string_lossy().to_string()),
-            size_bytes: status_move
-                .target_path
-                .metadata()
-                .map(|item| item.len())
-                .unwrap_or(0),
-            sha256: String::new(),
-        }
-    }));
-    let (index_backup_path, index_error) = if status_index_updates.is_empty() {
-        (None, None)
-    } else {
-        let backup_path = match backup_session_index(&root) {
-            Ok(path) => path,
-            Err(err) => {
-                errors.push(err.clone());
-                None
-            }
-        };
-        let error = update_session_index_from_manifest(&root, &status_index_updates).err();
-        (backup_path, error)
-    };
-    if let Some(err) = &index_error {
-        errors.push(err.clone());
     }
 
     let (state_backup_path, desktop_error) =
@@ -1622,85 +1544,9 @@ fn set_conversation_status_impl(
         "report": {
             "changed": changed,
             "skipped": skipped,
-            "index_backup_path": index_backup_path.map(|path| path.to_string_lossy().to_string()),
-            "index_error": index_error,
             "state_backup_path": state_backup_path.map(|path| path.to_string_lossy().to_string()),
             "desktop_error": desktop_error,
             "conflicts": conflicts,
-            "failed": errors.len(),
-            "errors": errors
-        }
-    }))
-}
-
-fn update_conversation_cwd_impl(
-    root: String,
-    relative_paths: Vec<String>,
-    cwd: String,
-) -> Result<Value, String> {
-    let root = resolve_codex_root(Some(&root))?;
-    validate_codex_root(&root)?;
-    let cwd = cwd.trim().to_string();
-    if cwd.is_empty() {
-        return Err("工作目录不能为空".to_string());
-    }
-    if relative_paths.is_empty() {
-        return Err("请先选择要修改工作目录的会话".to_string());
-    }
-
-    let _io_guard = lock_codex_session_io("修改工作目录")?;
-    let mut updated = 0usize;
-    let mut errors = Vec::new();
-    let mut cwd_updates = Vec::new();
-
-    for relative_path in relative_paths {
-        let relative = match normalize_relative_path(&relative_path).and_then(|relative| {
-            ensure_session_relative_path(&relative)?;
-            Ok(relative)
-        }) {
-            Ok(relative) => relative,
-            Err(err) => {
-                errors.push(err);
-                continue;
-            }
-        };
-        let path = root.join(&relative);
-        if !path.exists() {
-            errors.push(format!("会话文件不存在: {}", relative.display()));
-            continue;
-        }
-        let summary = parse_session_file(&path, false).unwrap_or_default();
-        match rewrite_session_cwd(&path, &cwd) {
-            Ok(true) => {
-                updated += 1;
-                if let Some(id) = summary
-                    .id
-                    .or_else(|| extract_uuid_like(&relative.to_string_lossy()))
-                {
-                    cwd_updates.push((id, cwd.clone()));
-                }
-            }
-            Ok(false) => {
-                if let Some(id) = summary
-                    .id
-                    .or_else(|| extract_uuid_like(&relative.to_string_lossy()))
-                {
-                    cwd_updates.push((id, cwd.clone()));
-                }
-            }
-            Err(err) => errors.push(err),
-        }
-    }
-
-    if !cwd_updates.is_empty() {
-        update_state_thread_cwds(&root, &cwd_updates)?;
-    }
-
-    Ok(json!({
-        "ok": true,
-        "message": format!("已修改 {} 个会话的工作目录", updated),
-        "report": {
-            "updated": updated,
             "failed": errors.len(),
             "errors": errors
         }
@@ -1722,73 +1568,6 @@ fn resolve_codex_root(root: Option<&str>) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn find_session_relative_paths_by_id(root: &Path, session_id: &str) -> Result<Vec<String>, String> {
-    let variants = session_id_variants(session_id);
-    let mut relative_paths = Vec::new();
-    let state_db = codex_state_db_path_from_home(root);
-    if state_db.exists() {
-        let connection = Connection::open_with_flags(
-            &state_db,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|err| format!("打开 Codex state 数据库失败 {}: {err}", state_db.display()))?;
-        connection
-            .busy_timeout(Duration::from_millis(3000))
-            .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
-        if state_threads_has_columns(&connection, &["id", "rollout_path"])? {
-            for variant in &variants {
-                let mut statement = connection
-                    .prepare("SELECT rollout_path FROM threads WHERE id = ?1")
-                    .map_err(|err| format!("查询 Codex Desktop threads 索引失败: {err}"))?;
-                let rows = statement
-                    .query_map([variant], |row| row.get::<_, String>(0))
-                    .map_err(|err| format!("查询 Codex Desktop threads 索引失败: {err}"))?;
-                for row in rows {
-                    let rollout_path =
-                        row.map_err(|err| format!("读取 Codex Desktop rollout_path 失败: {err}"))?;
-                    if let Some(relative) = rollout_path_to_relative(root, &rollout_path) {
-                        relative_paths.push(relative);
-                    }
-                }
-            }
-        }
-    }
-
-    if relative_paths.is_empty() {
-        let variant_set: HashSet<&str> = variants.iter().map(String::as_str).collect();
-        let mut files = Vec::new();
-        let mut errors = Vec::new();
-        collect_conversation_files(&root.join("sessions"), "active", &mut files, &mut errors);
-        collect_conversation_files(
-            &root.join("archived_sessions"),
-            "archived",
-            &mut files,
-            &mut errors,
-        );
-        for (_status, path) in files {
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            let path_id = extract_uuid_like(&path_to_slash(relative));
-            let summary_id = parse_session_file(&path, true)
-                .ok()
-                .and_then(|summary| summary.id);
-            let matches = summary_id
-                .as_deref()
-                .is_some_and(|id| variant_set.contains(id))
-                || path_id
-                    .as_deref()
-                    .is_some_and(|id| variant_set.contains(id));
-            if matches {
-                relative_paths.push(path_to_slash(relative));
-            }
-        }
-    }
-
-    dedupe_strings(&mut relative_paths);
-    Ok(relative_paths)
-}
-
 fn session_id_variants(session_id: &str) -> Vec<String> {
     let raw = session_id.trim();
     let bare = raw.strip_prefix("local:").unwrap_or(raw);
@@ -1800,24 +1579,17 @@ fn session_id_variants(session_id: &str) -> Vec<String> {
     variants
 }
 
-fn expand_session_id_variants(ids: &[String]) -> Vec<String> {
-    let mut variants = ids
-        .iter()
-        .flat_map(|id| session_id_variants(id))
-        .collect::<Vec<_>>();
-    dedupe_strings(&mut variants);
-    variants
+fn session_index_entry<'a>(
+    index: &'a SessionIndex,
+    session_id: &str,
+) -> Option<&'a SessionIndexEntry> {
+    session_id_variants(session_id)
+        .into_iter()
+        .find_map(|variant| index.get(&variant))
 }
 
-fn rollout_path_to_relative(root: &Path, rollout_path: &str) -> Option<String> {
-    let path = PathBuf::from(rollout_path);
-    let relative = if path.is_absolute() {
-        path.strip_prefix(root).ok()?.to_path_buf()
-    } else {
-        path
-    };
-    ensure_session_relative_path(&relative).ok()?;
-    Some(path_to_slash(relative))
+fn session_index_title(index: &SessionIndex, session_id: &str) -> Option<String> {
+    session_index_entry(index, session_id).and_then(|entry| entry.thread_name.clone())
 }
 
 fn validate_codex_root(root: &Path) -> Result<(), String> {
@@ -1858,11 +1630,12 @@ fn validate_session_file_path(root: &Path, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> HashMap<String, IndexEntry> {
+fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> SessionIndex {
     let path = root.join("session_index.jsonl");
     let mut map = HashMap::new();
     if !path.exists() {
-        warnings.push("session_index.jsonl 不存在，已从会话文件推断标题和更新时间".to_string());
+        warnings
+            .push("session_index.jsonl 不存在，已使用其他会话元数据推断标题和更新时间".to_string());
         return map;
     }
     let file = match fs::File::open(&path) {
@@ -1885,13 +1658,19 @@ fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> HashMap<String
             raw_string_field(&value, "title"),
         ]);
         let updated_at = non_empty(raw_string_field(&value, "updated_at"));
-        map.insert(
-            id,
-            IndexEntry {
-                thread_name,
-                updated_at,
-            },
-        );
+        let previous = session_index_entry(&map, &id).cloned();
+        let entry = SessionIndexEntry {
+            thread_name: thread_name.or_else(|| {
+                previous
+                    .as_ref()
+                    .and_then(|entry| entry.thread_name.clone())
+            }),
+            updated_at: updated_at
+                .or_else(|| previous.as_ref().and_then(|entry| entry.updated_at.clone())),
+        };
+        for variant in session_id_variants(&id) {
+            map.insert(variant, entry.clone());
+        }
     }
     map
 }
@@ -1938,8 +1717,8 @@ fn conversation_from_path(
     root: &Path,
     path: &Path,
     status: &str,
-    index: &HashMap<String, IndexEntry>,
     include_sha: bool,
+    session_index: &SessionIndex,
 ) -> Result<ConversationItem, String> {
     let metadata = fs::metadata(path)
         .map_err(|err| format!("读取会话文件信息失败 {}: {err}", path.display()))?;
@@ -1956,20 +1735,19 @@ fn conversation_from_path(
         .clone()
         .or_else(|| extract_uuid_like(&relative_path))
         .unwrap_or_else(|| relative_path.clone());
-    let index_entry = index.get(&id);
-    let title = index_entry
-        .and_then(|entry| entry.thread_name.clone())
-        .or_else(|| summary.title.clone())
+    let title = session_index_title(session_index, &id)
         .or_else(|| {
-            summary
-                .first_user_message
-                .clone()
-                .map(|text| truncate_text(&text, 48))
+            summary.title.clone().or_else(|| {
+                summary
+                    .first_user_message
+                    .clone()
+                    .map(|text| truncate_text(&text, 48))
+            })
         })
         .unwrap_or_else(|| "未命名会话".to_string());
-    let updated_at = index_entry
-        .and_then(|entry| entry.updated_at.clone())
-        .or_else(|| summary.updated_at.clone())
+    let updated_at = summary
+        .updated_at
+        .clone()
         .or_else(|| system_time_to_rfc3339(metadata.modified().ok()));
     let sha256 = if include_sha {
         Some(sha256_file(path)?)
@@ -1992,105 +1770,211 @@ fn conversation_from_path(
     })
 }
 
-fn append_missing_state_thread_conversations(
+fn read_current_state_conversations(
     root: &Path,
-    conversations: &mut Vec<ConversationItem>,
-    warnings: &mut Vec<String>,
-) {
-    let state_db = codex_state_db_path_from_home(root);
+    session_index: &SessionIndex,
+) -> Result<CurrentStateCatalog, String> {
+    let state_db = codex_state_db_path_for_root(root)?;
     if !state_db.exists() {
-        return;
+        return Err(format!(
+            "未检测到新版 Codex 数据库 {}，请先启动新版 ChatGPT Desktop 完成初始化",
+            state_db.display()
+        ));
     }
-
-    let seen_ids: HashSet<String> = conversations.iter().map(|item| item.id.clone()).collect();
-    let Ok(connection) = Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         &state_db,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
-        warnings.push("读取 Codex Desktop 会话索引失败，已跳过残留项检查".to_string());
-        return;
+    )
+    .map_err(|err| {
+        format!(
+            "打开新版 Codex state 数据库失败 {}: {err}",
+            state_db.display()
+        )
+    })?;
+    connection
+        .busy_timeout(Duration::from_millis(3000))
+        .map_err(|err| format!("配置新版 Codex state 数据库等待超时失败: {err}"))?;
+    let Some(schema) = state_threads_schema(&connection)? else {
+        return Err("新版 Codex 数据库缺少 threads 表，请更新 ChatGPT Desktop".to_string());
     };
-    let Ok(mut statement) = connection.prepare(
-        "SELECT id, rollout_path, updated_at, title, cwd, archived
-         FROM threads
-         ORDER BY updated_at DESC",
-    ) else {
-        return;
-    };
-    let Ok(rows) = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, i64>(5)?,
-        ))
-    }) else {
-        return;
-    };
+    if CURRENT_STATE_REQUIRED_COLUMNS
+        .iter()
+        .any(|column| !schema.contains_key(*column))
+        || !state_database_has_current_migrations(&connection)?
+    {
+        return Err("ChatGPT Desktop 会话数据库结构过旧，请更新到最新版本".to_string());
+    }
 
-    let mut missing_count = 0usize;
-    for row in rows.flatten() {
-        let (id, rollout_path, updated_at, title, cwd, archived) = row;
-        if seen_ids.contains(&id) {
-            continue;
-        }
-        let path = PathBuf::from(&rollout_path);
-        if !path.is_absolute() || !path.starts_with(root) || path.exists() {
-            continue;
-        }
-        let Ok(relative) = path.strip_prefix(root) else {
+    let mut statement = connection
+        .prepare(
+            "SELECT id,
+                    rollout_path,
+                    COALESCE(title, ''),
+                    COALESCE(preview, ''),
+                    COALESCE(cwd, ''),
+                    COALESCE(archived, 0),
+                    CASE
+                      WHEN COALESCE(recency_at_ms, 0) > 0 THEN recency_at_ms
+                      WHEN COALESCE(updated_at_ms, 0) > 0 THEN updated_at_ms
+                      WHEN COALESCE(recency_at, 0) > 0 THEN recency_at * 1000
+                      ELSE COALESCE(updated_at, 0) * 1000
+                    END AS effective_updated_at_ms
+             FROM threads
+             WHERE rollout_path IS NOT NULL AND TRIM(rollout_path) <> ''
+             ORDER BY recency_at_ms DESC, id DESC",
+        )
+        .map_err(|err| format!("读取新版 Codex threads 目录失败: {err}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(|err| format!("查询新版 Codex threads 目录失败: {err}"))?;
+
+    let mut conversations = Vec::new();
+    let mut indexed_paths = HashSet::new();
+    let mut invalid_paths = 0usize;
+    let mut duplicate_paths = 0usize;
+    for row in rows {
+        let (id, rollout_path, title, preview, cwd, archived, updated_at_ms) =
+            row.map_err(|err| format!("解析新版 Codex thread 失败: {err}"))?;
+        let Some((path, relative)) = resolve_state_rollout_path(root, &rollout_path) else {
+            invalid_paths += 1;
             continue;
         };
-        let relative_path = path_to_slash(relative);
-        if ensure_session_relative_path(relative).is_err() {
+        let Ok(metadata) = path.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
             continue;
         }
+        let path_key = conversation_path_key(&path);
+        if !indexed_paths.insert(path_key) {
+            duplicate_paths += 1;
+            continue;
+        }
+        let relative_path = path_to_slash(&relative);
+        let preview = non_empty(preview);
         conversations.push(ConversationItem {
-            id,
-            title: if title.trim().is_empty() {
-                "缺失的会话文件".to_string()
-            } else {
-                title
-            },
-            updated_at: timestamp_seconds_to_rfc3339(updated_at),
+            id: id.clone(),
+            title: session_index_title(session_index, &id)
+                .or_else(|| non_empty(title))
+                .or_else(|| preview.clone().map(|value| truncate_text(&value, 48)))
+                .unwrap_or_else(|| id.clone()),
+            updated_at: timestamp_millis_to_rfc3339(updated_at_ms)
+                .or_else(|| system_time_to_rfc3339(metadata.modified().ok())),
             status: if archived == 0 {
                 "active".to_string()
             } else {
                 "archived".to_string()
             },
-            source_path: rollout_path,
+            source_path: path.to_string_lossy().to_string(),
             relative_path,
-            size_bytes: 0,
+            size_bytes: metadata.len(),
             cwd: non_empty(cwd),
-            preview: None,
+            preview,
             sha256: None,
-            parse_error: Some("会话文件已不存在，仅保留 Codex Desktop 索引".to_string()),
+            parse_error: None,
         });
-        missing_count += 1;
     }
-    if missing_count > 0 {
+
+    let mut warnings = Vec::new();
+    if invalid_paths > 0 {
         warnings.push(format!(
-            "发现 {missing_count} 条 Codex Desktop 残留索引，可选中后删除清理"
+            "已忽略 {invalid_paths} 条不属于当前 Codex 数据目录的新版索引"
         ));
     }
+    if duplicate_paths > 0 {
+        warnings.push(format!("已忽略 {duplicate_paths} 条重复的新版会话索引"));
+    }
+    Ok(CurrentStateCatalog {
+        conversations,
+        indexed_paths,
+        warnings,
+    })
 }
 
-fn warn_archived_session_index_entries(
-    conversations: &[ConversationItem],
-    index: &HashMap<String, IndexEntry>,
-    warnings: &mut Vec<String>,
-) {
-    let archived_count = conversations
-        .iter()
-        .filter(|item| item.status == "archived")
-        .filter(|item| index.contains_key(&item.id))
-        .count();
-    if archived_count > 0 {
-        warnings.push(format!(
-            "发现 {archived_count} 条已归档会话的 Codex 索引残留，可选中后删除清理"
-        ));
+fn current_state_conversation_for_path(
+    root: &Path,
+    path: &Path,
+    session_index: &SessionIndex,
+) -> Result<Option<ConversationItem>, String> {
+    let target = conversation_path_key(path);
+    let catalog = read_current_state_conversations(root, session_index)?;
+    Ok(catalog
+        .conversations
+        .into_iter()
+        .find(|item| conversation_path_key(Path::new(&item.source_path)) == target))
+}
+
+fn resolve_state_rollout_path(root: &Path, rollout_path: &str) -> Option<(PathBuf, PathBuf)> {
+    let raw = rollout_path.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let raw = raw.strip_prefix(r"\\?\").unwrap_or(raw);
+    let candidate = PathBuf::from(raw);
+    let (path, relative) = if candidate.is_absolute() {
+        let relative = relative_path_under_root(root, &candidate)?;
+        (candidate, relative)
+    } else {
+        let normalized = normalize_relative_path(&path_to_slash(&candidate)).ok()?;
+        (root.join(&normalized), normalized)
+    };
+    ensure_session_relative_path(&relative).ok()?;
+    Some((path, relative))
+}
+
+fn relative_path_under_root(root: &Path, path: &Path) -> Option<PathBuf> {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return Some(relative.to_path_buf());
+    }
+    if path.exists() {
+        let canonical_root = root.canonicalize().ok()?;
+        let canonical_path = path.canonicalize().ok()?;
+        if let Ok(relative) = canonical_path.strip_prefix(canonical_root) {
+            return Some(relative.to_path_buf());
+        }
+    }
+    if cfg!(windows) {
+        let root_text = path_to_slash(root).trim_end_matches('/').to_string();
+        let path_text = path_to_slash(path);
+        if path_text.len() > root_text.len()
+            && path_text[..root_text.len()].eq_ignore_ascii_case(&root_text)
+            && path_text.as_bytes().get(root_text.len()) == Some(&b'/')
+        {
+            return normalize_relative_path(&path_text[root_text.len() + 1..]).ok();
+        }
+    }
+    None
+}
+
+fn conversation_path_key(path: &Path) -> String {
+    normalized_path_identity(path)
+}
+
+fn normalized_path_identity(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut value = resolved.to_string_lossy().replace('\\', "/");
+    if let Some(rest) = value.strip_prefix("//?/UNC/") {
+        value = format!("//{rest}");
+    } else if let Some(rest) = value.strip_prefix("//?/") {
+        value = rest.to_string();
+    }
+    while value.len() > 1 && value.ends_with('/') {
+        value.pop();
+    }
+    if cfg!(windows) {
+        value.to_ascii_lowercase()
+    } else {
+        value
     }
 }
 
@@ -2098,6 +1982,7 @@ fn parse_session_file_for_list(path: &Path) -> Result<SessionSummary, String> {
     parse_session_file_with_limit(path, false, Some(240))
 }
 
+#[cfg(test)]
 fn parse_session_file(path: &Path, include_messages: bool) -> Result<SessionSummary, String> {
     parse_session_file_with_limit(path, include_messages, None)
 }
@@ -2138,10 +2023,42 @@ fn parse_session_file_with_limit(
                 &mut summary.cwd,
                 non_empty(raw_string_field(payload, "cwd")),
             );
+            set_first(&mut summary.source, session_source(payload));
+            set_first(
+                &mut summary.thread_source,
+                non_empty(raw_string_field(payload, "thread_source")),
+            );
             set_first(
                 &mut summary.model_provider,
                 non_empty(raw_string_field(payload, "model_provider")),
             );
+            set_first(
+                &mut summary.cli_version,
+                non_empty(raw_string_field(payload, "cli_version")),
+            );
+            set_first(
+                &mut summary.agent_nickname,
+                non_empty(raw_string_field(payload, "agent_nickname")),
+            );
+            set_first(
+                &mut summary.agent_role,
+                non_empty(raw_string_field(payload, "agent_role")),
+            );
+            set_first(
+                &mut summary.agent_path,
+                non_empty(raw_string_field(payload, "agent_path")),
+            );
+            set_first(
+                &mut summary.history_mode,
+                non_empty(raw_string_field(payload, "history_mode")),
+            );
+            set_first(
+                &mut summary.parent_thread_id,
+                session_parent_thread_id(payload),
+            );
+            if summary.dynamic_tools.is_empty() {
+                summary.dynamic_tools = session_dynamic_tools(payload);
+            }
             continue;
         }
 
@@ -2244,6 +2161,293 @@ fn parse_session_file_with_limit(
     Ok(summary)
 }
 
+fn begin_preview_request(request_id: Option<u64>) {
+    if let Some(request_id) = request_id.filter(|value| *value > 0) {
+        LATEST_PREVIEW_REQUEST_ID.store(request_id, Ordering::Release);
+    }
+}
+
+fn preview_request_cancelled(request_id: Option<u64>) -> bool {
+    request_id
+        .filter(|value| *value > 0)
+        .is_some_and(|request_id| LATEST_PREVIEW_REQUEST_ID.load(Ordering::Acquire) != request_id)
+}
+
+fn ensure_preview_request_current(request_id: Option<u64>) -> Result<(), String> {
+    if preview_request_cancelled(request_id) {
+        Err(PREVIEW_CANCELLED_ERROR.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn normalize_preview_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(PREVIEW_MESSAGE_LIMIT_DEFAULT)
+        .clamp(1, PREVIEW_MESSAGE_LIMIT_MAX)
+}
+
+fn parse_preview_message_source(
+    source: Option<&str>,
+) -> Result<Option<PreviewMessageSource>, String> {
+    match source.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some("event") => Ok(Some(PreviewMessageSource::Event)),
+        Some("response") => Ok(Some(PreviewMessageSource::Response)),
+        Some(other) => Err(format!("不支持的会话消息来源: {other}")),
+    }
+}
+
+fn read_preview_message_page(
+    path: &Path,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<&str>,
+    request_id: Option<u64>,
+) -> Result<PreviewMessagePage, String> {
+    ensure_preview_request_current(request_id)?;
+    let limit = normalize_preview_limit(limit);
+    let source = parse_preview_message_source(message_source)?;
+    if let Some(source) = source {
+        return scan_preview_message_source(
+            path,
+            before_cursor,
+            snapshot_size,
+            limit,
+            source,
+            request_id,
+        );
+    }
+
+    let event_page = scan_preview_message_source(
+        path,
+        before_cursor,
+        snapshot_size,
+        limit,
+        PreviewMessageSource::Event,
+        request_id,
+    )?;
+    if !event_page.messages.is_empty() {
+        return Ok(event_page);
+    }
+    scan_preview_message_source(
+        path,
+        before_cursor,
+        snapshot_size,
+        limit,
+        PreviewMessageSource::Response,
+        request_id,
+    )
+}
+
+fn scan_preview_message_source(
+    path: &Path,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: usize,
+    source: PreviewMessageSource,
+    request_id: Option<u64>,
+) -> Result<PreviewMessagePage, String> {
+    let current_file_size = fs::metadata(path)
+        .map_err(|err| format!("读取会话文件信息失败 {}: {err}", path.display()))?
+        .len();
+    if snapshot_size.is_some_and(|snapshot| current_file_size < snapshot) {
+        return Err("会话文件已变化，请重新加载最新内容".to_string());
+    }
+    let file_size = snapshot_size.unwrap_or(current_file_size);
+    let mut position = before_cursor.unwrap_or(file_size).min(file_size);
+    let mut file = fs::File::open(path)
+        .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
+    let mut carry = Vec::new();
+    let mut matches = Vec::<(u64, ConversationMessage)>::new();
+
+    'scan: while position > 0 {
+        ensure_preview_request_current(request_id)?;
+        let start = position.saturating_sub(PREVIEW_REVERSE_READ_BLOCK_BYTES as u64);
+        let block_len = usize::try_from(position - start)
+            .map_err(|_| format!("会话文件分段长度无效: {}", path.display()))?;
+        let mut block = vec![0u8; block_len];
+        file.seek(SeekFrom::Start(start))
+            .map_err(|err| format!("定位会话文件失败 {}: {err}", path.display()))?;
+        file.read_exact(&mut block)
+            .map_err(|err| format!("分段读取会话文件失败 {}: {err}", path.display()))?;
+        block.extend_from_slice(&carry);
+
+        let mut segment_end = block.len();
+        for newline in (0..block.len())
+            .rev()
+            .filter(|index| block[*index] == b'\n')
+        {
+            let segment_start = newline + 1;
+            if segment_start < segment_end {
+                let line_offset = start.saturating_add(segment_start as u64);
+                if let Some(message) = preview_message_from_jsonl_line(
+                    &block[segment_start..segment_end],
+                    source,
+                    line_offset,
+                ) {
+                    matches.push((line_offset, message));
+                    if matches.len() > limit {
+                        break 'scan;
+                    }
+                }
+            }
+            segment_end = newline;
+        }
+
+        if start == 0 {
+            if segment_end > 0 {
+                if let Some(message) =
+                    preview_message_from_jsonl_line(&block[..segment_end], source, 0)
+                {
+                    matches.push((0, message));
+                }
+            }
+            position = 0;
+        } else {
+            carry.clear();
+            carry.extend_from_slice(&block[..segment_end]);
+            position = start;
+        }
+    }
+
+    ensure_preview_request_current(request_id)?;
+    let has_more = matches.len() > limit;
+    if has_more {
+        matches.truncate(limit);
+    }
+    let next_before = has_more
+        .then(|| matches.last().map(|item| item.0))
+        .flatten();
+    let messages = matches
+        .into_iter()
+        .rev()
+        .map(|(_, message)| message)
+        .collect();
+    Ok(PreviewMessagePage {
+        messages,
+        source,
+        next_before,
+        has_more,
+        file_size,
+    })
+}
+
+fn preview_message_from_jsonl_line(
+    line: &[u8],
+    source: PreviewMessageSource,
+    offset: u64,
+) -> Option<ConversationMessage> {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let value = serde_json::from_slice::<Value>(line).ok()?;
+    let event_type = raw_string_field(&value, "type");
+    let payload = value.get("payload")?;
+    let payload_type = raw_string_field(payload, "type");
+    let (role, text) = match source {
+        PreviewMessageSource::Event if event_type == "event_msg" => {
+            let role = match payload_type.as_str() {
+                "user_message" => "user",
+                "agent_message" => "assistant",
+                _ => return None,
+            };
+            (role, readable_payload_text(payload)?)
+        }
+        PreviewMessageSource::Response
+            if event_type == "response_item" && payload_type == "message" =>
+        {
+            let role = raw_string_field(payload, "role");
+            if role != "user" && role != "assistant" {
+                return None;
+            }
+            let text = readable_payload_text(payload)?;
+            (if role == "user" { "user" } else { "assistant" }, text)
+        }
+        _ => return None,
+    };
+    Some(ConversationMessage {
+        role: role.to_string(),
+        text,
+        timestamp: non_empty(raw_string_field(&value, "timestamp")),
+        offset: Some(offset),
+    })
+}
+
+fn session_source(payload: &Value) -> Option<String> {
+    let source = payload.get("source")?;
+    if let Some(value) = source.as_str().map(str::to_string).and_then(non_empty) {
+        return Some(value);
+    }
+    if source.is_object() || source.is_array() {
+        return serde_json::to_string(source).ok();
+    }
+    None
+}
+
+fn session_parent_thread_id(payload: &Value) -> Option<String> {
+    first_non_empty(&[
+        raw_string_field(payload, "parent_thread_id"),
+        raw_string_field(payload, "forked_from_id"),
+        payload
+            .pointer("/source/subagent/thread_spawn/parent_thread_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    ])
+}
+
+fn session_dynamic_tools(payload: &Value) -> Vec<ThreadDynamicToolMetadata> {
+    let Some(items) = payload.get("dynamic_tools").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut tools = Vec::new();
+    for item in items {
+        let item_type = raw_string_field(item, "type");
+        if item_type == "namespace" {
+            let namespace = non_empty(raw_string_field(item, "name"));
+            for tool in item
+                .get("tools")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(tool) = dynamic_tool_metadata(tool, namespace.clone()) {
+                    tools.push(tool);
+                }
+            }
+        } else if let Some(tool) = dynamic_tool_metadata(item, None) {
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
+fn dynamic_tool_metadata(
+    value: &Value,
+    namespace: Option<String>,
+) -> Option<ThreadDynamicToolMetadata> {
+    if raw_string_field(value, "type") != "function" {
+        return None;
+    }
+    let name = non_empty(raw_string_field(value, "name"))?;
+    let input_schema = value
+        .get("inputSchema")
+        .or_else(|| value.get("input_schema"))
+        .and_then(|schema| serde_json::to_string(schema).ok())
+        .unwrap_or_else(|| "{}".to_string());
+    Some(ThreadDynamicToolMetadata {
+        name,
+        description: raw_string_field(value, "description"),
+        input_schema,
+        defer_loading: value
+            .get("deferLoading")
+            .or_else(|| value.get("defer_loading"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        namespace,
+    })
+}
+
 fn readable_payload_text(payload: &Value) -> Option<String> {
     let message = raw_string_field(payload, "message");
     if !message.trim().is_empty() {
@@ -2303,6 +2507,7 @@ fn push_readable_message(
             role: role.to_string(),
             text,
             timestamp,
+            offset: None,
         });
     }
 }
@@ -2398,112 +2603,13 @@ fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
     Ok(())
 }
 
-fn update_session_index_from_manifest(
-    root: &Path,
-    sessions: &[ManifestSession],
-) -> Result<(), String> {
-    let path = root.join("session_index.jsonl");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("创建索引目录失败: {err}"))?;
-    }
-    let mut update_ids = HashSet::new();
-    for session in sessions {
-        update_ids.insert(session.id.clone());
-    }
-    let mut lines = Vec::new();
-    if path.exists() {
-        let content = fs::read_to_string(&path)
-            .map_err(|err| format!("读取 session_index.jsonl 失败: {err}"))?;
-        for line in content.lines() {
-            let keep = serde_json::from_str::<Value>(line)
-                .ok()
-                .map(|value| raw_string_field(&value, "id"))
-                .filter(|id| !id.is_empty())
-                .is_none_or(|id| !update_ids.contains(&id));
-            if keep {
-                lines.push(line.to_string());
-            }
-        }
-    }
-    for session in sessions {
-        if session.status != "active" {
-            continue;
-        }
-        lines.push(
-            json!({
-                "id": session.id,
-                "thread_name": session.title,
-                "updated_at": session.updated_at
-            })
-            .to_string(),
-        );
-    }
-    fs::write(&path, format!("{}\n", lines.join("\n")))
-        .map_err(|err| format!("写入 session_index.jsonl 失败: {err}"))
-}
-
-fn remove_session_index_ids(root: &Path, ids: &[String]) -> Result<usize, String> {
-    remove_session_index_ids_with_reason(root, ids, "delete")
-}
-
-fn remove_session_index_ids_with_reason(
-    root: &Path,
-    ids: &[String],
-    reason: &str,
-) -> Result<usize, String> {
-    let path = root.join("session_index.jsonl");
-    if ids.is_empty() || !path.exists() {
-        return Ok(0);
-    }
-    let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    let content =
-        fs::read_to_string(&path).map_err(|err| format!("读取 session_index.jsonl 失败: {err}"))?;
-    let mut lines = Vec::new();
-    let mut removed = 0usize;
-    for line in content.lines() {
-        let remove = serde_json::from_str::<Value>(line)
-            .ok()
-            .map(|value| raw_string_field(&value, "id"))
-            .is_some_and(|id| id_set.contains(id.as_str()));
-        if !remove {
-            lines.push(line.to_string());
-        } else {
-            removed += 1;
-        }
-    }
-    if removed == 0 {
-        return Ok(0);
-    }
-    let _backup_path = backup_file_with_reason(&path, reason)?;
-    fs::write(
-        &path,
-        if lines.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", lines.join("\n"))
-        },
-    )
-    .map_err(|err| format!("写入 session_index.jsonl 失败: {err}"))?;
-    Ok(removed)
-}
-
-#[derive(Debug)]
-struct GlobalStateCleanup {
-    backup_path: PathBuf,
-    removed: usize,
-}
-
-fn remove_from_global_state(
-    root: &Path,
-    ids: &[String],
-    reason: &str,
-) -> Result<Option<GlobalStateCleanup>, String> {
+fn remove_from_global_state(root: &Path, ids: &[String], reason: &str) -> Result<(), String> {
     if ids.is_empty() {
-        return Ok(None);
+        return Ok(());
     }
     let path = root.join(".codex-global-state.json");
     if !path.exists() {
-        return Ok(None);
+        return Ok(());
     }
     let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
     let content = fs::read_to_string(&path)
@@ -2512,17 +2618,14 @@ fn remove_from_global_state(
         .map_err(|err| format!("解析 .codex-global-state.json 失败: {err}"))?;
     let removed = remove_matching_object_keys(&mut value, &id_set);
     if removed == 0 {
-        return Ok(None);
+        return Ok(());
     }
-    let backup_path = backup_file_with_reason(&path, reason)?;
+    backup_file_with_reason(&path, reason)?;
     let mut output = serde_json::to_string_pretty(&value)
         .map_err(|err| format!("序列化 .codex-global-state.json 失败: {err}"))?;
     output.push('\n');
     fs::write(&path, output).map_err(|err| format!("写入 .codex-global-state.json 失败: {err}"))?;
-    Ok(Some(GlobalStateCleanup {
-        backup_path,
-        removed,
-    }))
+    Ok(())
 }
 
 fn remove_matching_object_keys(value: &mut Value, ids: &HashSet<&str>) -> usize {
@@ -2538,8 +2641,16 @@ fn remove_matching_object_keys(value: &mut Value, ids: &HashSet<&str>) -> usize 
                 map.remove(&key);
                 removed += 1;
             }
-            for value in map.values_mut() {
-                removed += remove_matching_object_keys(value, ids);
+            for (key, value) in map.iter_mut() {
+                if matches!(key.as_str(), "pinned-thread-ids" | "pinnedThreadIds") {
+                    if let Value::Array(items) = value {
+                        let before = items.len();
+                        items.retain(|item| item.as_str().is_none_or(|id| !ids.contains(id)));
+                        removed += before.saturating_sub(items.len());
+                    }
+                } else {
+                    removed += remove_matching_object_keys(value, ids);
+                }
             }
             removed
         }
@@ -2551,79 +2662,13 @@ fn remove_matching_object_keys(value: &mut Value, ids: &HashSet<&str>) -> usize 
     }
 }
 
-fn read_deleted_session_records() -> Result<Vec<DeletedSessionRecord>, String> {
-    let dir = deleted_sessions_dir()?;
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let entries = fs::read_dir(&dir)
-        .map_err(|err| format!("读取已删除会话目录失败 {}: {err}", dir.display()))?;
-    let mut records = Vec::new();
-    for entry in entries {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        if let Ok(record) = read_deleted_session_record(&entry.path()) {
-            records.push(record);
-        }
-    }
-    Ok(records)
-}
-
-fn read_deleted_session_record(record_dir: &Path) -> Result<DeletedSessionRecord, String> {
-    let path = record_dir.join("metadata.json");
-    let content = fs::read_to_string(&path)
-        .map_err(|err| format!("读取已删除会话元数据失败 {}: {err}", path.display()))?;
-    serde_json::from_str(&content)
-        .map_err(|err| format!("解析已删除会话元数据失败 {}: {err}", path.display()))
-}
-
-fn write_deleted_session_record(
-    record_dir: &Path,
-    record: &DeletedSessionRecord,
-) -> Result<(), String> {
-    let path = record_dir.join("metadata.json");
-    let mut content = serde_json::to_string_pretty(record)
-        .map_err(|err| format!("序列化已删除会话元数据失败: {err}"))?;
-    content.push('\n');
-    fs::write(&path, content)
-        .map_err(|err| format!("写入已删除会话元数据失败 {}: {err}", path.display()))
-}
-
-fn remove_deleted_session_records(records: &[DeletedSessionRecord]) {
-    for record in records {
-        if let Ok(dir) = deleted_session_record_dir(&record.delete_id) {
-            let _ = fs::remove_dir_all(dir);
-        }
-    }
-}
-
-fn should_rebuild_deleted_title(title: &str) -> bool {
-    title.trim().is_empty() || title == "未命名会话"
-}
-
-fn deleted_title_from_summary(summary: &SessionSummary) -> String {
+fn conversation_title_from_summary(summary: &SessionSummary) -> String {
     summary
         .title
         .clone()
         .or_else(|| summary.first_user_message.clone())
         .map(|value| truncate_text(&value, 80))
         .unwrap_or_else(|| "未命名会话".to_string())
-}
-
-fn deleted_sessions_dir() -> Result<PathBuf, String> {
-    Ok(session_manager_data_dir()?.join(DELETED_SESSIONS_DIR))
-}
-
-fn deleted_session_record_dir(delete_id: &str) -> Result<PathBuf, String> {
-    validate_delete_id(delete_id)?;
-    Ok(deleted_sessions_dir()?.join(delete_id))
 }
 
 fn session_manager_data_dir() -> Result<PathBuf, String> {
@@ -2635,12 +2680,23 @@ fn session_manager_backup_dir(reason: &str) -> Result<PathBuf, String> {
     Ok(session_manager_data_dir()?.join("backups").join(reason))
 }
 
-fn unique_delete_id(id: &str) -> String {
+fn unique_backup_id(id: &str) -> String {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     format!("{}-{}-{suffix}", backup_stamp(), sanitize_id_fragment(id))
+}
+
+fn status_overwrite_backup_path(target: &Path, id: &str) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session.jsonl");
+    target.with_file_name(format!(
+        ".{file_name}.codex-switch-overwrite-{}",
+        unique_backup_id(id)
+    ))
 }
 
 fn sanitize_id_fragment(id: &str) -> String {
@@ -2671,26 +2727,6 @@ fn sanitize_backup_reason(reason: &str) -> String {
 fn dedupe_strings(items: &mut Vec<String>) {
     let mut seen = HashSet::new();
     items.retain(|item| seen.insert(item.clone()));
-}
-
-fn validate_delete_id(delete_id: &str) -> Result<(), String> {
-    if delete_id.trim().is_empty()
-        || !delete_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
-    {
-        return Err("已删除会话 ID 无效".to_string());
-    }
-    Ok(())
-}
-
-fn backup_session_index(root: &Path) -> Result<Option<PathBuf>, String> {
-    let path = root.join("session_index.jsonl");
-    if path.exists() {
-        backup_file(&path).map(Some)
-    } else {
-        Ok(None)
-    }
 }
 
 fn backup_file(path: &Path) -> Result<PathBuf, String> {
@@ -2765,6 +2801,10 @@ fn sqlite_string_literal(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
+fn quote_sqlite_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
 fn unique_sibling_path(path: &Path, base_name: &str) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     for index in 0..1000 {
@@ -2827,7 +2867,7 @@ fn thread_metadata_from_manifest(
         rollout_path: target_path.to_path_buf(),
         created_at,
         updated_at,
-        source: "cli".to_string(),
+        source: summary.source.clone().unwrap_or_else(|| "cli".to_string()),
         model_provider: summary
             .model_provider
             .clone()
@@ -2853,17 +2893,41 @@ fn thread_metadata_from_manifest(
         } else {
             None
         },
+        cli_version: summary.cli_version.clone().unwrap_or_default(),
         first_user_message: summary.first_user_message.clone().unwrap_or_default(),
+        agent_nickname: summary.agent_nickname.clone(),
+        agent_role: summary.agent_role.clone(),
         model: summary.model.clone(),
         reasoning_effort: summary.reasoning_effort.clone(),
+        agent_path: summary.agent_path.clone(),
+        thread_source: summary.thread_source.clone(),
+        preview: summary.preview.clone().unwrap_or_default(),
+        history_mode: summary
+            .history_mode
+            .clone()
+            .unwrap_or_else(|| "legacy".to_string()),
+        parent_thread_id: summary.parent_thread_id.clone(),
+        dynamic_tools: summary.dynamic_tools.clone(),
     }
 }
 
 fn upsert_state_threads(root: &Path, items: &[ThreadMetadata]) -> Result<usize, String> {
+    write_state_threads(root, items, false)
+}
+
+fn insert_missing_state_threads(root: &Path, items: &[ThreadMetadata]) -> Result<usize, String> {
+    write_state_threads(root, items, true)
+}
+
+fn write_state_threads(
+    root: &Path,
+    items: &[ThreadMetadata],
+    insert_only: bool,
+) -> Result<usize, String> {
     if items.is_empty() {
         return Ok(0);
     }
-    let state_db = codex_state_db_path_from_home(root);
+    let state_db = codex_state_db_path_for_root(root)?;
     if !state_db.exists() {
         return Ok(0);
     }
@@ -2913,7 +2977,7 @@ fn upsert_state_threads(root: &Path, items: &[ThreadMetadata]) -> Result<usize, 
         .filter(|column| insert_columns.contains(column))
         .copied()
         .collect::<Vec<_>>();
-    let update_clause = if update_columns.is_empty() {
+    let update_clause = if insert_only || update_columns.is_empty() {
         "DO NOTHING".to_string()
     } else {
         format!(
@@ -2931,6 +2995,24 @@ fn upsert_state_threads(root: &Path, items: &[ThreadMetadata]) -> Result<usize, 
         placeholders,
         update_clause
     );
+    let has_thread_spawn_edges = state_table_has_columns(
+        &connection,
+        "thread_spawn_edges",
+        &["parent_thread_id", "child_thread_id", "status"],
+    )?;
+    let has_thread_dynamic_tools = state_table_has_columns(
+        &connection,
+        "thread_dynamic_tools",
+        &[
+            "thread_id",
+            "position",
+            "name",
+            "description",
+            "input_schema",
+            "defer_loading",
+            "namespace",
+        ],
+    )?;
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 索引事务失败: {err}"))?;
@@ -2940,9 +3022,14 @@ fn upsert_state_threads(root: &Path, items: &[ThreadMetadata]) -> Result<usize, 
             .iter()
             .map(|column| thread_metadata_sql_value(item, column))
             .collect::<Vec<_>>();
-        updated += transaction
+        let affected = transaction
             .execute(&sql, params_from_iter(values.iter()))
             .map_err(|err| format!("更新 Codex Desktop threads 索引失败: {err}"))?;
+        updated += affected;
+        if !insert_only || affected > 0 {
+            sync_thread_spawn_edge(&transaction, item, has_thread_spawn_edges)?;
+            sync_thread_dynamic_tools(&transaction, item, has_thread_dynamic_tools)?;
+        }
     }
     transaction
         .commit()
@@ -2967,27 +3054,43 @@ const THREAD_METADATA_COLUMNS: &[&str] = &[
     "archived_at",
     "cli_version",
     "first_user_message",
+    "agent_nickname",
+    "agent_role",
     "memory_mode",
     "model",
     "reasoning_effort",
+    "agent_path",
     "created_at_ms",
     "updated_at_ms",
     "thread_source",
+    "preview",
+    "recency_at",
+    "recency_at_ms",
+    "history_mode",
 ];
 
 const THREAD_METADATA_UPDATE_COLUMNS: &[&str] = &[
     "rollout_path",
+    "source",
     "updated_at",
     "model_provider",
     "cwd",
     "title",
     "archived",
     "archived_at",
+    "cli_version",
     "first_user_message",
+    "agent_nickname",
+    "agent_role",
     "model",
     "reasoning_effort",
+    "agent_path",
     "updated_at_ms",
     "thread_source",
+    "preview",
+    "recency_at",
+    "recency_at_ms",
+    "history_mode",
 ];
 
 #[derive(Debug)]
@@ -3023,8 +3126,18 @@ fn thread_metadata_sql_value(item: &ThreadMetadata, column: &str) -> rusqlite::t
             .archived_at
             .map(SqlValue::Integer)
             .unwrap_or(SqlValue::Null),
-        "cli_version" => SqlValue::Text(String::new()),
+        "cli_version" => SqlValue::Text(item.cli_version.clone()),
         "first_user_message" => SqlValue::Text(item.first_user_message.clone()),
+        "agent_nickname" => item
+            .agent_nickname
+            .clone()
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
+        "agent_role" => item
+            .agent_role
+            .clone()
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
         "memory_mode" => SqlValue::Text("enabled".to_string()),
         "model" => item
             .model
@@ -3036,18 +3149,92 @@ fn thread_metadata_sql_value(item: &ThreadMetadata, column: &str) -> rusqlite::t
             .clone()
             .map(SqlValue::Text)
             .unwrap_or(SqlValue::Null),
+        "agent_path" => item
+            .agent_path
+            .clone()
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
         "created_at_ms" => SqlValue::Integer(item.created_at.saturating_mul(1000)),
         "updated_at_ms" => SqlValue::Integer(item.updated_at.saturating_mul(1000)),
-        "thread_source" => SqlValue::Text("local".to_string()),
+        "thread_source" => item
+            .thread_source
+            .clone()
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
+        "preview" => SqlValue::Text(item.preview.clone()),
+        "recency_at" => SqlValue::Integer(item.updated_at),
+        "recency_at_ms" => SqlValue::Integer(item.updated_at.saturating_mul(1000)),
+        "history_mode" => SqlValue::Text(item.history_mode.clone()),
         _ => SqlValue::Null,
     }
 }
 
-#[derive(Debug, Default)]
-struct StateThreadDeleteReport {
-    deleted: usize,
-    ids: Vec<String>,
-    backup_path: Option<PathBuf>,
+fn sync_thread_spawn_edge(
+    transaction: &rusqlite::Transaction<'_>,
+    item: &ThreadMetadata,
+    enabled: bool,
+) -> Result<(), String> {
+    if !enabled {
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "DELETE FROM thread_spawn_edges WHERE child_thread_id = ?1",
+            [&item.id],
+        )
+        .map_err(|err| format!("清理 Codex thread parent 索引失败: {err}"))?;
+    let Some(parent_thread_id) = item.parent_thread_id.as_deref().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }) else {
+        return Ok(());
+    };
+    transaction
+        .execute(
+            "INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
+             VALUES (?1, ?2, 'closed')
+             ON CONFLICT(child_thread_id) DO UPDATE SET
+               parent_thread_id = excluded.parent_thread_id,
+               status = excluded.status",
+            params![parent_thread_id, item.id],
+        )
+        .map_err(|err| format!("更新 Codex thread parent 索引失败: {err}"))?;
+    Ok(())
+}
+
+fn sync_thread_dynamic_tools(
+    transaction: &rusqlite::Transaction<'_>,
+    item: &ThreadMetadata,
+    enabled: bool,
+) -> Result<(), String> {
+    if !enabled {
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "DELETE FROM thread_dynamic_tools WHERE thread_id = ?1",
+            [&item.id],
+        )
+        .map_err(|err| format!("清理 Codex thread dynamic tools 失败: {err}"))?;
+    for (position, tool) in item.dynamic_tools.iter().enumerate() {
+        transaction
+            .execute(
+                "INSERT INTO thread_dynamic_tools
+                 (thread_id, position, name, description, input_schema, defer_loading, namespace)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    item.id,
+                    position as i64,
+                    tool.name,
+                    tool.description,
+                    tool.input_schema,
+                    i64::from(tool.defer_loading),
+                    tool.namespace
+                ],
+            )
+            .map_err(|err| format!("更新 Codex thread dynamic tools 失败: {err}"))?;
+    }
+    Ok(())
 }
 
 fn update_state_thread_status(
@@ -3058,7 +3245,7 @@ fn update_state_thread_status(
     if moves.is_empty() {
         return Ok(None);
     }
-    let state_db = codex_state_db_path_from_home(root);
+    let state_db = codex_state_db_path_for_root(root)?;
     if !state_db.exists() {
         return Ok(None);
     }
@@ -3111,10 +3298,10 @@ fn delete_state_threads_for_sessions(
     root: &Path,
     ids: &[String],
     rollout_paths: &[PathBuf],
-) -> Result<StateThreadDeleteReport, String> {
-    let state_db = codex_state_db_path_from_home(root);
+) -> Result<(), String> {
+    let state_db = codex_state_db_path_for_root(root)?;
     if !state_db.exists() {
-        return Ok(StateThreadDeleteReport::default());
+        return Ok(());
     }
     let mut connection = Connection::open_with_flags(
         &state_db,
@@ -3127,7 +3314,7 @@ fn delete_state_threads_for_sessions(
 
     let mut delete_ids: HashSet<String> = ids.iter().cloned().collect();
     if !state_threads_has_columns(&connection, &["id"])? {
-        return Ok(StateThreadDeleteReport::default());
+        return Ok(());
     }
     for path in rollout_paths {
         for path_text in rollout_path_lookup_values(root, path) {
@@ -3145,7 +3332,7 @@ fn delete_state_threads_for_sessions(
     }
 
     if delete_ids.is_empty() {
-        return Ok(StateThreadDeleteReport::default());
+        return Ok(());
     }
 
     let has_thread_dynamic_tools =
@@ -3161,11 +3348,10 @@ fn delete_state_threads_for_sessions(
     let has_agent_job_items =
         state_table_has_columns(&connection, "agent_job_items", &["assigned_thread_id"])?;
 
-    let backup_path = backup_state_database_for_delete(&connection, root)?;
+    backup_state_database_for_delete(&connection, root)?;
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 删除事务失败: {err}"))?;
-    let mut deleted = 0usize;
     let mut ids: Vec<String> = delete_ids.into_iter().collect();
     ids.sort();
     for id in &ids {
@@ -3203,7 +3389,7 @@ fn delete_state_threads_for_sessions(
                 )
                 .map_err(|err| format!("清理 Codex Desktop agent_job_items 失败: {err}"))?;
         }
-        deleted += transaction
+        transaction
             .execute("DELETE FROM threads WHERE id = ?1", [id])
             .map_err(|err| format!("删除 Codex Desktop threads 索引失败: {err}"))?;
     }
@@ -3211,11 +3397,7 @@ fn delete_state_threads_for_sessions(
         .commit()
         .map_err(|err| format!("保存 Codex Desktop threads 删除结果失败: {err}"))?;
     let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-    Ok(StateThreadDeleteReport {
-        deleted,
-        ids,
-        backup_path: Some(backup_path),
-    })
+    Ok(())
 }
 
 fn rollout_path_lookup_values(root: &Path, path: &Path) -> Vec<String> {
@@ -3237,9 +3419,19 @@ fn rollout_path_lookup_values(root: &Path, path: &Path) -> Vec<String> {
 fn state_threads_schema(
     connection: &Connection,
 ) -> Result<Option<HashMap<String, StateThreadColumn>>, String> {
+    state_threads_schema_for(connection, "main")
+}
+
+fn state_threads_schema_for(
+    connection: &Connection,
+    schema: &str,
+) -> Result<Option<HashMap<String, StateThreadColumn>>, String> {
+    let schema_identifier = quote_sqlite_identifier(schema);
     let exists = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'threads')",
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM {schema_identifier}.sqlite_master WHERE type = 'table' AND name = 'threads')"
+            ),
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -3249,7 +3441,7 @@ fn state_threads_schema(
     }
 
     let mut statement = connection
-        .prepare("PRAGMA table_info(threads)")
+        .prepare(&format!("PRAGMA {schema_identifier}.table_info(threads)"))
         .map_err(|err| format!("读取 Codex Desktop threads 表结构失败: {err}"))?;
     let rows = statement
         .query_map([], |row| {
@@ -3306,69 +3498,6 @@ fn state_table_has_columns(
         columns.insert(row.map_err(|err| format!("读取 Codex Desktop {table} 列失败: {err}"))?);
     }
     Ok(required.iter().all(|column| columns.contains(*column)))
-}
-
-fn update_state_thread_cwds(root: &Path, items: &[(String, String)]) -> Result<usize, String> {
-    let state_db = codex_state_db_path_from_home(root);
-    if items.is_empty() || !state_db.exists() {
-        return Ok(0);
-    }
-    let mut connection = Connection::open_with_flags(
-        &state_db,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|err| format!("打开 Codex state 数据库失败 {}: {err}", state_db.display()))?;
-    connection
-        .busy_timeout(Duration::from_millis(3000))
-        .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
-    let transaction = connection
-        .transaction()
-        .map_err(|err| format!("开始 Codex state cwd 更新事务失败: {err}"))?;
-    let mut updated = 0usize;
-    for (id, cwd) in items {
-        updated += transaction
-            .execute(
-                "UPDATE threads SET cwd = ?1 WHERE id = ?2",
-                params![cwd, id],
-            )
-            .map_err(|err| format!("更新 Codex Desktop threads.cwd 失败: {err}"))?;
-    }
-    transaction
-        .commit()
-        .map_err(|err| format!("保存 Codex Desktop threads.cwd 失败: {err}"))?;
-    Ok(updated)
-}
-
-fn rewrite_session_cwd(path: &Path, cwd: &str) -> Result<bool, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
-    let mut output = String::with_capacity(content.len());
-    let mut changed = false;
-    for segment in content.split_inclusive('\n') {
-        let (line, line_ending) = split_line_ending(segment);
-        match update_cwd_line(line, cwd)? {
-            Some(updated_line) => {
-                output.push_str(&updated_line);
-                output.push_str(line_ending);
-                changed = true;
-            }
-            None => output.push_str(segment),
-        }
-    }
-    if !content.ends_with('\n') {
-        let last_line = content
-            .rsplit_once('\n')
-            .map(|(_, line)| line)
-            .unwrap_or(content.as_str());
-        if !last_line.is_empty() && !output.ends_with(last_line) {
-            // split_inclusive already handled this branch. This is a guard for future edits.
-        }
-    }
-    if changed {
-        fs::write(path, output)
-            .map_err(|err| format!("写入会话文件失败 {}: {err}", path.display()))?;
-    }
-    Ok(changed)
 }
 
 fn copy_session_with_new_id(
@@ -3428,37 +3557,6 @@ fn replace_exact_string_value(value: &mut Value, old_value: &str, new_value: &st
         }
         _ => {}
     }
-}
-
-fn update_cwd_line(line: &str, cwd: &str) -> Result<Option<String>, String> {
-    if line.trim().is_empty() {
-        return Ok(None);
-    }
-    let mut value: Value = match serde_json::from_str(line) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
-    let event_type = raw_string_field(&value, "type");
-    let should_update = event_type == "session_meta" || event_type == "turn_context" || {
-        event_type == "event_msg"
-            && value
-                .get("payload")
-                .map(|payload| raw_string_field(payload, "type") == "task_started")
-                .unwrap_or(false)
-    };
-    if !should_update {
-        return Ok(None);
-    }
-    let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut) else {
-        return Ok(None);
-    };
-    if payload.get("cwd").and_then(Value::as_str) == Some(cwd) {
-        return Ok(None);
-    }
-    payload.insert("cwd".to_string(), Value::String(cwd.to_string()));
-    serde_json::to_string(&value)
-        .map(Some)
-        .map_err(|err| format!("序列化会话 cwd 更新失败: {err}"))
 }
 
 fn split_line_ending(segment: &str) -> (&str, &str) {
@@ -3735,8 +3833,9 @@ fn system_time_to_rfc3339(time: Option<SystemTime>) -> Option<String> {
     })
 }
 
-fn timestamp_seconds_to_rfc3339(seconds: i64) -> Option<String> {
-    OffsetDateTime::from_unix_timestamp(seconds)
+fn timestamp_millis_to_rfc3339(milliseconds: i64) -> Option<String> {
+    let nanoseconds = i128::from(milliseconds).checked_mul(1_000_000)?;
+    OffsetDateTime::from_unix_timestamp_nanos(nanoseconds)
         .ok()
         .and_then(|time| {
             time.format(&time::format_description::well_known::Rfc3339)
@@ -4050,16 +4149,69 @@ mod tests {
             has_user_event: 1,
             archived: 0,
             archived_at: None,
+            cli_version: "0.144.1".to_string(),
             first_user_message: "hello".to_string(),
+            agent_nickname: None,
+            agent_role: None,
             model: Some("gpt-5.2".to_string()),
             reasoning_effort: Some("high".to_string()),
+            agent_path: None,
+            thread_source: Some("user".to_string()),
+            preview: "hello".to_string(),
+            history_mode: "legacy".to_string(),
+            parent_thread_id: None,
+            dynamic_tools: Vec::new(),
         }
+    }
+
+    fn create_current_state_db(root: &Path) -> Connection {
+        fs::create_dir_all(root).unwrap();
+        let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE _sqlx_migrations (
+                    version INTEGER PRIMARY KEY,
+                    success INTEGER NOT NULL
+                );
+                INSERT INTO _sqlx_migrations (version, success) VALUES (40, 1);
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    rollout_path TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    cwd TEXT NOT NULL DEFAULT '',
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    archived_at INTEGER,
+                    updated_at INTEGER NOT NULL DEFAULT 0,
+                    updated_at_ms INTEGER NOT NULL DEFAULT 0,
+                    preview TEXT NOT NULL DEFAULT '',
+                    recency_at INTEGER NOT NULL DEFAULT 0,
+                    recency_at_ms INTEGER NOT NULL DEFAULT 0,
+                    history_mode TEXT NOT NULL DEFAULT 'legacy'
+                );
+                "#,
+            )
+            .unwrap();
+        connection
     }
 
     #[test]
     fn relative_path_rejects_traversal() {
         assert!(normalize_relative_path("../sessions/a.jsonl").is_err());
         assert!(normalize_relative_path("sessions/2026/05/01/a.jsonl").is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn path_identity_normalizes_windows_extended_prefix_and_case() {
+        assert_eq!(
+            normalized_path_identity(Path::new(r"\\?\C:\Profiles\Example\.codex")),
+            normalized_path_identity(Path::new(r"c:\profiles\example\.codex"))
+        );
+        assert_eq!(
+            normalized_path_identity(Path::new(r"\\?\UNC\server\share\folder")),
+            normalized_path_identity(Path::new(r"\\server\share\folder"))
+        );
     }
 
     #[test]
@@ -4085,50 +4237,180 @@ mod tests {
     }
 
     #[test]
-    fn preview_deleted_session_reads_backup_messages() {
-        let record_dir = temp_path("deleted-preview");
-        fs::create_dir_all(&record_dir).unwrap();
-        let record = DeletedSessionRecord {
-            delete_id: "delete-id".to_string(),
-            id: "019e20f9-34b7-7a82-a95b-fe461de8983a".to_string(),
-            title: "已删除预览".to_string(),
-            deleted_at: "2026-05-13T10:55:00Z".to_string(),
-            updated_at: Some("2026-05-13T10:54:00Z".to_string()),
-            original_status: "active".to_string(),
-            original_relative_path: "sessions/2026/05/13/rollout-2026-05-13T10-54-00-test.jsonl"
-                .to_string(),
-            deleted_relative_path: "sessions/2026/05/13/rollout-2026-05-13T10-54-00-test.jsonl"
-                .to_string(),
-            root_path: "C:\\Users\\yuhon\\.codex".to_string(),
-            size_bytes: 0,
-            cwd: Some("C:\\work".to_string()),
-            session_file: "session.jsonl".to_string(),
-        };
-        write_deleted_session_record(&record_dir, &record).unwrap();
+    fn parser_preserves_current_thread_metadata_and_dynamic_tools() {
+        let path = temp_path("parse-current-metadata.jsonl");
         fs::write(
-            record_dir.join("session.jsonl"),
+            &path,
             concat!(
-                "{\"timestamp\":\"2026-05-13T10:54:01Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"019e20f9-34b7-7a82-a95b-fe461de8983a\",\"cwd\":\"C:\\\\work\"}}\n",
-                "{\"timestamp\":\"2026-05-13T10:54:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"hi\"}}\n",
-                "{\"timestamp\":\"2026-05-13T10:54:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n"
+                "{\"timestamp\":\"2026-07-10T08:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child-thread\",\"cwd\":\"C:\\\\work\",\"model_provider\":\"openai\",\"cli_version\":\"0.144.1\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"parent-thread\"}}},\"thread_source\":\"subagent\",\"parent_thread_id\":\"parent-thread\",\"forked_from_id\":\"parent-thread\",\"agent_nickname\":\"Curie\",\"agent_role\":\"explorer\",\"agent_path\":\"/root/audit\",\"history_mode\":\"legacy\",\"dynamic_tools\":[{\"type\":\"namespace\",\"name\":\"codex_app\",\"tools\":[{\"type\":\"function\",\"name\":\"read_thread\",\"description\":\"Read a thread\",\"inputSchema\":{\"type\":\"object\"},\"deferLoading\":true}]}]}}\n",
+                "{\"timestamp\":\"2026-07-10T08:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"hello current schema\"}}\n"
             ),
         )
         .unwrap();
 
-        let preview = preview_deleted_conversation_from_record_dir(&record_dir).unwrap();
-        let messages = preview
-            .get("messages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let summary = parse_session_file(&path, true).unwrap();
+        fs::remove_file(&path).unwrap();
 
-        fs::remove_dir_all(&record_dir).unwrap();
+        assert_eq!(summary.thread_source.as_deref(), Some("subagent"));
+        assert_eq!(summary.parent_thread_id.as_deref(), Some("parent-thread"));
+        assert_eq!(summary.agent_nickname.as_deref(), Some("Curie"));
+        assert_eq!(summary.agent_role.as_deref(), Some("explorer"));
+        assert_eq!(summary.agent_path.as_deref(), Some("/root/audit"));
+        assert_eq!(summary.history_mode.as_deref(), Some("legacy"));
+        assert_eq!(summary.preview.as_deref(), Some("hello current schema"));
+        assert_eq!(summary.dynamic_tools.len(), 1);
+        assert_eq!(summary.dynamic_tools[0].name, "read_thread");
+        assert_eq!(
+            summary.dynamic_tools[0].namespace.as_deref(),
+            Some("codex_app")
+        );
+        assert!(summary.dynamic_tools[0].defer_loading);
+        assert!(summary
+            .source
+            .as_deref()
+            .is_some_and(|source| source.contains("parent-thread")));
+    }
 
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0]["role"], "user");
-        assert_eq!(messages[0]["text"], "hi");
-        assert_eq!(messages[1]["role"], "assistant");
-        assert_eq!(messages[1]["text"], "hello");
+    #[test]
+    fn preview_reads_recent_messages_in_pages_without_duplicates() {
+        let path = temp_path("preview-pages.jsonl");
+        let content = (0..10)
+            .map(|index| {
+                json!({
+                    "timestamp": format!("2026-07-10T08:00:{index:02}Z"),
+                    "type": "event_msg",
+                    "payload": {
+                        "type": if index % 2 == 0 { "user_message" } else { "agent_message" },
+                        "message": format!("message-{index}")
+                    }
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, format!("{content}\n")).unwrap();
+
+        let latest = read_preview_message_page(&path, None, None, Some(3), None, None).unwrap();
+        assert_eq!(
+            latest
+                .messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message-7", "message-8", "message-9"]
+        );
+        assert!(latest.has_more);
+        assert_eq!(latest.source, PreviewMessageSource::Event);
+
+        let earlier = read_preview_message_page(
+            &path,
+            latest.next_before,
+            Some(latest.file_size),
+            Some(3),
+            Some(latest.source.as_str()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            earlier
+                .messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message-4", "message-5", "message-6"]
+        );
+        let latest_offsets = latest
+            .messages
+            .iter()
+            .filter_map(|message| message.offset)
+            .collect::<HashSet<_>>();
+        assert!(earlier
+            .messages
+            .iter()
+            .filter_map(|message| message.offset)
+            .all(|offset| !latest_offsets.contains(&offset)));
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn preview_uses_response_items_when_event_messages_are_absent() {
+        let path = temp_path("preview-response-fallback.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":\"2026-07-10T08:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"fallback-user\"}]}}\n",
+                "{\"timestamp\":\"2026-07-10T08:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"fallback-assistant\"}]}}\n"
+            ),
+        )
+        .unwrap();
+
+        let page = read_preview_message_page(&path, None, None, Some(10), None, None).unwrap();
+        assert_eq!(page.source, PreviewMessageSource::Response);
+        assert_eq!(page.messages.len(), 2);
+        assert_eq!(page.messages[0].text, "fallback-user");
+        assert_eq!(page.messages[1].text, "fallback-assistant");
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn preview_snapshot_allows_append_and_rejects_truncate() {
+        let path = temp_path("preview-snapshot.jsonl");
+        let initial = (0..5)
+            .map(|index| {
+                json!({
+                    "timestamp": format!("2026-07-10T08:00:{index:02}Z"),
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": format!("m{index}")}
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, format!("{initial}\n")).unwrap();
+        let latest = read_preview_message_page(&path, None, None, Some(2), None, None).unwrap();
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "timestamp": "2026-07-10T08:01:00Z",
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "appended"}
+            })
+        )
+        .unwrap();
+        drop(file);
+        let earlier = read_preview_message_page(
+            &path,
+            latest.next_before,
+            Some(latest.file_size),
+            Some(2),
+            Some(latest.source.as_str()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(earlier.file_size, latest.file_size);
+        assert!(earlier
+            .messages
+            .iter()
+            .all(|message| message.text != "appended"));
+
+        fs::write(&path, "{}\n").unwrap();
+        let stale = read_preview_message_page(
+            &path,
+            latest.next_before,
+            Some(latest.file_size),
+            Some(2),
+            Some(latest.source.as_str()),
+            None,
+        )
+        .unwrap_err();
+        assert!(stale.contains("会话文件已变化"));
+
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -4158,8 +4440,8 @@ mod tests {
     }
 
     #[test]
-    fn status_change_syncs_session_index_for_codex_sidebar() {
-        let root = temp_path("status-index");
+    fn status_change_updates_current_state_without_rewriting_session_index() {
+        let root = temp_path("status-current-state");
         let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
         let file_name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de8983a.jsonl";
         let active_relative = PathBuf::from("sessions")
@@ -4192,6 +4474,16 @@ mod tests {
             ),
         )
         .unwrap();
+        let connection = create_current_state_db(&root);
+        connection
+            .execute(
+                "INSERT INTO threads
+                 (id, rollout_path, title, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
+                 VALUES (?1, ?2, '新版标题', 1, 1000, 'preview', 1, 1000)",
+                params![session_id, active_path.to_string_lossy()],
+            )
+            .unwrap();
+        drop(connection);
         fs::write(
             root.join("session_index.jsonl"),
             format!(
@@ -4214,31 +4506,20 @@ mod tests {
         .unwrap();
         let archived_relative = PathBuf::from("archived_sessions").join(file_name);
         let archived_path = root.join(&archived_relative);
-        let archived_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
         assert!(archived_path.exists());
-        assert!(!archived_index.contains(session_id));
-
-        fs::write(
-            root.join("session_index.jsonl"),
-            format!(
-                "{}\n",
-                json!({
-                    "id": session_id,
-                    "thread_name": "旧版残留索引",
-                    "updated_at": "2026-05-13T10:54:27.000Z"
-                })
-            ),
-        )
-        .unwrap();
-        set_conversation_status_impl(
-            root.to_string_lossy().to_string(),
-            vec![path_to_slash(&archived_relative)],
-            "archived".to_string(),
-            None,
-        )
-        .unwrap();
-        let repaired_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
-        assert!(!repaired_index.contains(session_id));
+        let archived_row: (i64, String) = Connection::open(root.join("state_5.sqlite"))
+            .unwrap()
+            .query_row(
+                "SELECT archived, rollout_path FROM threads WHERE id = ?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(archived_row.0, 1);
+        assert_eq!(
+            conversation_path_key(Path::new(&archived_row.1)),
+            conversation_path_key(&archived_path)
+        );
 
         set_conversation_status_impl(
             root.to_string_lossy().to_string(),
@@ -4247,17 +4528,30 @@ mod tests {
             None,
         )
         .unwrap();
-        let active_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
+        let active_row: (i64, String) = Connection::open(root.join("state_5.sqlite"))
+            .unwrap()
+            .query_row(
+                "SELECT archived, rollout_path FROM threads WHERE id = ?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let session_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
 
         fs::remove_dir_all(&root).unwrap();
 
-        assert!(active_index.contains(session_id));
-        assert!(active_index.contains("测试归档索引"));
+        assert_eq!(active_row.0, 0);
+        assert_eq!(
+            conversation_path_key(Path::new(&active_row.1)),
+            conversation_path_key(&active_path)
+        );
+        assert!(session_index.contains(session_id));
+        assert!(session_index.contains("测试归档索引"));
     }
 
     #[test]
-    fn scan_reports_archived_session_index_residue_without_repairing() {
-        let root = temp_path("scan-repair-index");
+    fn scan_uses_current_state_metadata_and_ignores_metadata_only_rows() {
+        let root = temp_path("scan-current-state");
         let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
         let file_name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de8983a.jsonl";
         let archived_path = root.join("archived_sessions").join(file_name);
@@ -4277,13 +4571,31 @@ mod tests {
             ),
         )
         .unwrap();
+        let connection = create_current_state_db(&root);
+        connection
+            .execute(
+                "INSERT INTO threads
+                 (id, rollout_path, title, cwd, archived, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
+                 VALUES (?1, ?2, '新版数据库标题', 'C:\\current', 1, 10, 10000, '新版预览', 10, 10000)",
+                params![session_id, archived_path.to_string_lossy()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO threads
+                 (id, rollout_path, title, archived, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
+                 VALUES ('metadata-only', ?1, '仅元数据', 0, 20, 20000, 'ghost', 20, 20000)",
+                [root.join("sessions/missing.jsonl").to_string_lossy().to_string()],
+            )
+            .unwrap();
+        drop(connection);
         fs::write(
             root.join("session_index.jsonl"),
             format!(
                 "{}\n{}\n",
                 json!({
                     "id": session_id,
-                    "thread_name": "旧版残留索引",
+                    "thread_name": "Codex 原生标题",
                     "updated_at": "2026-05-13T10:54:27.000Z"
                 }),
                 json!({
@@ -4297,8 +4609,8 @@ mod tests {
 
         let result = scan_conversations_impl(Some(root.to_string_lossy().to_string())).unwrap();
         let scanned_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
-        let warnings = result
-            .get("warnings")
+        let conversations = result
+            .get("conversations")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
@@ -4307,9 +4619,144 @@ mod tests {
 
         assert!(scanned_index.contains(session_id));
         assert!(scanned_index.contains("active-session"));
-        assert!(warnings.iter().any(|warning| warning
-            .as_str()
-            .is_some_and(|text| text.contains("发现 1 条已归档会话的 Codex 索引残留"))));
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0]["id"], session_id);
+        assert_eq!(conversations[0]["title"], "Codex 原生标题");
+        assert_eq!(conversations[0]["preview"], "新版预览");
+        assert_eq!(conversations[0]["status"], "archived");
+    }
+
+    #[test]
+    fn session_index_uses_latest_title_across_local_id_variants() {
+        let root = temp_path("session-index-title");
+        let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({
+                    "id": session_id,
+                    "thread_name": "初始标题",
+                    "updated_at": "2026-05-13T10:54:27.000Z"
+                }),
+                json!({
+                    "id": format!("local:{session_id}"),
+                    "thread_name": "Codex 最新标题",
+                    "updated_at": "2026-05-13T10:55:27.000Z"
+                }),
+                json!({
+                    "id": session_id,
+                    "thread_name": "",
+                    "updated_at": "2026-05-13T10:56:27.000Z"
+                })
+            ),
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let index = read_session_index(&root, &mut warnings);
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(warnings.is_empty());
+        assert_eq!(
+            session_index_title(&index, session_id).as_deref(),
+            Some("Codex 最新标题")
+        );
+        assert_eq!(
+            session_index_title(&index, &format!("local:{session_id}")).as_deref(),
+            Some("Codex 最新标题")
+        );
+    }
+
+    #[test]
+    fn preview_uses_codex_session_index_title() {
+        let root = temp_path("preview-session-index-title");
+        let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
+        let relative_path = PathBuf::from("sessions").join("rollout-preview-title.jsonl");
+        let path = root.join(&relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                json!({
+                    "timestamp": "2026-05-13T10:54:26.757Z",
+                    "type": "session_meta",
+                    "payload": {"id": session_id, "cwd": "C:\\work"}
+                }),
+                json!({
+                    "timestamp": "2026-05-13T10:54:27.000Z",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "原始长消息"}
+                })
+            ),
+        )
+        .unwrap();
+        let connection = create_current_state_db(&root);
+        connection
+            .execute(
+                "INSERT INTO threads
+                 (id, rollout_path, title, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
+                 VALUES (?1, ?2, '数据库长标题', 1, 1000, '原始长消息', 1, 1000)",
+                params![session_id, path.to_string_lossy()],
+            )
+            .unwrap();
+        drop(connection);
+        fs::write(
+            root.join("session_index.jsonl"),
+            format!(
+                "{}\n",
+                json!({
+                    "id": session_id,
+                    "thread_name": "Codex 原生标题",
+                    "updated_at": "2026-05-13T10:54:27.000Z"
+                })
+            ),
+        )
+        .unwrap();
+
+        let result = preview_conversation_impl(
+            root.to_string_lossy().to_string(),
+            path_to_slash(&relative_path),
+            None,
+            None,
+            Some(10),
+            None,
+            None,
+        )
+        .unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(
+            result["conversation"]["title"],
+            Value::String("Codex 原生标题".to_string())
+        );
+    }
+
+    #[test]
+    fn current_state_title_falls_back_when_session_index_has_no_match() {
+        let root = temp_path("current-state-title-fallback");
+        let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
+        let path = root.join("sessions").join("rollout-title-fallback.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{}\n").unwrap();
+        let connection = create_current_state_db(&root);
+        connection
+            .execute(
+                "INSERT INTO threads
+                 (id, rollout_path, title, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
+                 VALUES (?1, ?2, '数据库标题', 1, 1000, '预览', 1, 1000)",
+                params![session_id, path.to_string_lossy()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let catalog = read_current_state_conversations(&root, &SessionIndex::new()).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(catalog.conversations.len(), 1);
+        assert_eq!(catalog.conversations[0].title, "数据库标题");
     }
 
     #[test]
@@ -4359,11 +4806,11 @@ mod tests {
     }
 
     #[test]
-    fn upsert_state_threads_prefers_sqlite_state_db() {
-        let root = temp_path("upsert-prefers-sqlite");
-        let legacy_db = root.join("state_5.sqlite");
-        let sqlite_db = root.join("sqlite").join("state_5.sqlite");
-        for state_db in [&legacy_db, &sqlite_db] {
+    fn upsert_state_threads_ignores_legacy_nested_state_db() {
+        let root = temp_path("upsert-current-state-db");
+        let current_db = root.join("state_5.sqlite");
+        let legacy_db = root.join("sqlite").join("state_5.sqlite");
+        for state_db in [&current_db, &legacy_db] {
             fs::create_dir_all(state_db.parent().unwrap()).unwrap();
             let connection = Connection::open(state_db).unwrap();
             connection
@@ -4382,21 +4829,249 @@ mod tests {
 
         let item = sample_thread_metadata(root.join("sessions/rollout-thread-1.jsonl"));
         let updated = upsert_state_threads(&root, &[item]).unwrap();
+        let current = Connection::open(&current_db).unwrap();
         let legacy = Connection::open(&legacy_db).unwrap();
-        let sqlite = Connection::open(&sqlite_db).unwrap();
-        let legacy_count: i64 = legacy
+        let current_count: i64 = current
             .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
             .unwrap();
-        let sqlite_count: i64 = sqlite
+        let legacy_count: i64 = legacy
             .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
             .unwrap();
 
         assert_eq!(updated, 1);
+        assert_eq!(current_count, 1);
         assert_eq!(legacy_count, 0);
-        assert_eq!(sqlite_count, 1);
 
+        drop(current);
         drop(legacy);
-        drop(sqlite);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn upsert_state_threads_writes_current_schema_relationships() {
+        let root = temp_path("upsert-current-schema");
+        fs::create_dir_all(&root).unwrap();
+        let state_db = root.join("state_5.sqlite");
+        let connection = Connection::open(&state_db).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    rollout_path TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    cli_version TEXT NOT NULL DEFAULT '',
+                    agent_nickname TEXT,
+                    agent_role TEXT,
+                    agent_path TEXT,
+                    thread_source TEXT,
+                    preview TEXT NOT NULL DEFAULT '',
+                    recency_at INTEGER NOT NULL DEFAULT 0,
+                    recency_at_ms INTEGER NOT NULL DEFAULT 0,
+                    history_mode TEXT NOT NULL DEFAULT 'legacy'
+                );
+                CREATE TABLE thread_spawn_edges (
+                    parent_thread_id TEXT NOT NULL,
+                    child_thread_id TEXT NOT NULL PRIMARY KEY,
+                    status TEXT NOT NULL
+                );
+                CREATE TABLE thread_dynamic_tools (
+                    thread_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    input_schema TEXT NOT NULL,
+                    defer_loading INTEGER NOT NULL DEFAULT 0,
+                    namespace TEXT,
+                    PRIMARY KEY(thread_id, position),
+                    FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE
+                );
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let mut item = sample_thread_metadata(root.join("sessions/rollout-thread-1.jsonl"));
+        item.source =
+            r#"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread"}}}"#.to_string();
+        item.agent_nickname = Some("Curie".to_string());
+        item.agent_role = Some("explorer".to_string());
+        item.agent_path = Some("/root/audit".to_string());
+        item.thread_source = Some("subagent".to_string());
+        item.preview = "hello current schema".to_string();
+        item.parent_thread_id = Some("parent-thread".to_string());
+        item.dynamic_tools = vec![ThreadDynamicToolMetadata {
+            name: "read_thread".to_string(),
+            description: "Read a thread".to_string(),
+            input_schema: r#"{"type":"object"}"#.to_string(),
+            defer_loading: true,
+            namespace: Some("codex_app".to_string()),
+        }];
+
+        assert_eq!(upsert_state_threads(&root, &[item]).unwrap(), 1);
+        let connection = Connection::open(&state_db).unwrap();
+        let thread = connection
+            .query_row(
+                "SELECT source, cli_version, agent_nickname, agent_role, agent_path,
+                        thread_source, preview, recency_at, recency_at_ms, history_mode
+                 FROM threads WHERE id = 'thread-1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let edge = connection
+            .query_row(
+                "SELECT parent_thread_id, status FROM thread_spawn_edges WHERE child_thread_id = 'thread-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        let tool = connection
+            .query_row(
+                "SELECT name, description, input_schema, defer_loading, namespace
+                 FROM thread_dynamic_tools WHERE thread_id = 'thread-1' AND position = 0",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert!(thread.0.contains("parent-thread"));
+        assert_eq!(thread.1, "0.144.1");
+        assert_eq!(thread.2.as_deref(), Some("Curie"));
+        assert_eq!(thread.3.as_deref(), Some("explorer"));
+        assert_eq!(thread.4.as_deref(), Some("/root/audit"));
+        assert_eq!(thread.5.as_deref(), Some("subagent"));
+        assert_eq!(thread.6, "hello current schema");
+        assert_eq!(thread.7, 1_700_000_120);
+        assert_eq!(thread.8, 1_700_000_120_000);
+        assert_eq!(thread.9, "legacy");
+        assert_eq!(edge, ("parent-thread".to_string(), "closed".to_string()));
+        assert_eq!(tool.0, "read_thread");
+        assert_eq!(tool.1, "Read a thread");
+        assert_eq!(tool.2, r#"{"type":"object"}"#);
+        assert_eq!(tool.3, 1);
+        assert_eq!(tool.4.as_deref(), Some("codex_app"));
+
+        drop(connection);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn insert_missing_state_threads_never_overwrites_current_rows_or_relationships() {
+        let root = temp_path("insert-missing-current-wins");
+        fs::create_dir_all(&root).unwrap();
+        let state_db = root.join("state_5.sqlite");
+        let connection = Connection::open(&state_db).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    rollout_path TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    updated_at INTEGER NOT NULL DEFAULT 0,
+                    preview TEXT NOT NULL DEFAULT '',
+                    recency_at INTEGER NOT NULL DEFAULT 0,
+                    recency_at_ms INTEGER NOT NULL DEFAULT 0,
+                    history_mode TEXT NOT NULL DEFAULT 'legacy'
+                );
+                CREATE TABLE thread_spawn_edges (
+                    parent_thread_id TEXT NOT NULL,
+                    child_thread_id TEXT NOT NULL PRIMARY KEY,
+                    status TEXT NOT NULL
+                );
+                CREATE TABLE thread_dynamic_tools (
+                    thread_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    input_schema TEXT NOT NULL,
+                    defer_loading INTEGER NOT NULL DEFAULT 0,
+                    namespace TEXT,
+                    PRIMARY KEY(thread_id, position)
+                );
+                INSERT INTO threads
+                  (id, rollout_path, title, updated_at, preview, recency_at, recency_at_ms, history_mode)
+                VALUES
+                  ('thread-1', 'sessions/current.jsonl', 'Current title', 99, 'Current preview', 99, 99000, 'full');
+                INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
+                VALUES ('current-parent', 'thread-1', 'ready');
+                INSERT INTO thread_dynamic_tools
+                  (thread_id, position, name, description, input_schema, defer_loading, namespace)
+                VALUES ('thread-1', 0, 'current-tool', 'current', '{}', 0, NULL);
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let mut item = sample_thread_metadata(root.join("sessions/replacement.jsonl"));
+        item.title = "Replacement title".to_string();
+        item.preview = "Replacement preview".to_string();
+        item.parent_thread_id = Some("replacement-parent".to_string());
+        item.dynamic_tools = vec![ThreadDynamicToolMetadata {
+            name: "replacement-tool".to_string(),
+            description: "replacement".to_string(),
+            input_schema: "{}".to_string(),
+            defer_loading: true,
+            namespace: None,
+        }];
+
+        assert_eq!(insert_missing_state_threads(&root, &[item]).unwrap(), 0);
+        let connection = Connection::open(&state_db).unwrap();
+        let thread: (String, String, i64, String) = connection
+            .query_row(
+                "SELECT rollout_path, title, updated_at, preview FROM threads WHERE id = 'thread-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        let edge: String = connection
+            .query_row(
+                "SELECT parent_thread_id FROM thread_spawn_edges WHERE child_thread_id = 'thread-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let tool: String = connection
+            .query_row(
+                "SELECT name FROM thread_dynamic_tools WHERE thread_id = 'thread-1' AND position = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(thread.0, "sessions/current.jsonl");
+        assert_eq!(thread.1, "Current title");
+        assert_eq!(thread.2, 99);
+        assert_eq!(thread.3, "Current preview");
+        assert_eq!(edge, "current-parent");
+        assert_eq!(tool, "current-tool");
+
+        drop(connection);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -4462,10 +5137,9 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let report = delete_state_threads_for_sessions(&root, &["t1".to_string()], &[]).unwrap();
+        delete_state_threads_for_sessions(&root, &["t1".to_string()], &[]).unwrap();
         let connection = Connection::open(&state_db).unwrap();
 
-        assert_eq!(report.deleted, 1);
         assert_eq!(
             connection
                 .query_row("SELECT COUNT(*) FROM threads WHERE id = 't1'", [], |row| {
@@ -4523,12 +5197,9 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let report =
-            delete_state_threads_for_sessions(&root, &["t1".to_string()], &[rollout_path]).unwrap();
+        delete_state_threads_for_sessions(&root, &["t1".to_string()], &[rollout_path]).unwrap();
         let connection = Connection::open(&state_db).unwrap();
 
-        assert_eq!(report.deleted, 1);
-        assert!(report.ids.contains(&"local:t1".to_string()));
         assert_eq!(
             connection
                 .query_row(
@@ -4542,5 +5213,179 @@ mod tests {
 
         drop(connection);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn global_state_cleanup_removes_pinned_thread_ids() {
+        let mut value = json!({
+            "pinned-thread-ids": ["keep", "remove"],
+            "nested": {
+                "pinnedThreadIds": ["remove", "keep"],
+                "remove": { "title": "old" },
+                "keep": { "title": "current" }
+            }
+        });
+        let ids = HashSet::from(["remove"]);
+
+        let removed = remove_matching_object_keys(&mut value, &ids);
+
+        assert_eq!(removed, 3);
+        assert_eq!(value["pinned-thread-ids"], json!(["keep"]));
+        assert_eq!(value["nested"]["pinnedThreadIds"], json!(["keep"]));
+        assert!(value["nested"].get("remove").is_none());
+        assert!(value["nested"].get("keep").is_some());
+    }
+
+    #[test]
+    fn legacy_state_metadata_migration_preserves_current_rows_and_backfills_recency() {
+        let root = temp_path("legacy-state-migration");
+        fs::create_dir_all(root.join("sqlite")).unwrap();
+        let current_path = root.join("state_5.sqlite");
+        let legacy_path = root.join("sqlite").join("state_5.sqlite");
+        let current_schema = r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                preview TEXT NOT NULL DEFAULT '',
+                recency_at INTEGER NOT NULL DEFAULT 0,
+                recency_at_ms INTEGER NOT NULL DEFAULT 0,
+                history_mode TEXT NOT NULL DEFAULT 'legacy'
+            );
+            CREATE TABLE thread_spawn_edges (
+                parent_thread_id TEXT NOT NULL,
+                child_thread_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE thread_dynamic_tools (
+                thread_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                PRIMARY KEY(thread_id, position)
+            );
+            CREATE TABLE agent_jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE agent_job_items (
+                job_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                PRIMARY KEY(job_id, item_id)
+            );
+        "#;
+        let legacy_schema = r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                preview TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE thread_spawn_edges (
+                parent_thread_id TEXT NOT NULL,
+                child_thread_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE thread_dynamic_tools (
+                thread_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                PRIMARY KEY(thread_id, position)
+            );
+            CREATE TABLE agent_jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE agent_job_items (
+                job_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                PRIMARY KEY(job_id, item_id)
+            );
+        "#;
+        let current = Connection::open(&current_path).unwrap();
+        current.execute_batch(current_schema).unwrap();
+        current
+            .execute(
+                "INSERT INTO threads (id, rollout_path, created_at, updated_at, title, recency_at, recency_at_ms)
+                 VALUES ('same', 'sessions/current.jsonl', 1, 2, 'Current', 2, 2000)",
+                [],
+            )
+            .unwrap();
+        current
+            .execute_batch(
+                "INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
+                 VALUES ('current-parent', 'same', 'current');
+                 INSERT INTO thread_dynamic_tools (thread_id, position, name)
+                 VALUES ('same', 0, 'current-tool');",
+            )
+            .unwrap();
+        drop(current);
+        let legacy = Connection::open(&legacy_path).unwrap();
+        legacy.execute_batch(legacy_schema).unwrap();
+        legacy
+            .execute_batch(
+                "INSERT INTO threads (id, rollout_path, created_at, updated_at, title)
+                 VALUES ('same', 'sessions/legacy-same.jsonl', 1, 3, 'Legacy');
+                 INSERT INTO threads (id, rollout_path, created_at, updated_at, title)
+                 VALUES ('old', 'sessions/old.jsonl', 10, 20, 'Old');
+                 INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
+                 VALUES ('same', 'old', 'ready');
+                 INSERT INTO thread_dynamic_tools (thread_id, position, name)
+                 VALUES ('old', 0, 'tool');
+                 INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
+                 VALUES ('legacy-parent', 'same', 'legacy');
+                 INSERT INTO thread_dynamic_tools (thread_id, position, name)
+                 VALUES ('same', 0, 'legacy-tool');
+                 INSERT INTO agent_jobs (id, name) VALUES ('job-old', 'Old job');
+                 INSERT INTO agent_job_items (job_id, item_id, row_index)
+                 VALUES ('job-old', 'item-1', 0);",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let mut current = Connection::open(&current_path).unwrap();
+        let schema = state_threads_schema(&current).unwrap().unwrap();
+        let inserted = merge_legacy_state_metadata(&mut current, &legacy_path, &schema).unwrap();
+        let same_title: String = current
+            .query_row("SELECT title FROM threads WHERE id = 'same'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let old_row: (i64, i64, String) = current
+            .query_row(
+                "SELECT recency_at, recency_at_ms, history_mode FROM threads WHERE id = 'old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let same_edge: (String, String) = current
+            .query_row(
+                "SELECT parent_thread_id, status FROM thread_spawn_edges WHERE child_thread_id = 'same'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let same_tool: String = current
+            .query_row(
+                "SELECT name FROM thread_dynamic_tools WHERE thread_id = 'same' AND position = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(inserted.get("threads"), Some(&1));
+        assert_eq!(inserted.get("thread_spawn_edges"), Some(&1));
+        assert_eq!(inserted.get("thread_dynamic_tools"), Some(&1));
+        assert_eq!(inserted.get("agent_jobs"), Some(&1));
+        assert_eq!(inserted.get("agent_job_items"), Some(&1));
+        assert_eq!(same_title, "Current");
+        assert_eq!(old_row, (20, 20_000, "legacy".to_string()));
+        assert_eq!(
+            same_edge,
+            ("current-parent".to_string(), "current".to_string())
+        );
+        assert_eq!(same_tool, "current-tool");
+
+        drop(current);
+        fs::remove_dir_all(root).unwrap();
     }
 }

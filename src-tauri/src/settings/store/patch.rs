@@ -197,12 +197,6 @@ pub(super) fn apply_settings_patch(
             Value::String(string_field(patch, "codex_remote_control_account_id")),
         );
     }
-    if has_key(patch, "codex_delete_button_enabled") {
-        object.insert(
-            "codex_delete_button_enabled".to_string(),
-            Value::Bool(bool_field(patch, "codex_delete_button_enabled")),
-        );
-    }
     if has_key(patch, "codex_session_sync_enabled") {
         object.insert(
             "codex_session_sync_enabled".to_string(),
@@ -234,9 +228,17 @@ pub(super) fn apply_settings_patch(
     if has_key(patch, "ui_theme") {
         let value = match string_field(patch, "ui_theme").as_str() {
             "light" => "light",
-            _ => "dark",
+            "dark" => "dark",
+            _ => "system",
         };
         object.insert("ui_theme".to_string(), Value::String(value.to_string()));
+    }
+    if has_key(patch, "ui_language") {
+        let value = match string_field(patch, "ui_language").as_str() {
+            "en" => "en",
+            _ => "zh-CN",
+        };
+        object.insert("ui_language".to_string(), Value::String(value.to_string()));
     }
     if has_key(patch, "api_profiles") {
         object.insert(
@@ -438,6 +440,42 @@ mod tests {
     }
 
     #[test]
+    fn apply_settings_patch_updates_ui_theme_to_system() {
+        let mut object = Map::new();
+
+        apply_settings_patch(&mut object, &json!({ "ui_theme": "system" })).unwrap();
+
+        assert_eq!(
+            object.get("ui_theme").and_then(Value::as_str),
+            Some("system")
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_updates_ui_language() {
+        let mut object = Map::new();
+
+        apply_settings_patch(&mut object, &json!({ "ui_language": "en" })).unwrap();
+
+        assert_eq!(
+            object.get("ui_language").and_then(Value::as_str),
+            Some("en")
+        );
+    }
+
+    #[test]
+    fn apply_settings_patch_normalizes_legacy_system_language() {
+        let mut object = Map::new();
+
+        apply_settings_patch(&mut object, &json!({ "ui_language": "system" })).unwrap();
+
+        assert_eq!(
+            object.get("ui_language").and_then(Value::as_str),
+            Some("zh-CN")
+        );
+    }
+
+    #[test]
     fn apply_settings_patch_updates_codex_plugins_enabled() {
         let mut object = Map::new();
 
@@ -490,26 +528,6 @@ mod tests {
         assert_eq!(
             object
                 .get("codex_remote_control_enabled")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn apply_settings_patch_updates_codex_delete_button_enabled() {
-        let mut object = Map::new();
-
-        apply_settings_patch(
-            &mut object,
-            &json!({
-                "codex_delete_button_enabled": true
-            }),
-        )
-        .unwrap();
-
-        assert_eq!(
-            object
-                .get("codex_delete_button_enabled")
                 .and_then(Value::as_bool),
             Some(true)
         );

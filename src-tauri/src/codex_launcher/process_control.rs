@@ -1,7 +1,9 @@
 use super::*;
+use sysinfo::{Pid, System};
 
+#[cfg(windows)]
 pub(crate) fn kill_process_tree(pid: u64) -> bool {
-    if !cfg!(windows) || pid == 0 {
+    if pid == 0 {
         return false;
     }
     let mut command = Command::new("taskkill");
@@ -14,23 +16,58 @@ pub(crate) fn kill_process_tree(pid: u64) -> bool {
     command.status().is_ok_and(|status| status.success())
 }
 
+#[cfg(not(windows))]
+pub(crate) fn kill_process_tree(pid: u64) -> bool {
+    let Ok(root_pid) = u32::try_from(pid) else {
+        return false;
+    };
+    if root_pid == 0 {
+        return false;
+    }
+
+    let system = System::new_all();
+    let root_pid = Pid::from_u32(root_pid);
+    let mut tree = vec![root_pid];
+    let mut known = std::collections::HashSet::from([root_pid]);
+    loop {
+        let mut added = false;
+        for (candidate_pid, process) in system.processes() {
+            if process
+                .parent()
+                .is_some_and(|parent| known.contains(&parent))
+                && known.insert(*candidate_pid)
+            {
+                tree.push(*candidate_pid);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
+    tree.into_iter()
+        .rev()
+        .filter_map(|tree_pid| system.process(tree_pid))
+        .fold(false, |killed, process| process.kill() || killed)
+}
+
 pub(crate) fn get_alive_pids(pids: &[u64]) -> Vec<u64> {
     let mut uniq: Vec<u64> = pids.iter().copied().filter(|pid| *pid > 0).collect();
     uniq.sort_unstable();
     uniq.dedup();
-    if uniq.is_empty() || !cfg!(windows) {
+    if uniq.is_empty() {
         return Vec::new();
     }
 
-    let script = alive_pids(&uniq);
-
-    run_pwsh(&script)
-        .ok()
-        .and_then(|output| parse_json_output(&output, json!([])).ok())
-        .map(json_as_array)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|value| value.as_u64())
+    let system = System::new_all();
+    uniq.into_iter()
+        .filter(|pid| {
+            u32::try_from(*pid)
+                .ok()
+                .map(Pid::from_u32)
+                .is_some_and(|pid| system.process(pid).is_some())
+        })
         .collect()
 }
 

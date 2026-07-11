@@ -59,8 +59,6 @@ export function useApiModeDraft({
   const [apiProfileDeleteModal, setApiProfileDeleteModal] = useState(createEmptyApiProfileDeleteModal);
   const [savingApiProfile, setSavingApiProfile] = useState(false);
 
-  const clearApiAutoSaveTimer = () => {};
-
   const persistApiSettings = async ({ activeId, activeProfile, profiles, nextApiTestResults }) => {
     const patch = buildApiSettingsPayload({
       activeId,
@@ -271,7 +269,6 @@ export function useApiModeDraft({
     apiProfileDeleteModal,
     apiProfileModal,
     apiProfiles,
-    clearApiAutoSaveTimer,
     closeApiProfileModal,
     closeDeleteApiProfileModal,
     confirmDeleteApiProfile,

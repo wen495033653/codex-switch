@@ -1,4 +1,6 @@
-use super::{json_as_array, kill_process_tree, parse_json_output, run_pwsh};
+use super::kill_process_tree;
+#[cfg(windows)]
+use super::{json_as_array, parse_json_output, run_pwsh};
 use crate::{
     accounts::{
         find_store_account, get_codex_state_value, profile_id_from_account,
@@ -102,6 +104,14 @@ fn subscription_mode_active(settings: &Value) -> bool {
 }
 
 fn validate_remote_control_enable_prerequisites() -> Result<(), String> {
+    let desktop_status = super::codex_desktop_support_status();
+    if desktop_status.get("supported").and_then(Value::as_bool) != Some(true) {
+        return Err(desktop_status
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("请先安装新版 ChatGPT Desktop")
+            .to_string());
+    }
     let settings = read_settings_value()?;
     if subscription_mode_active(&settings) {
         return Err("订阅模式下不可开启远程控制，请先切换到 API 模式".to_string());
@@ -179,11 +189,8 @@ fn legacy_remote_control_home_removed() -> Result<bool, String> {
     Ok(true)
 }
 
+#[cfg(windows)]
 fn legacy_remote_control_helper_pids() -> Vec<u64> {
-    if !cfg!(windows) {
-        return Vec::new();
-    }
-
     let script = r#"
 $ErrorActionPreference = "Stop"
 $helpers = Get-CimInstance Win32_Process | Where-Object {
@@ -201,6 +208,11 @@ $helpers | ConvertTo-Json -Depth 2 -Compress
         .into_iter()
         .filter_map(|pid| pid.as_u64())
         .collect()
+}
+
+#[cfg(not(windows))]
+fn legacy_remote_control_helper_pids() -> Vec<u64> {
+    Vec::new()
 }
 
 fn stop_legacy_remote_control_helpers() -> usize {

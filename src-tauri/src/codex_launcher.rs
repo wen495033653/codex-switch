@@ -39,16 +39,15 @@ mod ide_snapshot;
 mod plugins;
 mod process_control;
 mod remote_control;
-mod scripts;
 mod shell;
 
 pub(crate) use codex_app::*;
+pub(crate) use codex_app_instances::codex_desktop_support_status;
 pub(crate) use codex_app_watcher::{CodexAppOpenOutcome, CodexProcess};
 pub(crate) use ide_snapshot::*;
 pub(crate) use plugins::*;
 pub(crate) use process_control::*;
 pub(crate) use remote_control::*;
-pub(crate) use scripts::*;
 pub(crate) use shell::*;
 
 pub(crate) fn start_codex_app_watcher() {

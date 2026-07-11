@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use crate::paths::home_dir;
 use crate::{
     accounts::{
         find_store_account, profile_id_from_account, read_api_key_from_auth,
@@ -10,6 +12,7 @@ use crate::{
         resolve_model_instructions_file, SETTING_KEY as MODEL_INSTRUCTIONS_ENABLED_SETTING_KEY,
     },
     paths::{app_data_dir, codex_dir},
+    session_manager::migrate_legacy_codex_data_for_root,
     session_sync_diagnostics::log_session_sync_event,
     settings::{default_api_mode, read_settings_value},
     time_util::now_string,
@@ -18,6 +21,8 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
+    thread,
+    time::Duration as StdDuration,
 };
 use tauri::AppHandle;
 
@@ -25,6 +30,18 @@ const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 const MULTI_OPEN_SUPPRESS_SOURCE: &str = "multi_open_target_channel";
 const API_WIRE_RESPONSES: &str = "responses";
 const WINDOWS_SANDBOX_MODE: &str = "elevated";
+#[cfg(windows)]
+const WINDOWS_CODEX_DESKTOP_EXECUTABLE_NAME: &str = "ChatGPT.exe";
+#[cfg(windows)]
+const WINDOWS_LEGACY_CODEX_DESKTOP_EXECUTABLE_NAME: &str = "Codex.exe";
+#[cfg(target_os = "macos")]
+const MACOS_CODEX_DESKTOP_APP_NAMES: [&str; 2] = ["ChatGPT.app", "Codex.app"];
+#[cfg(target_os = "macos")]
+const MACOS_CODEX_DESKTOP_EXECUTABLE_NAME: &str = "ChatGPT";
+#[cfg(target_os = "macos")]
+const MACOS_LEGACY_CODEX_DESKTOP_APP_NAME: &str = "Codex.app";
+#[cfg(target_os = "macos")]
+const MACOS_LEGACY_CODEX_DESKTOP_EXECUTABLE_NAME: &str = "Codex";
 #[cfg(any(windows, test))]
 const CODEX_APP_PACKAGE_FAMILY_SUFFIX: &str = "__2p2nqsd0c76g0";
 #[cfg(windows)]
@@ -51,8 +68,8 @@ struct CodexAppInstancePaths {
 }
 
 pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<Value, String> {
-    if !cfg!(windows) {
-        return Err("Codex 多开目前仅支持 Windows".to_string());
+    if !cfg!(any(windows, target_os = "macos")) {
+        return Err("Codex 多开目前仅支持 Windows 和 macOS".to_string());
     }
 
     let target_kind = string_field(&payload, "kind");
@@ -97,6 +114,7 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
         &envs,
     ) {
         Ok(launch) if launch.launched => {
+            trigger_instance_legacy_migration(paths.codex_home.clone());
             let hook_warning = launch.hook_warning.clone();
             let message = if hook_warning.is_some() {
                 format!(
@@ -144,8 +162,8 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
 }
 
 pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
-    if !cfg!(windows) {
-        return Err("Codex 多开目前仅支持 Windows".to_string());
+    if !cfg!(any(windows, target_os = "macos")) {
+        return Err("Codex 多开目前仅支持 Windows 和 macOS".to_string());
     }
 
     let target_kind = string_field(&payload, "kind");
@@ -189,7 +207,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
 }
 
 pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
-    if !cfg!(windows) {
+    if !cfg!(any(windows, target_os = "macos")) {
         return Ok(json!({
             "ok": true,
             "instances": []
@@ -342,9 +360,9 @@ fn command_line_matches_user_data_dir(command_line: &str, user_data_dir: &Path) 
 fn normalize_command_path_fragment(value: &str) -> String {
     value
         .trim()
-        .replace('/', "\\")
+        .replace('\\', "/")
         .trim_matches('"')
-        .trim_end_matches('\\')
+        .trim_end_matches('/')
         .to_ascii_lowercase()
 }
 
@@ -411,9 +429,39 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
+    for pid in pids {
+        let script = format!(
+            "tell application \"System Events\" to set frontmost of first process whose unix id is {pid} to true"
+        );
+        let status = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if status.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+    }
+    for app_name in ["ChatGPT", "Codex"] {
+        let status = std::process::Command::new("open")
+            .args(["-a", app_name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if status.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+    }
+    Err("未能激活独立 Codex 窗口".to_string())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn focus_instance_window(_pids: &[u64]) -> Result<(), String> {
-    Err("Codex 多开目前仅支持 Windows".to_string())
+    Err("当前系统不支持 Codex 多开".to_string())
 }
 
 fn account_channel(profile_id: &str) -> Result<CodexAppChannel, String> {
@@ -521,7 +569,10 @@ fn codex_app_executable() -> Result<String, String> {
     candidates
         .into_iter()
         .find(|path| Path::new(path).exists())
-        .ok_or_else(|| "未找到 Codex 桌面入口，请确认已安装 Codex".to_string())
+        .ok_or_else(|| {
+            let status = codex_desktop_support_status();
+            string_field(&status, "message")
+        })
 }
 
 fn extend_unique_paths(paths: &mut Vec<String>, candidates: Vec<String>) {
@@ -531,12 +582,29 @@ fn extend_unique_paths(paths: &mut Vec<String>, candidates: Vec<String>) {
         }
         if paths
             .iter()
-            .any(|path| path.eq_ignore_ascii_case(candidate.trim()))
+            .any(|path| executable_paths_equal(path, candidate.trim()))
         {
             continue;
         }
         paths.push(candidate);
     }
+}
+
+fn executable_paths_equal(left: &str, right: &str) -> bool {
+    if cfg!(windows) || (is_windows_style_path(left) && is_windows_style_path(right)) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
+fn is_windows_style_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.contains('\\')
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
 }
 
 fn running_codex_app_executables() -> Result<Vec<String>, String> {
@@ -549,18 +617,141 @@ fn running_codex_app_executables() -> Result<Vec<String>, String> {
     )
 }
 
+#[cfg(windows)]
 fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
     installed_codex_app_package_names()
         .into_iter()
         .map(|package_name| {
             PathBuf::from(r"C:\Program Files\WindowsApps")
-                .join(package_name)
+                .join(&package_name)
                 .join("app")
-                .join("Codex.exe")
+                .join(WINDOWS_CODEX_DESKTOP_EXECUTABLE_NAME)
                 .to_string_lossy()
                 .to_string()
         })
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
+    MACOS_CODEX_DESKTOP_APP_NAMES
+        .iter()
+        .flat_map(|app_name| {
+            macos_app_executable_candidates(app_name, MACOS_CODEX_DESKTOP_EXECUTABLE_NAME)
+        })
+        .collect()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn installed_legacy_codex_app_desktop_executable_candidates() -> Vec<String> {
+    let packages = installed_codex_app_package_names();
+    installed_executable_candidates_for_packages(
+        &packages,
+        WINDOWS_LEGACY_CODEX_DESKTOP_EXECUTABLE_NAME,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn installed_legacy_codex_app_desktop_executable_candidates() -> Vec<String> {
+    macos_app_executable_candidates(
+        MACOS_LEGACY_CODEX_DESKTOP_APP_NAME,
+        MACOS_LEGACY_CODEX_DESKTOP_EXECUTABLE_NAME,
+    )
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn installed_legacy_codex_app_desktop_executable_candidates() -> Vec<String> {
+    Vec::new()
+}
+
+pub(crate) fn codex_desktop_support_status() -> Value {
+    if !cfg!(any(windows, target_os = "macos")) {
+        return json!({
+            "status": "unsupported",
+            "supported": false,
+            "requiresUpdate": false,
+            "executable": Value::Null,
+            "message": "当前系统暂不支持 ChatGPT Desktop 集成"
+        });
+    }
+    let mut current = running_codex_app_executables().unwrap_or_default();
+    extend_unique_paths(
+        &mut current,
+        installed_codex_app_desktop_executable_candidates(),
+    );
+    let legacy = installed_legacy_codex_app_desktop_executable_candidates();
+    codex_desktop_support_status_from_candidates(&current, &legacy)
+}
+
+#[cfg(windows)]
+fn installed_executable_candidates_for_packages(
+    packages: &[String],
+    executable_name: &str,
+) -> Vec<String> {
+    packages
+        .iter()
+        .map(|package_name| {
+            PathBuf::from(r"C:\Program Files\WindowsApps")
+                .join(package_name)
+                .join("app")
+                .join(executable_name)
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_executable_candidates(app_name: &str, executable_name: &str) -> Vec<String> {
+    let mut application_roots = Vec::new();
+    if let Ok(home) = home_dir() {
+        application_roots.push(home.join("Applications"));
+    }
+    application_roots.push(PathBuf::from("/Applications"));
+
+    application_roots
+        .into_iter()
+        .map(|root| {
+            root.join(app_name)
+                .join("Contents")
+                .join("MacOS")
+                .join(executable_name)
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect()
+}
+
+fn codex_desktop_support_status_from_candidates(current: &[String], legacy: &[String]) -> Value {
+    if let Some(executable) = current.iter().find(|path| Path::new(path).exists()) {
+        return json!({
+            "status": "current",
+            "supported": true,
+            "requiresUpdate": false,
+            "executable": executable
+        });
+    }
+    if let Some(executable) = legacy.iter().find(|path| Path::new(path).exists()) {
+        return json!({
+            "status": "legacy",
+            "supported": false,
+            "requiresUpdate": true,
+            "executable": executable,
+            "message": "当前 Codex Desktop 版本过旧，请更新到集成 Codex 的新版 ChatGPT Desktop"
+        });
+    }
+    json!({
+        "status": "missing",
+        "supported": false,
+        "requiresUpdate": true,
+        "executable": Value::Null,
+        "message": "未找到新版 ChatGPT Desktop，请安装或更新后再使用 Codex 功能"
+    })
 }
 
 #[cfg(windows)]
@@ -619,11 +810,6 @@ fn installed_codex_app_package_names() -> Vec<String> {
     packages
 }
 
-#[cfg(not(windows))]
-fn installed_codex_app_package_names() -> Vec<String> {
-    Vec::new()
-}
-
 #[cfg(any(windows, test))]
 fn is_codex_app_package_name(name: &str) -> bool {
     name.starts_with("OpenAI.Codex_") && name.ends_with(CODEX_APP_PACKAGE_FAMILY_SUFFIX)
@@ -652,6 +838,8 @@ fn prepare_instance_paths(
             user_data_dir.display()
         )
     })?;
+    let migration_report = migrate_legacy_codex_data_for_root(&codex_home)?;
+    log_session_sync_event("codex_app_instance_data_migration", migration_report);
     sync_instance_codex_home(app, &codex_home, channel)?;
     write_instance_marker(&root, channel)?;
 
@@ -660,6 +848,33 @@ fn prepare_instance_paths(
         codex_home,
         user_data_dir,
     })
+}
+
+fn trigger_instance_legacy_migration(codex_home: PathBuf) {
+    thread::spawn(move || {
+        for delay in [2, 5] {
+            thread::sleep(StdDuration::from_secs(delay));
+            match migrate_legacy_codex_data_for_root(&codex_home) {
+                Ok(report) => {
+                    let completed = report.get("completed").and_then(Value::as_bool) == Some(true);
+                    log_session_sync_event("codex_app_instance_data_migration", report);
+                    if completed {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    log_session_sync_event(
+                        "codex_app_instance_data_migration_error",
+                        json!({
+                            "codexHome": codex_home.to_string_lossy(),
+                            "error": err
+                        }),
+                    );
+                    break;
+                }
+            }
+        }
+    });
 }
 
 fn sync_instance_codex_home(
@@ -1347,36 +1562,36 @@ mod tests {
         let user_data_dir = PathBuf::from(r"C:\Instances\codex-app-instances\api-main\user-data");
 
         assert!(command_line_matches_user_data_dir(
-            r#""C:\Codex\Codex.exe" --user-data-dir="C:\Instances\codex-app-instances\api-main\user-data""#,
+            r#""C:\ChatGPT\ChatGPT.exe" --user-data-dir="C:\Instances\codex-app-instances\api-main\user-data""#,
             &user_data_dir
         ));
         assert!(command_line_matches_user_data_dir(
-            r#""C:\Codex\Codex.exe" --user-data-dir=C:/Instances/codex-app-instances/api-main/user-data"#,
+            r#""C:\ChatGPT\ChatGPT.exe" --user-data-dir=C:/Instances/codex-app-instances/api-main/user-data"#,
             &user_data_dir
         ));
         assert!(!command_line_matches_user_data_dir(
-            r#""C:\Codex\Codex.exe" --user-data-dir=C:\Instances\Codex\web\Codex"#,
+            r#""C:\ChatGPT\ChatGPT.exe" --user-data-dir=C:\Instances\Codex\web\Codex"#,
             &user_data_dir
         ));
     }
 
     #[test]
     fn extend_unique_paths_preserves_first_candidate_priority() {
-        let mut paths = vec![r"C:\Codex\app\Codex.exe".to_string()];
+        let mut paths = vec![r"C:\ChatGPT\app\ChatGPT.exe".to_string()];
 
         extend_unique_paths(
             &mut paths,
             vec![
-                r"c:\codex\app\codex.exe".to_string(),
-                r"C:\CodexPreview\app\Codex.exe".to_string(),
+                r"c:\chatgpt\app\chatgpt.exe".to_string(),
+                r"C:\ChatGPTPreview\app\ChatGPT.exe".to_string(),
             ],
         );
 
         assert_eq!(
             paths,
             vec![
-                r"C:\Codex\app\Codex.exe".to_string(),
-                r"C:\CodexPreview\app\Codex.exe".to_string(),
+                r"C:\ChatGPT\app\ChatGPT.exe".to_string(),
+                r"C:\ChatGPTPreview\app\ChatGPT.exe".to_string(),
             ]
         );
     }
@@ -1392,6 +1607,62 @@ mod tests {
         assert!(!is_codex_app_package_name(
             "Other.Codex_26.623.5175.0_x64__2p2nqsd0c76g0"
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn desktop_executable_candidates_only_include_chatgpt_host() {
+        let package = "OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0";
+        let candidates = installed_executable_candidates_for_packages(
+            &[package.to_string()],
+            WINDOWS_CODEX_DESKTOP_EXECUTABLE_NAME,
+        );
+
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].ends_with("ChatGPT.exe"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_executable_candidates_include_macos_chatgpt_app() {
+        let candidates = macos_app_executable_candidates(
+            MACOS_CODEX_DESKTOP_APP_NAMES[0],
+            MACOS_CODEX_DESKTOP_EXECUTABLE_NAME,
+        );
+
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.ends_with("/ChatGPT.app/Contents/MacOS/ChatGPT")));
+    }
+
+    #[test]
+    fn desktop_support_status_requires_current_chatgpt_host() {
+        let root = std::env::temp_dir().join(format!(
+            "codex-switch-desktop-status-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let current = root.join("ChatGPT.exe");
+        let legacy = root.join("Codex.exe");
+        fs::write(&legacy, []).unwrap();
+
+        let legacy_status = codex_desktop_support_status_from_candidates(
+            &[current.to_string_lossy().to_string()],
+            &[legacy.to_string_lossy().to_string()],
+        );
+        assert_eq!(legacy_status["status"], "legacy");
+        assert_eq!(legacy_status["requiresUpdate"], true);
+
+        fs::write(&current, []).unwrap();
+        let current_status = codex_desktop_support_status_from_candidates(
+            &[current.to_string_lossy().to_string()],
+            &[legacy.to_string_lossy().to_string()],
+        );
+        assert_eq!(current_status["status"], "current");
+        assert_eq!(current_status["supported"], true);
+        assert!(current_status.get("message").is_none());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

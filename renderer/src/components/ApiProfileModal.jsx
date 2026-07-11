@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Modal from './Modal';
+import { useI18n } from '../i18n';
 
 function getPrecheckState(precheck) {
   if (!precheck) return 'idle';
@@ -7,12 +8,12 @@ function getPrecheckState(precheck) {
   return precheck.ok ? 'success' : 'error';
 }
 
-function getPrecheckLabel(precheck) {
+function getPrecheckLabel(precheck, t) {
   const state = getPrecheckState(precheck);
-  if (state === 'loading') return '预检中';
-  if (state === 'success') return '可用';
-  if (state === 'error') return '不可用';
-  return '未预检';
+  if (state === 'loading') return t('预检中');
+  if (state === 'success') return t('可用');
+  if (state === 'error') return t('不可用');
+  return t('未预检');
 }
 
 export default function ApiProfileModal({
@@ -22,14 +23,15 @@ export default function ApiProfileModal({
   onSave,
   onUpdate
 }) {
+  const { t, translateRuntimeText } = useI18n();
   const [showApiKey, setShowApiKey] = useState(false);
   const draft = modal && modal.draft ? modal.draft : {};
   const isEdit = modal && modal.mode === 'edit';
   const precheck = modal && modal.precheck ? modal.precheck : null;
   const precheckState = getPrecheckState(precheck);
   const submitText = precheck && precheck.loading
-    ? '预检中...'
-    : (saving ? '保存中...' : '保存配置');
+    ? t('预检中...')
+    : (saving ? t('保存中...') : t('保存配置'));
   const handleClose = () => {
     if (!saving) onClose();
   };
@@ -40,22 +42,22 @@ export default function ApiProfileModal({
   };
 
   return (
-    <Modal title={isEdit ? '编辑 API 配置' : '新增 API 配置'} onClose={handleClose} width="560px">
+    <Modal title={isEdit ? t('编辑 API 配置') : t('新增 API 配置')} onClose={handleClose} width="560px">
       <form className="api-profile-modal" onSubmit={handleSubmit} noValidate>
         {modal.error && (
           <div className="api-profile-modal-error" role="alert">
-            {modal.error}
+            {translateRuntimeText(modal.error)}
           </div>
         )}
 
         <label className="api-profile-modal-field">
-          <span className="api-mode-label">名称</span>
+          <span className="api-mode-label">{t('名称')}</span>
           <input
             className="api-mode-input"
             required
             aria-invalid={Boolean(modal.error && !String(draft.name || '').trim())}
             value={draft.name || ''}
-            placeholder="例如 OpenAI"
+            placeholder={t('例如 OpenAI')}
             onChange={event => onUpdate({ name: event.target.value })}
           />
         </label>
@@ -87,8 +89,8 @@ export default function ApiProfileModal({
             <button
               type="button"
               className={`api-key-eye-button ${showApiKey ? 'active' : ''}`}
-              aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
-              title={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+              aria-label={showApiKey ? t('隐藏 API Key') : t('显示 API Key')}
+              title={showApiKey ? t('隐藏 API Key') : t('显示 API Key')}
               onClick={() => setShowApiKey(value => !value)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -101,11 +103,11 @@ export default function ApiProfileModal({
         {precheck && (
           <div className={`api-profile-modal-precheck ${precheckState}`}>
             <div className="api-profile-modal-precheck-head">
-              <span>配置预检</span>
-              <strong>{getPrecheckLabel(precheck)}</strong>
+              <span>{t('配置预检')}</span>
+              <strong>{getPrecheckLabel(precheck, t)}</strong>
             </div>
             <div className="api-profile-modal-precheck-message">
-              {precheck.message || getPrecheckLabel(precheck)}
+              {translateRuntimeText(precheck.message) || getPrecheckLabel(precheck, t)}
             </div>
           </div>
         )}
@@ -117,7 +119,7 @@ export default function ApiProfileModal({
             onClick={onClose}
             disabled={saving}
           >
-            取消
+            {t('取消')}
           </button>
           <button
             type="submit"

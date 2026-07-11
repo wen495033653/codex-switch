@@ -1,7 +1,7 @@
 import { normalizeApiBaseUrlInput } from './appState';
 import { getErrorMessage } from './errors';
 
-export const DEFAULT_API_TEST_MODEL = 'gpt-5.5';
+export const DEFAULT_API_TEST_MODEL = 'gpt-5.6-sol';
 export const API_TEST_CACHE_TTL_MS = 60 * 60 * 1000;
 
 const API_TEST_SIGNATURE_VERSION = 'responses-v1';

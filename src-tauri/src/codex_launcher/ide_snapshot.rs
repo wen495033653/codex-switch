@@ -3,6 +3,7 @@ use crate::{
     codex_sessions::sync_codex_sessions_to_provider_now_from,
     session_sync_diagnostics::log_session_sync_event,
 };
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 mod detect;
 mod pending;
@@ -10,8 +11,8 @@ mod restart;
 
 pub(crate) use pending::{attach_ide_reopen, build_ide_reopen_payload};
 
-pub(crate) use detect::detect_ide_app;
-use detect::{build_ide_summary, normalize_ide_entries};
+use detect::{build_ide_summary, normalize_ide_entries, process_entry_pid};
+pub(crate) use detect::{codex_desktop_display_name, detect_ide_app};
 use restart::restart_from_ide_snapshot;
 
 fn ide_summary_text(value: &Value) -> String {
@@ -41,16 +42,38 @@ fn ide_summary_text(value: &Value) -> String {
 }
 
 pub(crate) fn capture_open_ide_snapshot() -> Result<Value, String> {
-    if !cfg!(windows) {
-        return Ok(json!({
-            "capturedAt": now_string(),
-            "entries": [],
-            "summary": []
-        }));
-    }
+    let refresh_kind = ProcessRefreshKind::nothing()
+        .with_cmd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .without_tasks();
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
 
-    let output = run_pwsh(CAPTURE_OPEN_IDE_SNAPSHOT)?;
-    let rows = json_as_array(parse_json_output(&output, json!([]))?);
+    let mut rows = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let executable_path = process.exe()?.to_string_lossy().to_string();
+            let name = process.name().to_string_lossy().to_string();
+            let (kind, display_name) = detect_ide_app(&name, &executable_path)?;
+            let command_line = process
+                .cmd()
+                .iter()
+                .map(|part| part.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some(json!({
+                "pid": u64::from(pid.as_u32()),
+                "parentPid": process.parent().map(|pid| u64::from(pid.as_u32())).unwrap_or(0),
+                "name": name,
+                "executablePath": executable_path,
+                "commandLine": command_line,
+                "kind": kind,
+                "displayName": display_name
+            }))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by_key(process_entry_pid);
     let entries = normalize_ide_entries(rows);
     let summary = build_ide_summary(&entries);
 

@@ -3,13 +3,14 @@ import ApiProfileModal from './ApiProfileModal';
 import ConfirmDialog from './ConfirmDialog';
 import RefreshTokenDialog from './RefreshTokenDialog';
 import UpdateDialog from './UpdateDialog';
+import { useI18n } from '../i18n';
 
-function buildIdeReopenMessage({ sessionSync, summaryText }) {
-  const targetText = summaryText || '当前已打开的软件';
+function buildIdeReopenMessage({ sessionSync, summaryText, t }) {
+  const targetText = summaryText || t('当前已打开的软件');
   return [
     sessionSync
-      ? '切换已完成。是否关闭后重新打开？'
-      : '切换已完成。是否重新打开？',
+      ? t('切换已完成。是否关闭后重新打开？')
+      : t('切换已完成。是否重新打开？'),
     targetText
   ].join('\n');
 }
@@ -29,18 +30,19 @@ export default function AppDialogs({
   remoteControlNotice = { visible: false },
   update
 }) {
+  const { t, translateRuntimeText } = useI18n();
   return (
     <>
       {message && <div className="toast">{message}</div>}
 
       {pluginRestartNotice.visible && (
         <ConfirmDialog
-          title="重启后生效"
-          message={pluginRestartNotice.message || 'Codex 设置已保存，重启后生效。'}
+          title={t('重启后生效')}
+          message={translateRuntimeText(pluginRestartNotice.message) || t('Codex 设置已保存，重启后生效。')}
           isLoading={pluginRestartNotice.loading}
-          confirmText="重启"
-          loadingText="重启中..."
-          cancelText="稍后"
+          confirmText={t('重启')}
+          loadingText={t('重启中...')}
+          cancelText={t('稍后')}
           onConfirm={pluginRestartNotice.onRestart}
           onCancel={pluginRestartNotice.onClose}
         />
@@ -48,9 +50,9 @@ export default function AppDialogs({
 
       {remoteControlNotice.visible && (
         <ConfirmDialog
-          title="远程控制"
-          message={remoteControlNotice.message || '当前控制账号过期，远程控制关闭'}
-          confirmText="知道了"
+          title={t('远程控制')}
+          message={translateRuntimeText(remoteControlNotice.message) || t('当前控制账号过期，远程控制关闭')}
+          confirmText={t('知道了')}
           showCancel={false}
           onConfirm={remoteControlNotice.onClose}
           onCancel={remoteControlNotice.onClose}
@@ -92,11 +94,11 @@ export default function AppDialogs({
 
       {apiProfile.deleteModal.visible && (
         <ConfirmDialog
-          title="删除 API 配置"
-          message={`确定删除 API 配置：${apiProfile.deleteModal.profileName || apiProfile.deleteModal.profileId}？\n删除后不可恢复。`}
+          title={t('删除 API 配置')}
+          message={t('确定删除 API 配置：{name}？\n删除后不可恢复。', { name: apiProfile.deleteModal.profileName || apiProfile.deleteModal.profileId })}
           isLoading={apiProfile.deleteModal.loading}
-          confirmText="删除"
-          loadingText="删除中..."
+          confirmText={t('删除')}
+          loadingText={t('删除中...')}
           confirmVariant="danger"
           onConfirm={apiProfile.onConfirmDelete}
           onCancel={apiProfile.onCancelDelete}
@@ -115,11 +117,11 @@ export default function AppDialogs({
 
       {deleteAccount.modal.visible && (
         <ConfirmDialog
-          title="删除账号"
-          message={`确定删除账号：${deleteAccount.displayName || deleteAccount.modal.accountId}？\n删除后不可恢复。`}
+          title={t('删除账号')}
+          message={t('确定删除账号：{name}？\n删除后不可恢复。', { name: deleteAccount.displayName || deleteAccount.modal.accountId })}
           isLoading={deleteAccount.modal.loading}
-          confirmText="删除"
-          loadingText="删除中..."
+          confirmText={t('删除')}
+          loadingText={t('删除中...')}
           confirmVariant="danger"
           onConfirm={deleteAccount.onConfirm}
           onCancel={deleteAccount.onCancel}
@@ -128,11 +130,11 @@ export default function AppDialogs({
 
       {refreshAll.visible && (
         <ConfirmDialog
-          title="刷新配额"
-          message="开始后台刷新所有账号的配额。刷新期间按钮会持续旋转。"
+          title={t('刷新配额')}
+          message={t('开始后台刷新所有账号的配额。刷新期间按钮会持续旋转。')}
           isLoading={refreshAll.isLoading}
-          confirmText="开始刷新"
-          loadingText="启动中..."
+          confirmText={t('开始刷新')}
+          loadingText={t('启动中...')}
           onConfirm={refreshAll.onConfirm}
           onCancel={refreshAll.onCancel}
         />
@@ -142,12 +144,13 @@ export default function AppDialogs({
         <ConfirmDialog
           message={buildIdeReopenMessage({
             sessionSync: ideReopen.modal.sessionSync,
-            summaryText: ideReopen.summaryText
+            summaryText: ideReopen.summaryText,
+            t
           })}
           isLoading={ideReopen.modal.loading}
-          confirmText="重新打开"
-          loadingText={ideReopen.modal.sessionSync ? '同步并重新打开中...' : '重新打开中...'}
-          cancelText="稍后"
+          confirmText={t('重新打开')}
+          loadingText={ideReopen.modal.sessionSync ? t('同步并重新打开中...') : t('重新打开中...')}
+          cancelText={t('稍后')}
           onConfirm={ideReopen.onConfirm}
           onCancel={() => !ideReopen.modal.loading && ideReopen.onCancel()}
         />

@@ -1,5 +1,5 @@
 export const DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES = 30;
-export const DEFAULT_UI_THEME = 'light';
+export const DEFAULT_UI_THEME = 'system';
 
 export const ACCOUNT_NAME_DISPLAY_OPTIONS = [
     {
@@ -29,6 +29,11 @@ export const AUTO_START_OPTIONS = [
 
 export const UI_THEME_OPTIONS = [
     {
+        value: 'system',
+        title: '跟随系统',
+        desc: '根据系统主题自动切换。'
+    },
+    {
         value: 'dark',
         title: '暗黑模式',
         desc: '使用当前深色界面。'
@@ -37,6 +42,19 @@ export const UI_THEME_OPTIONS = [
         value: 'light',
         title: '白色模式',
         desc: '切换为浅色界面。'
+    }
+];
+
+export const UI_LANGUAGE_OPTIONS = [
+    {
+        value: 'zh-CN',
+        title: '简体中文',
+        desc: '使用简体中文界面。'
+    },
+    {
+        value: 'en',
+        title: 'English',
+        desc: 'Use the English interface.'
     }
 ];
 

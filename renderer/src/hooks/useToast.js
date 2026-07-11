@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { translateRuntimeText } from '../i18n';
 import { getErrorMessage } from '../utils/errors';
 
 export function useToast() {
@@ -7,7 +8,7 @@ export function useToast() {
 
   const toast = (msg, duration = 3000) => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    setMessage(msg);
+    setMessage(translateRuntimeText(msg));
     timerRef.current = setTimeout(() => {
       setMessage('');
       timerRef.current = null;

@@ -20,7 +20,6 @@ export function useModeSwitching({
   apiProfiles,
   apiTestResults,
   applySettings,
-  clearApiAutoSaveTimer,
   handleRes,
   onSaveApiTestResults,
   onUsageStatsRefresh,
@@ -34,7 +33,6 @@ export function useModeSwitching({
     if (switching || savingApiMode) return;
     setSavingApiMode(true);
     setSwitching(true);
-    clearApiAutoSaveTimer();
     try {
       const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
       const activeProfile = profiles.find(profile => profile.id === profileId)

@@ -15,6 +15,7 @@ use crate::{
         sync_codex_sessions_to_current_mode_now_from,
     },
     json_util::bool_field,
+    session_manager::migrate_legacy_codex_data_for_current_home,
     session_sync_diagnostics::log_session_sync_event,
     settings::read_settings_value,
 };
@@ -33,7 +34,6 @@ enum CodexRelaunchMode {
 struct CodexAppOpenActions {
     plugin_unlock_enabled: bool,
     remote_control_enabled: bool,
-    delete_button_enabled: bool,
     session_sync_enabled: bool,
 }
 
@@ -53,7 +53,6 @@ impl CodexAppOpenActions {
         Self {
             plugin_unlock_enabled: bool_field(settings, "codex_plugins_enabled"),
             remote_control_enabled: remote_control_enabled_from_settings(settings),
-            delete_button_enabled: bool_field(settings, "codex_delete_button_enabled"),
             session_sync_enabled: settings
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool)
@@ -62,20 +61,18 @@ impl CodexAppOpenActions {
     }
 
     fn enabled(self) -> bool {
-        self.plugin_unlock_enabled
-            || self.remote_control_enabled
-            || self.delete_button_enabled
-            || self.session_sync_enabled
+        self.plugin_unlock_enabled || self.remote_control_enabled || self.session_sync_enabled
     }
 
     fn cdp_launch_enabled(self) -> bool {
-        self.plugin_unlock_enabled || self.delete_button_enabled
+        self.plugin_unlock_enabled
     }
 }
 
 pub(crate) fn handle_codex_app_open(
     processes: &[CodexProcess],
 ) -> Result<CodexAppOpenOutcome, String> {
+    trigger_legacy_codex_data_migration();
     let actions = codex_app_open_actions()?;
     log_session_sync_event(
         "codex_app_open_handler_start",
@@ -83,7 +80,6 @@ pub(crate) fn handle_codex_app_open(
             "processes": codex_processes_log_value(processes),
             "pluginUnlockEnabled": actions.plugin_unlock_enabled,
             "remoteControlEnabled": actions.remote_control_enabled,
-            "deleteButtonEnabled": actions.delete_button_enabled,
             "sessionSyncEnabled": actions.session_sync_enabled
         }),
     );
@@ -119,7 +115,6 @@ pub(crate) fn handle_codex_app_open(
                             "hook": "codex_cdp_hooks",
                             "pluginUnlock": hooks.plugin_unlock,
                             "codexMobileNoReplace": hooks.codex_mobile_no_replace,
-                            "deleteButton": hooks.delete_button,
                             "injectedCount": injected
                         }),
                     ),
@@ -129,7 +124,6 @@ pub(crate) fn handle_codex_app_open(
                             "hook": "codex_cdp_hooks",
                             "pluginUnlock": hooks.plugin_unlock,
                             "codexMobileNoReplace": hooks.codex_mobile_no_replace,
-                            "deleteButton": hooks.delete_button,
                             "error": err
                         }),
                     ),
@@ -170,6 +164,32 @@ pub(crate) fn handle_codex_app_open(
     })
 }
 
+fn trigger_legacy_codex_data_migration() {
+    thread::spawn(|| {
+        for delay in [0, 2, 5] {
+            if delay > 0 {
+                thread::sleep(StdDuration::from_secs(delay));
+            }
+            match migrate_legacy_codex_data_for_current_home() {
+                Ok(report) => {
+                    let completed = report.get("completed").and_then(Value::as_bool) == Some(true);
+                    log_session_sync_event("codex_desktop_data_migration", report);
+                    if completed {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    log_session_sync_event(
+                        "codex_desktop_data_migration_error",
+                        json!({ "error": err }),
+                    );
+                    break;
+                }
+            }
+        }
+    });
+}
+
 fn codex_app_open_actions() -> Result<CodexAppOpenActions, String> {
     read_settings_value().map(|settings| CodexAppOpenActions::from_settings(&settings))
 }
@@ -204,7 +224,6 @@ fn codex_cdp_launch_hooks_for_watch_open(actions: CodexAppOpenActions) -> CodexC
     CodexCdpLaunchHooks {
         plugin_unlock: actions.plugin_unlock_enabled,
         codex_mobile_no_replace: actions.remote_control_enabled,
-        delete_button: actions.delete_button_enabled,
     }
 }
 
@@ -213,7 +232,6 @@ fn codex_cdp_launch_hooks_for_actions(actions: CodexAppOpenActions) -> Option<Co
         Some(CodexCdpLaunchHooks {
             plugin_unlock: actions.plugin_unlock_enabled,
             codex_mobile_no_replace: actions.remote_control_enabled,
-            delete_button: actions.delete_button_enabled,
         })
     } else {
         None
@@ -852,31 +870,21 @@ mod tests {
         let session_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
             "codex_remote_control_enabled": false,
-            "codex_delete_button_enabled": false,
             "codex_session_sync_enabled": true
         }));
         let plugin_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": true,
             "codex_remote_control_enabled": false,
-            "codex_delete_button_enabled": false,
             "codex_session_sync_enabled": false
         }));
         let remote_control_only = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
             "codex_remote_control_enabled": true,
-            "codex_delete_button_enabled": false,
-            "codex_session_sync_enabled": false
-        }));
-        let delete_button_only = CodexAppOpenActions::from_settings(&json!({
-            "codex_plugins_enabled": false,
-            "codex_remote_control_enabled": false,
-            "codex_delete_button_enabled": true,
             "codex_session_sync_enabled": false
         }));
         let disabled = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
             "codex_remote_control_enabled": false,
-            "codex_delete_button_enabled": false,
             "codex_session_sync_enabled": false
         }));
 
@@ -890,12 +898,7 @@ mod tests {
         assert!(remote_control_only.enabled());
         assert!(remote_control_only.remote_control_enabled);
         assert!(!remote_control_only.plugin_unlock_enabled);
-        assert!(!remote_control_only.delete_button_enabled);
         assert!(!remote_control_only.session_sync_enabled);
-        assert!(delete_button_only.enabled());
-        assert!(delete_button_only.delete_button_enabled);
-        assert!(delete_button_only.cdp_launch_enabled());
-        assert!(!delete_button_only.session_sync_enabled);
         assert!(!disabled.enabled());
     }
 
@@ -918,10 +921,6 @@ mod tests {
             "codex_remote_control_enabled": true,
             "codex_session_sync_enabled": false
         }));
-        let delete_button_only = CodexAppOpenActions::from_settings(&json!({
-            "codex_delete_button_enabled": true,
-            "codex_session_sync_enabled": false
-        }));
         let session_and_remote_control = CodexAppOpenActions::from_settings(&json!({
             "codex_plugins_enabled": false,
             "codex_remote_control_enabled": true,
@@ -939,27 +938,18 @@ mod tests {
         let plugin_hooks = CodexCdpLaunchHooks {
             plugin_unlock: true,
             codex_mobile_no_replace: false,
-            delete_button: false,
         };
         let cdp_only_hooks = CodexCdpLaunchHooks {
             plugin_unlock: false,
             codex_mobile_no_replace: false,
-            delete_button: false,
         };
         let mobile_no_replace_hooks = CodexCdpLaunchHooks {
             plugin_unlock: false,
             codex_mobile_no_replace: true,
-            delete_button: false,
-        };
-        let delete_button_hooks = CodexCdpLaunchHooks {
-            plugin_unlock: false,
-            codex_mobile_no_replace: false,
-            delete_button: true,
         };
         let plugin_remote_control_hooks = CodexCdpLaunchHooks {
             plugin_unlock: true,
             codex_mobile_no_replace: true,
-            delete_button: false,
         };
 
         assert_eq!(
@@ -993,10 +983,6 @@ mod tests {
         assert_eq!(
             codex_relaunch_mode_for_app_open(remote_control_only, CodexAppOpenStatus::default()),
             None
-        );
-        assert_eq!(
-            codex_relaunch_mode_for_app_open(delete_button_only, CodexAppOpenStatus::default()),
-            Some(CodexRelaunchMode::Cdp(delete_button_hooks))
         );
         assert_eq!(
             codex_relaunch_mode_for_app_open(
@@ -1041,7 +1027,6 @@ mod tests {
                 CodexAppOpenStatus {
                     session_sync_pending: true,
                     cdp_launch_applied: true,
-                    ..CodexAppOpenStatus::default()
                 }
             ),
             Some(CodexRelaunchMode::Cdp(plugin_hooks))

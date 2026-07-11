@@ -1,4 +1,5 @@
 import ProxySettingsTab, { CodexProcessCard } from './settings/ProxySettingsTab';
+import { useI18n } from '../i18n';
 
 export default function CodexPage({
     accounts,
@@ -26,19 +27,19 @@ export default function CodexPage({
     updateCodexProxySettings,
     updateSettingsDraftAndSave
 }) {
+    const { t } = useI18n();
     const modelInstructionsEnabled = settingsDraft.codex_model_instructions_enabled !== false;
 
     return (
         <div className="settings-page codex-page">
             <div className="settings-page-panel codex-page-panel">
-                <div className="settings-page-head">
-                    <div className="settings-page-title">Codex</div>
+                <div className="codex-page-actions">
                     <button
                         type="button"
                         className="btn btn-secondary codex-config-open-button"
                         onClick={onOpenCodexConfigToml}
                     >
-                        打开 config.toml
+                        {t('打开 config.toml')}
                     </button>
                 </div>
 
@@ -49,19 +50,19 @@ export default function CodexPage({
                     />
 
                     <section className="settings-section settings-app-card-section codex-model-instructions-section">
-                        <div className="codex-model-instructions-head">
+                        <div className="settings-feature-head codex-model-instructions-head">
                             <div className="settings-section-head">
-                                <div className="settings-section-title">gpt破限</div>
+                                <div className="settings-section-title">{t('gpt破限')}</div>
                             </div>
                             <button
                                 type="button"
-                                className={`codex-model-instructions-switch ${modelInstructionsEnabled ? 'active' : ''}`}
+                                className={`settings-feature-switch codex-model-instructions-switch ${modelInstructionsEnabled ? 'active' : ''}`}
                                 aria-pressed={modelInstructionsEnabled}
-                                aria-label={modelInstructionsEnabled ? '关闭 gpt破限' : '启动 gpt破限'}
+                                aria-label={modelInstructionsEnabled ? t('关闭 gpt破限') : t('启动 gpt破限')}
                                 disabled={switching || savingCodexModelInstructions}
                                 onClick={() => setCodexModelInstructionsEnabled(!modelInstructionsEnabled)}
                             >
-                                <span className="codex-model-instructions-switch-label">启动</span>
+                                <span className="settings-feature-switch-label codex-model-instructions-switch-label">{t('启动')}</span>
                                 <span className="settings-switch" aria-hidden="true">
                                     <span className="settings-switch-thumb" />
                                 </span>

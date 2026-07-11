@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useI18n } from '../i18n';
 
 const ALL_MODELS_KEY = '__all__';
 
@@ -36,31 +37,31 @@ function hasUsage(windowStats) {
   return Boolean(windowStats && Number(windowStats.total_tokens) > 0);
 }
 
-function formatTokens(value) {
+function formatTokens(value, language) {
   const tokens = Number(value) || 0;
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M`;
   if (tokens >= 10_000) return `${Math.round(tokens / 1_000)}K`;
-  return new Intl.NumberFormat('zh-CN').format(tokens);
+  return new Intl.NumberFormat(language).format(tokens);
 }
 
-function formatExactTokens(value) {
-  return new Intl.NumberFormat('zh-CN').format(Number(value) || 0);
+function formatExactTokens(value, language) {
+  return new Intl.NumberFormat(language).format(Number(value) || 0);
 }
 
-function formatCost(windowStats) {
+function formatCost(windowStats, t) {
   if (!windowStats || windowStats.priced === false || windowStats.estimated_cost_usd === null) {
-    return '未定价';
+    return t('未定价');
   }
   const cost = Number(windowStats.estimated_cost_usd) || 0;
   if (cost > 0 && cost < 0.0001) return '<$0.0001';
   return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
 }
 
-function formatLastUsed(value) {
-  if (!value) return '无';
+function formatLastUsed(value, language, t) {
+  if (!value) return t('无');
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(language, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -77,26 +78,26 @@ function getFirstCountedLabel(counts, labels) {
   return '';
 }
 
-function formatPricingHint(windowStats) {
+function formatPricingHint(windowStats, t) {
   if (!windowStats) return '';
   const unpricedReason = getFirstCountedLabel(
     getObjectMap(windowStats.unpriced_reasons),
     UNPRICED_REASON_LABELS
   );
   if (windowStats.priced === false) {
-    return unpricedReason || '部分未定价';
+    return (unpricedReason ? t(unpricedReason) : t('部分未定价'));
   }
 
   const contexts = getObjectMap(windowStats.pricing_contexts);
   const longCount = Number(contexts.standard_long_context) || 0;
   const shortCount = Number(contexts.standard_short_context) || 0;
-  if (longCount > 0 && shortCount > 0) return '含长上下文';
-  if (longCount > 0) return PRICING_CONTEXT_LABELS.standard_long_context;
+  if (longCount > 0 && shortCount > 0) return t('含长上下文');
+  if (longCount > 0) return t(PRICING_CONTEXT_LABELS.standard_long_context);
   return '';
 }
 
-function formatModelLabel(model) {
-  return model === 'unknown' ? '未知模型' : model;
+function formatModelLabel(model, t) {
+  return model === 'unknown' ? t('未知模型') : model;
 }
 
 function MetricCard({ label, value, tone, hint }) {
@@ -119,20 +120,21 @@ function DetailRow({ label, value }) {
 }
 
 function ModelFilterRow({ active, label, stats, totalTokens, onClick }) {
+  const { language, t } = useI18n();
   const tokens = Number(stats && stats.total_tokens) || 0;
   const percent = totalTokens > 0 ? Math.max(1, Math.round((tokens / totalTokens) * 100)) : 0;
-  const hint = formatPricingHint(stats);
-  const cost = formatCost(stats);
+  const hint = formatPricingHint(stats, t);
+  const cost = formatCost(stats, t);
   const meta = [
-    `${stats?.session_count || 0} 会话`,
+    t('{count} 会话', { count: stats?.session_count || 0 }),
     cost,
     hint
   ].filter(Boolean).join(' · ');
   const breakdownItems = [
-    ['输入', stats?.input_tokens],
-    ['缓存', stats?.cached_input_tokens],
-    ['输出', stats?.output_tokens],
-    ['推理', stats?.reasoning_output_tokens]
+    [t('输入'), stats?.input_tokens],
+    [t('缓存'), stats?.cached_input_tokens],
+    [t('输出'), stats?.output_tokens],
+    [t('推理'), stats?.reasoning_output_tokens]
   ];
 
   return (
@@ -147,18 +149,18 @@ function ModelFilterRow({ active, label, stats, totalTokens, onClick }) {
         <span className="usage-detail-model-meta">{meta}</span>
       </div>
       <div className="usage-detail-model-stat">
-        <strong>{formatTokens(tokens)}</strong>
+        <strong>{formatTokens(tokens, language)}</strong>
         <span>{percent}%</span>
       </div>
       <div className="usage-detail-model-bar" aria-hidden="true">
         <i style={{ width: `${percent}%` }} />
       </div>
       {active && (
-        <div className="usage-detail-model-breakdown" aria-label={`${label} token 明细`}>
+        <div className="usage-detail-model-breakdown" aria-label={`${label} ${t('Token 明细')}`}>
           {breakdownItems.map(([itemLabel, value]) => (
             <span key={itemLabel}>
               <em>{itemLabel}</em>
-              <strong>{formatExactTokens(value)}</strong>
+              <strong>{formatExactTokens(value, language)}</strong>
             </span>
           ))}
         </div>
@@ -168,6 +170,7 @@ function ModelFilterRow({ active, label, stats, totalTokens, onClick }) {
 }
 
 export default function UsageStatsDetailDrawer({ detail, onClose }) {
+  const { language, t } = useI18n();
   const [activeWindow, setActiveWindow] = useState('today');
   const [activeModel, setActiveModel] = useState(ALL_MODELS_KEY);
   const isOpen = Boolean(detail);
@@ -175,8 +178,8 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
   const activeStats = getWindow(stats, activeWindow);
   const byModel = getByModel(activeStats);
   const hasActiveUsage = hasUsage(activeStats);
-  const ownerName = detail?.ownerName || '未命名';
-  const ownerTypeLabel = detail?.ownerTypeLabel || 'Token 统计';
+  const ownerName = detail?.ownerName || t('未命名');
+  const ownerTypeLabel = detail?.ownerTypeLabel || t('Token 统计');
   const modelEntries = useMemo(() => {
     return Object.entries(byModel).sort((left, right) => {
       const rightTokens = Number(right[1]?.total_tokens) || 0;
@@ -189,8 +192,8 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
     ? activeStats
     : byModel[activeModel] || activeStats;
   const selectedModelLabel = activeModel === ALL_MODELS_KEY
-    ? '全部模型'
-    : formatModelLabel(activeModel);
+    ? t('全部模型')
+    : formatModelLabel(activeModel, t);
   const windowCounts = useMemo(() => {
     const counts = {};
     for (const item of USAGE_WINDOWS) {
@@ -235,12 +238,12 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
             <span className="usage-detail-eyebrow">{ownerTypeLabel}</span>
             <h2 id="usage-detail-title">{ownerName}</h2>
           </div>
-          <button type="button" className="usage-detail-close" onClick={onClose} aria-label="关闭 token 详情">
+          <button type="button" className="usage-detail-close" onClick={onClose} aria-label={t('关闭 token 详情')}>
             ×
           </button>
         </div>
 
-        <div className="usage-detail-tabs" role="tablist" aria-label="Token 统计窗口">
+        <div className="usage-detail-tabs" role="tablist" aria-label={t('Token 统计窗口')}>
           {USAGE_WINDOWS.map(item => (
             <button
               key={item.key}
@@ -250,7 +253,7 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
               role="tab"
               aria-selected={activeWindow === item.key}
             >
-              <span>{item.label}</span>
+              <span>{t(item.label)}</span>
               <em>{windowCounts[item.key]}</em>
             </button>
           ))}
@@ -259,19 +262,19 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
         {hasActiveUsage ? (
           <div className="usage-detail-content">
             <div className="usage-detail-metrics">
-              <MetricCard label="总 tokens" value={formatTokens(activeStats.total_tokens)} tone="primary" />
-              <MetricCard label="费用" value={formatCost(activeStats)} hint={formatPricingHint(activeStats)} />
-              <MetricCard label="会话" value={activeStats.session_count || 0} />
-              <MetricCard label="最后使用" value={formatLastUsed(activeStats.last_used)} />
+              <MetricCard label={t('总 tokens')} value={formatTokens(activeStats.total_tokens, language)} tone="primary" />
+              <MetricCard label={t('费用')} value={formatCost(activeStats, t)} hint={formatPricingHint(activeStats, t)} />
+              <MetricCard label={t('会话')} value={activeStats.session_count || 0} />
+              <MetricCard label={t('最后使用')} value={formatLastUsed(activeStats.last_used, language, t)} />
             </div>
 
             {modelEntries.length > 0 && (
               <div className="usage-detail-section usage-detail-model-section">
-                <div className="usage-detail-section-title">模型分布</div>
+                <div className="usage-detail-section-title">{t('模型分布')}</div>
                 <div className="usage-detail-model-list">
                   <ModelFilterRow
                     active={activeModel === ALL_MODELS_KEY}
-                    label="全部模型"
+                    label={t('全部模型')}
                     stats={activeStats}
                     totalTokens={Number(activeStats.total_tokens) || 0}
                     onClick={() => setActiveModel(ALL_MODELS_KEY)}
@@ -280,7 +283,7 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
                     <ModelFilterRow
                       key={model}
                       active={activeModel === model}
-                      label={formatModelLabel(model)}
+                      label={formatModelLabel(model, t)}
                       stats={modelStats}
                       totalTokens={Number(activeStats.total_tokens) || 0}
                       onClick={() => setActiveModel(model)}
@@ -292,20 +295,20 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
 
             <div className="usage-detail-section">
               <div className="usage-detail-section-title usage-detail-section-title-split">
-                <span>Token 明细</span>
+                <span>{t('Token 明细')}</span>
                 <em>{selectedModelLabel}</em>
               </div>
-              <DetailRow label="输入" value={formatExactTokens(selectedStats.input_tokens)} />
-              <DetailRow label="缓存输入" value={formatExactTokens(selectedStats.cached_input_tokens)} />
-              <DetailRow label="输出" value={formatExactTokens(selectedStats.output_tokens)} />
-              <DetailRow label="推理输出" value={formatExactTokens(selectedStats.reasoning_output_tokens)} />
-              <DetailRow label="总计" value={formatExactTokens(selectedStats.total_tokens)} />
+              <DetailRow label={t('输入')} value={formatExactTokens(selectedStats.input_tokens, language)} />
+              <DetailRow label={t('缓存输入')} value={formatExactTokens(selectedStats.cached_input_tokens, language)} />
+              <DetailRow label={t('输出')} value={formatExactTokens(selectedStats.output_tokens, language)} />
+              <DetailRow label={t('推理输出')} value={formatExactTokens(selectedStats.reasoning_output_tokens, language)} />
+              <DetailRow label={t('总计')} value={formatExactTokens(selectedStats.total_tokens, language)} />
             </div>
           </div>
         ) : (
           <div className="usage-detail-empty">
-            <strong>{USAGE_WINDOWS.find(item => item.key === activeWindow)?.label || '当前窗口'}暂无会话</strong>
-            <span>只统计功能上线后且能匹配到此卡片的 Codex session。</span>
+            <strong>{t('{window}暂无会话', { window: t(USAGE_WINDOWS.find(item => item.key === activeWindow)?.label || '当前窗口') })}</strong>
+            <span>{t('只统计功能上线后且能匹配到此卡片的 Codex session。')}</span>
           </div>
         )}
       </aside>

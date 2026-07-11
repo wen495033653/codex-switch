@@ -1,10 +1,11 @@
 import ConfirmDialog from './ConfirmDialog';
+import { useI18n } from '../i18n';
 
-function getUpdateStatusText(updateModal) {
-    if (updateModal.status === 'downloaded') return '已下载完成，重启后安装';
-    if (updateModal.status === 'downloading') return `下载中 ${Math.round(updateModal.progress || 0)}%`;
-    if (updateModal.status === 'error') return '更新失败';
-    return '可下载';
+function getUpdateStatusText(updateModal, t) {
+    if (updateModal.status === 'downloaded') return t('已下载完成，重启后安装');
+    if (updateModal.status === 'downloading') return t('下载中 {progress}%', { progress: Math.round(updateModal.progress || 0) });
+    if (updateModal.status === 'error') return t('更新失败');
+    return t('可下载');
 }
 
 function flushList(blocks, list) {
@@ -76,51 +77,59 @@ function UpdateNotes({ notes }) {
 }
 
 export default function UpdateDialog({ updateModal, onConfirm, onCancel }) {
+    const { language, t, translateRuntimeText } = useI18n();
     const progress = Math.max(0, Math.min(100, updateModal.progress || 0));
 
     return (
         <ConfirmDialog
-            title={`发现新版本 ${updateModal.remoteVersion}`}
+            title={t('发现新版本 {version}', { version: updateModal.remoteVersion })}
             width="460px"
             content={(
                 <div className="update-dialog-content">
                     <div className="update-dialog-headline">
-                        当前 <strong>{updateModal.currentVersion || '--'}</strong>
+                        {t('当前 {version}', { version: '' }).trim()} <strong>{updateModal.currentVersion || '--'}</strong>
                         <span className="update-dialog-sep">→</span>
-                        最新 <strong>{updateModal.remoteVersion || '--'}</strong>
+                        {t('最新 {version}', { version: '' }).trim()} <strong>{updateModal.remoteVersion || '--'}</strong>
                     </div>
                     {updateModal.publishedAt && (
                         <div className="update-dialog-published">
-                            发布时间：{new Date(updateModal.publishedAt).toLocaleString()}
+                            {t('发布时间：{time}', { time: new Date(updateModal.publishedAt).toLocaleString(language) })}
                         </div>
                     )}
                     <div className="update-dialog-card">
                         <div className="update-dialog-row">
-                            <span className="update-dialog-label">更新状态</span>
-                            <span className="update-dialog-value">{getUpdateStatusText(updateModal)}</span>
+                            <span className="update-dialog-label">{t('更新状态')}</span>
+                            <span className="update-dialog-value">{getUpdateStatusText(updateModal, t)}</span>
                         </div>
                         {updateModal.status === 'downloading' && (
-                            <div className="update-dialog-progress">
+                            <div
+                                className="update-dialog-progress"
+                                role="progressbar"
+                                aria-label={t('下载更新')}
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={Math.round(progress)}
+                            >
                                 <div style={{ width: `${progress}%` }} />
                             </div>
                         )}
                         {updateModal.error && (
-                            <div className="update-dialog-error">{updateModal.error}</div>
+                            <div className="update-dialog-error">{translateRuntimeText(updateModal.error)}</div>
                         )}
                         {updateModal.notes && (
                             <div className="update-dialog-notes">
-                                <div className="update-dialog-section-title">更新说明</div>
+                                <div className="update-dialog-section-title">{t('更新说明')}</div>
                                 <UpdateNotes notes={updateModal.notes} />
                             </div>
                         )}
                     </div>
-                    <div className="update-dialog-tip">下载完成后点击“重启安装”，应用会自动退出并安装新版本。</div>
+                    <div className="update-dialog-tip">{t('下载完成后点击“重启安装”，应用会自动退出并安装新版本。')}</div>
                 </div>
             )}
             isLoading={updateModal.loading}
-            confirmText={updateModal.status === 'downloaded' ? '重启安装' : '下载更新'}
-            loadingText={updateModal.status === 'downloading' ? `下载中 ${Math.round(updateModal.progress || 0)}%` : '处理中...'}
-            cancelText="稍后"
+            confirmText={updateModal.status === 'downloaded' ? t('重启安装') : t('下载更新')}
+            loadingText={updateModal.status === 'downloading' ? t('下载中 {progress}%', { progress: Math.round(updateModal.progress || 0) }) : t('处理中...')}
+            cancelText={t('稍后')}
             onConfirm={onConfirm}
             onCancel={onCancel}
         />

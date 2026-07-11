@@ -23,7 +23,7 @@ const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 const CODEX_APP_INSTANCE_MARKER_FILE: &str = "codex-switch-instance.json";
 const META_STATS_STARTED_AT: &str = "stats_started_at";
 const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
-const PRICING_UPDATED_AT: &str = "2026-06-16";
+const PRICING_UPDATED_AT: &str = "2026-07-10";
 const LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 270_000;
 const PRICING_CONTEXT_STANDARD_SHORT: &str = "standard_short_context";
 const PRICING_CONTEXT_STANDARD_LONG: &str = "standard_long_context";
@@ -46,6 +46,36 @@ struct ModelPrice {
 }
 
 const MODEL_PRICES: &[ModelPrice] = &[
+    ModelPrice {
+        model: "gpt-5.6-sol",
+        short_context: TokenPrices {
+            input_per_million: 5.0,
+            cached_input_per_million: Some(0.5),
+            output_per_million: 30.0,
+        },
+        long_context: None,
+        long_context_threshold: None,
+    },
+    ModelPrice {
+        model: "gpt-5.6-terra",
+        short_context: TokenPrices {
+            input_per_million: 2.5,
+            cached_input_per_million: Some(0.25),
+            output_per_million: 15.0,
+        },
+        long_context: None,
+        long_context_threshold: None,
+    },
+    ModelPrice {
+        model: "gpt-5.6-luna",
+        short_context: TokenPrices {
+            input_per_million: 1.0,
+            cached_input_per_million: Some(0.1),
+            output_per_million: 6.0,
+        },
+        long_context: None,
+        long_context_threshold: None,
+    },
     ModelPrice {
         model: "gpt-5.5",
         short_context: TokenPrices {
@@ -1161,12 +1191,16 @@ fn token_prices_for_context(
 }
 
 fn normalize_model_id(model: &str) -> String {
-    model
+    let normalized = model
         .trim()
         .to_ascii_lowercase()
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join("-")
+        .join("-");
+    match normalized.as_str() {
+        "gpt-5.6" => "gpt-5.6-sol".to_string(),
+        _ => normalized,
+    }
 }
 
 fn per_million_cost(tokens: u64, price_per_million: f64) -> f64 {
@@ -1986,6 +2020,40 @@ mod tests {
         assert!(estimate.priced);
         let expected = 0.75 * 0.75 + 0.25 * 0.075 + 0.1 * 4.5;
         assert!((estimate.cost_usd.unwrap() - expected).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn gpt_5_6_alias_uses_sol_pricing() {
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 200_000,
+            output_tokens: 100_000,
+            reasoning_output_tokens: 0,
+            total_tokens: 1_100_000,
+        };
+
+        let estimate = estimate_cost("gpt-5.6", &usage, Some(128_000));
+
+        assert!(estimate.priced);
+        let expected = 0.8 * 5.0 + 0.2 * 0.5 + 0.1 * 30.0;
+        assert!((estimate.cost_usd.unwrap() - expected).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn gpt_5_6_variants_use_their_own_prices() {
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 0,
+            output_tokens: 1_000_000,
+            reasoning_output_tokens: 0,
+            total_tokens: 2_000_000,
+        };
+
+        let terra = estimate_cost("gpt-5.6-terra", &usage, Some(128_000));
+        let luna = estimate_cost("gpt-5.6-luna", &usage, Some(128_000));
+
+        assert_eq!(terra.cost_usd, Some(17.5));
+        assert_eq!(luna.cost_usd, Some(7.0));
     }
 
     #[test]

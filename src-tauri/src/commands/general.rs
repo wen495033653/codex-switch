@@ -151,7 +151,7 @@ pub(crate) fn open_external_url(url: String) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
-const DEFAULT_API_TEST_MODEL: &str = "gpt-5.5";
+const DEFAULT_API_TEST_MODEL: &str = "gpt-5.6-sol";
 
 #[tauri::command]
 pub(crate) async fn test_api_base_url(

@@ -626,9 +626,9 @@ fn sync_state_provider_updates_cwd_and_user_event_from_rollouts() {
 }
 
 #[test]
-fn sync_nested_state_db_resolves_relative_rollouts_from_codex_home() {
-    let temp_dir = unique_sessions_dir("nested-state-db-metadata");
-    let state_db = temp_dir.join("sqlite").join("state_5.sqlite");
+fn sync_root_state_db_resolves_relative_rollouts_from_codex_home() {
+    let temp_dir = unique_sessions_dir("root-state-db-metadata");
+    let state_db = temp_dir.join("state_5.sqlite");
     let rollout = temp_dir.join("sessions").join("rollout-user.jsonl");
     write_rollout_file_with_user_event(&rollout, "openai", "E:\\Project\\current");
 

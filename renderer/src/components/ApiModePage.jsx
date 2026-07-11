@@ -12,11 +12,12 @@ import {
 } from '../utils/apiPrecheck';
 import Modal from './Modal';
 import UsageStatsSummary from './UsageStatsSummary';
+import { useI18n } from '../i18n';
 
-function formatApiCheckTime(value) {
+function formatApiCheckTime(value, language) {
   if (!Number.isFinite(value)) return '';
   try {
-    return new Intl.DateTimeFormat('zh-CN', {
+    return new Intl.DateTimeFormat(language, {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -29,18 +30,20 @@ function formatApiCheckTime(value) {
   }
 }
 
-function getApiCheckTimeText(test) {
+function getApiCheckTimeText(test, t, language) {
   if (!test) return '';
   const timestamp = Number.isFinite(test.checkedAt) ? test.checkedAt : test.startedAt;
-  const formatted = formatApiCheckTime(timestamp);
+  const formatted = formatApiCheckTime(timestamp, language);
   if (!formatted) return '';
-  return `${test.loading ? '开始时间' : '预检时间'} ${formatted}`;
+  return test.loading
+    ? t('开始时间 {time}', { time: formatted })
+    : t('预检时间 {time}', { time: formatted });
 }
 
-function getApiLastAvailableTimeText(test) {
+function getApiLastAvailableTimeText(test, t, language) {
   const timestamp = getApiLastAvailableAt(test);
-  const formatted = formatApiCheckTime(timestamp);
-  return formatted ? `上次可用 ${formatted}` : '';
+  const formatted = formatApiCheckTime(timestamp, language);
+  return formatted ? t('上次可用 {time}', { time: formatted }) : '';
 }
 
 function getApiTestModelOptions(test, fallbackModel) {
@@ -55,16 +58,16 @@ function getApiTestModelOptions(test, fallbackModel) {
   return [fallback];
 }
 
-function getApiModelsStatus(test) {
+function getApiModelsStatus(test, t) {
   if (!test) {
-    return { state: 'idle', text: '等待 /models' };
+    return { state: 'idle', text: t('等待 /models') };
   }
   if (test.loading) {
-    return { state: 'loading', text: '正在获取 /models' };
+    return { state: 'loading', text: t('正在获取 /models') };
   }
   const response = test.modelsResponse || null;
   if (response && response.error) {
-    return { state: 'error', text: '/models 请求失败' };
+    return { state: 'error', text: t('/models 请求失败') };
   }
   const status = response && Number.isFinite(response.status) ? response.status : null;
   if (status && (status < 200 || status >= 300)) {
@@ -75,14 +78,14 @@ function getApiModelsStatus(test) {
     : [];
   if (models.length > 0) {
     if (!models.includes(DEFAULT_API_TEST_MODEL) && test.testModel === DEFAULT_API_TEST_MODEL) {
-      return { state: 'warning', text: `/models：${models.length} 个模型，默认模型不在列表` };
+      return { state: 'warning', text: t('/models：{count} 个模型，默认模型不在列表', { count: models.length }) };
     }
-    return { state: 'success', text: `/models：${models.length} 个模型` };
+    return { state: 'success', text: t('/models：{count} 个模型', { count: models.length }) };
   }
   if (response) {
-    return { state: 'warning', text: '/models 未返回可选模型' };
+    return { state: 'warning', text: t('/models 未返回可选模型') };
   }
-  return { state: 'idle', text: '等待 /models' };
+  return { state: 'idle', text: t('等待 /models') };
 }
 
 function getApiTestState(test) {
@@ -91,12 +94,12 @@ function getApiTestState(test) {
   return test.ok ? 'success' : 'error';
 }
 
-function getApiTestStateLabel(test) {
+function getApiTestStateLabel(test, t) {
   const state = getApiTestState(test);
-  if (state === 'loading') return '预检中';
-  if (state === 'success') return '可用';
-  if (state === 'error') return '不可用';
-  return '未预检';
+  if (state === 'loading') return t('预检中');
+  if (state === 'success') return t('可用');
+  if (state === 'error') return t('不可用');
+  return t('未预检');
 }
 
 function prettyApiTestBody(body) {
@@ -113,42 +116,43 @@ function formatApiTestJson(value) {
   return JSON.stringify(value, null, 2);
 }
 
-function getApiTestResponseBody(response) {
+function getApiTestResponseBody(response, t) {
   if (!response) return '';
   if (typeof response.body === 'string' && response.body) return prettyApiTestBody(response.body);
   if (response.json !== null && response.json !== undefined) return formatApiTestJson(response.json);
   if (response.error) return String(response.error);
-  return '空响应';
+  return t('空响应');
 }
 
-function getApiTestResponseStatusLabel(response) {
-  if (!response) return '未请求';
+function getApiTestResponseStatusLabel(response, t) {
+  if (!response) return t('未请求');
   const status = Number.isFinite(response.status) ? response.status : null;
   const statusText = response.statusText ? ` ${response.statusText}` : '';
-  return status ? `HTTP ${status}${statusText}` : (response.error ? '请求失败' : '无状态');
+  return status ? `HTTP ${status}${statusText}` : (response.error ? t('请求失败') : t('无状态'));
 }
 
-function getApiModelsDetailLabel(test) {
+function getApiModelsDetailLabel(test, t) {
   const response = test && test.modelsResponse ? test.modelsResponse : null;
   if (!response) return '/models';
   const status = Number.isFinite(response.status) ? response.status : null;
   if (status) return `/models ${status}`;
-  if (response.error) return '/models 失败';
-  return '/models 详情';
+  if (response.error) return t('/models 失败');
+  return t('/models 详情');
 }
 
 function ApiTestResponseBlock({ response, title }) {
+  const { t } = useI18n();
   if (!response) return null;
-  const body = getApiTestResponseBody(response);
+  const body = getApiTestResponseBody(response, t);
 
   return (
     <section className="api-test-response-block">
       <div className="api-test-response-head">
         <div className="api-test-response-title">{title}</div>
-        <div className="api-test-response-status">{getApiTestResponseStatusLabel(response)}</div>
+        <div className="api-test-response-status">{getApiTestResponseStatusLabel(response, t)}</div>
       </div>
       <div className="api-test-response-endpoint" title={response.endpoint || ''}>
-        {response.endpoint || '未返回 endpoint'}
+        {response.endpoint || t('未返回 endpoint')}
       </div>
       <pre className="api-test-response-body">{body}</pre>
     </section>
@@ -156,27 +160,28 @@ function ApiTestResponseBlock({ response, title }) {
 }
 
 function ApiTestResponsesBlock({ request, response }) {
+  const { t } = useI18n();
   if (!request && !response) return null;
   const endpoint = (response && response.endpoint) || (request && request.endpoint) || '';
-  const requestBody = request ? formatApiTestJson(request.body || {}) : '未发送请求';
-  const responseBody = response ? getApiTestResponseBody(response) : '未返回响应';
+  const requestBody = request ? formatApiTestJson(request.body || {}) : t('未发送请求');
+  const responseBody = response ? getApiTestResponseBody(response, t) : t('未返回响应');
 
   return (
     <section className="api-test-response-block api-test-chat-block">
       <div className="api-test-response-head">
-        <div className="api-test-response-title">Responses 调用</div>
-        <div className="api-test-response-status">{getApiTestResponseStatusLabel(response)}</div>
+        <div className="api-test-response-title">{t('Responses 调用')}</div>
+        <div className="api-test-response-status">{getApiTestResponseStatusLabel(response, t)}</div>
       </div>
       <div className="api-test-response-endpoint" title={endpoint}>
-        {endpoint || '未返回 endpoint'}
+        {endpoint || t('未返回 endpoint')}
       </div>
       <div className="api-test-chat-grid">
         <div className="api-test-chat-pane">
-          <div className="api-test-chat-pane-title">请求</div>
+          <div className="api-test-chat-pane-title">{t('请求')}</div>
           <pre className="api-test-response-body">{requestBody}</pre>
         </div>
         <div className="api-test-chat-pane">
-          <div className="api-test-chat-pane-title">返回</div>
+          <div className="api-test-chat-pane-title">{t('返回')}</div>
           <pre className="api-test-response-body">{responseBody}</pre>
         </div>
       </div>
@@ -185,28 +190,29 @@ function ApiTestResponsesBlock({ request, response }) {
 }
 
 function ApiTestDetailContent({ test }) {
+  const { language, t, translateRuntimeText } = useI18n();
   const state = getApiTestState(test);
-  const timeText = getApiCheckTimeText(test);
-  const lastAvailableTimeText = getApiLastAvailableTimeText(test);
+  const timeText = getApiCheckTimeText(test, t, language);
+  const lastAvailableTimeText = getApiLastAvailableTimeText(test, t, language);
   const shouldShowMessage = test.loading || !test.ok;
 
   return (
     <div className="api-test-detail-content">
       <div className="api-test-detail-head">
         <div className="api-test-detail-title-stack">
-          <div className="api-test-detail-time">{timeText || '等待预检时间'}</div>
+          <div className="api-test-detail-time">{timeText || t('等待预检时间')}</div>
           {lastAvailableTimeText && (
             <div className="api-test-detail-time api-test-detail-time-available">
               {lastAvailableTimeText}
             </div>
           )}
         </div>
-        <span className={`api-test-panel-state ${state}`}>{getApiTestStateLabel(test)}</span>
+        <span className={`api-test-panel-state ${state}`}>{getApiTestStateLabel(test, t)}</span>
       </div>
 
       {shouldShowMessage && (
         <div className={`api-test-message ${state}`}>
-          {test.message || getApiTestStateLabel(test)}
+          {translateRuntimeText(test.message) || getApiTestStateLabel(test, t)}
         </div>
       )}
 
@@ -236,6 +242,7 @@ export default function ApiModePage({
   switching,
   usageStatsByApiProfile
 }) {
+  const { language, t, translateRuntimeText } = useI18n();
   const [baseUrlTests, setBaseUrlTests] = useState(() => normalizeApiTestResults(apiTestResults));
   const baseUrlTestsRef = useRef(normalizeApiTestResults(apiTestResults));
   const [testModelDrafts, setTestModelDrafts] = useState({});
@@ -271,14 +278,14 @@ export default function ApiModePage({
   const effectiveDetailModel = detailModelOptions.includes(normalizedDetailModel)
     ? normalizedDetailModel
     : detailModelOptions[0];
-  const modelsStatus = getApiModelsStatus(detailTest);
+  const modelsStatus = getApiModelsStatus(detailTest, t);
   const modelsDetailAvailable = Boolean(detailTest && detailTest.modelsResponse);
-  const modelsDetailLabel = getApiModelsDetailLabel(detailTest);
+  const modelsDetailLabel = getApiModelsDetailLabel(detailTest, t);
   const detailTestMatchesModel = Boolean(detailTest && detailTest.testModel === effectiveDetailModel);
   const visibleDetailTest = detailTestMatchesModel ? detailTest : null;
   const detailPlaceholderText = detailTest && !detailTestMatchesModel
-    ? '更改测试模型后需要重新预检'
-    : '准备预检';
+    ? t('更改测试模型后需要重新预检')
+    : t('准备预检');
 
   useEffect(() => {
     const nextResults = normalizeApiTestResults(apiTestResults);
@@ -360,18 +367,18 @@ export default function ApiModePage({
         <div className="api-config-stack">
           <div className="api-config-cluster">
             <div className="api-page-actions">
-              <button
-                type="button"
-                className="btn btn-primary api-profile-add-button"
-                onClick={onAddApiProfile}
-                disabled={savingApiMode || switching}
-              >
-                + 新增 API
-              </button>
+            <button
+              type="button"
+              className="btn btn-primary api-profile-add-button"
+              onClick={onAddApiProfile}
+              disabled={savingApiMode || switching}
+            >
+              <span className="btn-leading-icon">+</span>
+              <span>{t('新增 API')}</span>
+            </button>
             </div>
-
             <div className="list-panel api-profile-panel">
-              <div className="account-grid api-profile-grid" ref={apiProfileGridRef} role="list" aria-label="API 配置列表">
+              <div className="account-grid api-profile-grid" ref={apiProfileGridRef} role="list" aria-label={t('API 配置列表')}>
                 {currentItems.map((profile, index) => {
                   const profileId = profile.id || `api-${startIdx + index}`;
                   const configured = Boolean(profile.name && profile.base_url && profile.api_key);
@@ -397,22 +404,22 @@ export default function ApiModePage({
                     : null;
                   const testLoading = Boolean(testForThisProfile && testForThisProfile.loading);
                   const testResultState = testForThisProfile ? getApiTestState(testForThisProfile) : 'idle';
-                  const testTagText = testForThisProfile ? getApiTestStateLabel(testForThisProfile) : '';
-                  const testTimeText = getApiCheckTimeText(testForThisProfile);
-                  const lastAvailableTimeText = getApiLastAvailableTimeText(testForThisProfile);
+                  const testTagText = testForThisProfile ? getApiTestStateLabel(testForThisProfile, t) : '';
+                  const testTimeText = getApiCheckTimeText(testForThisProfile, t, language);
+                  const lastAvailableTimeText = getApiLastAvailableTimeText(testForThisProfile, t, language);
                   const hasFreshTest = isFreshApiTest(testForThisProfile);
                   const testButtonTitle = !baseUrl
-                    ? '未配置 Base URL'
+                    ? t('未配置 Base URL')
                     : (!apiKey
-                        ? '未配置 API Key'
+                        ? t('未配置 API Key')
                         : (hasFreshTest
-                            ? '1 小时内已预检，点击查看详情'
-                            : `使用 ${normalizedTestModel} 预检 API`));
+                            ? t('1 小时内已预检，点击查看详情')
+                            : t('使用 {model} 预检 API', { model: normalizedTestModel })));
                   const testDisabled = !baseUrl || !apiKey || testLoading;
-                  const testActionText = testLoading ? '预检中' : '预检';
+                  const testActionText = testLoading ? t('预检中') : t('预检');
                   const deleteTitle = profiles.length <= 1
-                    ? '至少保留一个 API'
-                    : '删除配置';
+                    ? t('至少保留一个 API')
+                    : t('删除配置');
                   const usageStats = usageStatsByApiProfile
                     ? usageStatsByApiProfile[profileId]
                     : null;
@@ -426,14 +433,14 @@ export default function ApiModePage({
                       <div className="account-card-head">
                         <div className="account-card-name-row">
                           <div className="account-card-name" title={profileName}>{profileName}</div>
-                          {active && <span className="current-badge">当前</span>}
+                          {active && <span className="current-badge">{t('当前')}</span>}
                           {codexAppInstanceRunning && (
-                            <span className="codex-app-running-badge" title="独立 Codex 正在运行">
-                              窗口运行中
+                            <span className="codex-app-running-badge" title={t('独立 Codex 正在运行')}>
+                              {t('窗口运行中')}
                             </span>
                           )}
                           {testForThisProfile && (
-                            <span className={`api-profile-test-tag ${testResultState}`} title={lastAvailableTimeText || testTimeText || testForThisProfile.message || testTagText}>
+                            <span className={`api-profile-test-tag ${testResultState}`} title={lastAvailableTimeText || testTimeText || translateRuntimeText(testForThisProfile.message) || testTagText}>
                               {testLoading && <span className="api-profile-test-spinner" aria-hidden="true" />}
                               <span>{testTagText}</span>
                             </span>
@@ -447,16 +454,16 @@ export default function ApiModePage({
                             <span className="api-profile-card-label">Base URL</span>
                             <span
                               className={`api-profile-card-value ${baseUrl ? '' : 'muted'}`}
-                              title={baseUrl || '未配置 Base URL'}
+                              title={baseUrl || t('未配置 Base URL')}
                             >
-                              {baseUrl || '未配置 Base URL'}
+                              {baseUrl || t('未配置 Base URL')}
                             </span>
                           </div>
                           <UsageStatsSummary
                             stats={usageStats}
                             onOpenDetails={() => onOpenUsageStatsDetail?.({
                               ownerName: profileName,
-                              ownerTypeLabel: 'API 配置',
+                              ownerTypeLabel: t('API 配置'),
                               stats: usageStats
                             })}
                           />
@@ -469,7 +476,7 @@ export default function ApiModePage({
                             type="button"
                             className={`api-profile-card-test-button ${testLoading ? 'is-loading' : ''}`}
                             title={testButtonTitle}
-                            aria-label="预检 API"
+                            aria-label={t('预检 API')}
                             aria-busy={testLoading}
                             disabled={testDisabled}
                             onClick={() => openCheckModalAndRun(profile, profileId, profileName, normalizedTestModel)}
@@ -480,8 +487,8 @@ export default function ApiModePage({
                           <button
                             type="button"
                             className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
-                            title={configured ? (openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此 API 打开独立 Codex')) : '配置未完整'}
-                            aria-label={openingThisCodexApp ? '正在打开 Codex' : (codexAppInstanceRunning ? '打开独立 Codex 窗口' : '用此 API 打开独立 Codex')}
+                            title={configured ? (openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此 API 打开独立 Codex'))) : t('配置未完整')}
+                            aria-label={openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此 API 打开独立 Codex'))}
                             disabled={!configured || openingAnyCodexApp}
                             onClick={() => onOpenCodexAppInstance(profileId)}
                           >
@@ -493,7 +500,8 @@ export default function ApiModePage({
                           <button
                             type="button"
                             className="icon-btn"
-                            title="编辑此配置"
+                            title={t('编辑此配置')}
+                            aria-label={t('编辑此配置')}
                             onClick={event => {
                               event.stopPropagation();
                               onEditApiProfile(profileId);
@@ -508,7 +516,8 @@ export default function ApiModePage({
                             <button
                               type="button"
                               className="icon-btn"
-                              title={configured ? '切换到此 API' : '配置未完整'}
+                              title={configured ? t('切换到此 API') : t('配置未完整')}
+                              aria-label={configured ? t('切换到此 API') : t('配置未完整')}
                               disabled={!configured || savingApiMode || switching}
                               onClick={() => onSwitchToApiMode(profileId)}
                             >
@@ -519,6 +528,7 @@ export default function ApiModePage({
                             type="button"
                             className="icon-btn danger"
                             title={deleteTitle}
+                            aria-label={deleteTitle}
                             disabled={profiles.length <= 1 || savingApiMode || switching}
                             onClick={() => onDeleteApiProfile(profileId)}
                           >
@@ -533,25 +543,29 @@ export default function ApiModePage({
                 })}
 
                 {currentItems.length === 0 && (
-                  <div className="empty-state empty-state-card">暂无 API 配置</div>
+                  <div className="empty-state empty-state-card">{t('暂无 API 配置')}</div>
                 )}
               </div>
 
               <div className="panel-footer">
                 <div className="footer-info">
-                  显示第 {total === 0 ? 0 : startIdx + 1} 到 {Math.min(startIdx + pageSize, total)} 条，共 {total} 条
+                  {t('显示第 {start} 到 {end} 条，共 {total} 条', {
+                    start: total === 0 ? 0 : startIdx + 1,
+                    end: Math.min(startIdx + pageSize, total),
+                    total
+                  })}
                 </div>
                 {totalPages > 1 && (
                   <div className="pagination">
-                    <button className="page-btn" disabled={page === 1} onClick={() => setPage(Math.max(1, page - 1))}>
+                    <button type="button" className="page-btn" aria-label={t('上页')} disabled={page === 1} onClick={() => setPage(Math.max(1, page - 1))}>
                       &lt;
                     </button>
                     {Array.from({ length: totalPages }, (_, i) => i + 1).map(item => (
-                      <button key={item} className={`page-btn ${page === item ? 'active' : ''}`} onClick={() => setPage(item)}>
+                      <button type="button" key={item} className={`page-btn ${page === item ? 'active' : ''}`} aria-current={page === item ? 'page' : undefined} onClick={() => setPage(item)}>
                         {item}
                       </button>
                     ))}
-                    <button className="page-btn" disabled={page === totalPages} onClick={() => setPage(Math.min(totalPages, page + 1))}>
+                    <button type="button" className="page-btn" aria-label={t('下页')} disabled={page === totalPages} onClick={() => setPage(Math.min(totalPages, page + 1))}>
                       &gt;
                     </button>
                   </div>
@@ -564,13 +578,13 @@ export default function ApiModePage({
 
       {checkModalProfileId && (
         <Modal
-          title={detailProfileName || checkModalProfileId || 'API 预检'}
+          title={detailProfileName || checkModalProfileId || t('API 预检')}
           width="760px"
           onClose={closeCheckModal}
         >
           <div className="api-check-controls">
             <div className="api-check-model-field">
-              <span>测试模型</span>
+              <span>{t('测试模型')}</span>
               <div
                 className="api-check-model-picker"
                 onBlur={event => {
@@ -636,7 +650,7 @@ export default function ApiModePage({
 
           {modelsDetailsOpen && modelsDetailAvailable && (
             <div className="api-check-model-detail">
-              <ApiTestResponseBlock title="/models 详情" response={detailTest.modelsResponse} />
+              <ApiTestResponseBlock title={t('/models 详情')} response={detailTest.modelsResponse} />
             </div>
           )}
 
@@ -658,14 +672,14 @@ export default function ApiModePage({
                 effectiveDetailModel
               )}
             >
-              重新预检
+              {t('重新预检')}
             </button>
             <button
               type="button"
               className="btn btn-secondary api-test-detail-close-button"
               onClick={closeCheckModal}
             >
-              关闭
+              {t('关闭')}
             </button>
           </div>
         </Modal>

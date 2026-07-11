@@ -84,37 +84,23 @@ const COMMAND_BINDINGS = {
   scanSessions: ['session_manager_scan', root => ({ root })],
   previewSession: ['session_manager_preview', payload => ({
     root: payload.root,
-    relativePath: payload.relativePath
+    relativePath: payload.relativePath,
+    beforeCursor: payload.beforeCursor ?? null,
+    snapshotSize: payload.snapshotSize ?? null,
+    limit: payload.limit,
+    messageSource: payload.messageSource || null,
+    requestId: payload.requestId || null
   })],
-  previewDeletedSession: ['session_manager_preview_deleted', deleteId => ({ deleteId })],
-  selectSessionRoot: ['session_manager_select_root'],
-  selectSessionWorkdir: ['session_manager_select_workdir'],
   exportSessions: ['session_manager_export', payload => ({
     root: payload.root,
     relativePaths: payload.relativePaths
   })],
   importSessions: ['session_manager_import', root => ({ root })],
-  deleteSessions: ['session_manager_delete', payload => ({
-    root: payload.root,
-    relativePaths: payload.relativePaths
-  })],
-  listDeletedSessions: ['session_manager_list_deleted'],
-  restoreDeletedSessions: ['session_manager_restore_deleted', payload => ({
-    root: payload.root,
-    deleteIds: payload.deleteIds,
-    conflictStrategy: payload.conflictStrategy
-  })],
-  purgeDeletedSessions: ['session_manager_purge_deleted', deleteIds => ({ deleteIds })],
   setSessionStatus: ['session_manager_set_status', payload => ({
     root: payload.root,
     relativePaths: payload.relativePaths,
     status: payload.status,
     conflictStrategy: payload.conflictStrategy
-  })],
-  updateSessionCwd: ['session_manager_update_cwd', payload => ({
-    root: payload.root,
-    relativePaths: payload.relativePaths,
-    cwd: payload.cwd
   })],
   startOauth: ['oauth_start', payload => ({ payload })],
   cancelOauth: ['oauth_cancel'],

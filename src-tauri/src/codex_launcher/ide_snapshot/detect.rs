@@ -13,7 +13,40 @@ pub(crate) fn executable_leaf_name(name: &str, executable_path: &str) -> String 
 }
 
 pub(crate) fn normalize_executable_path(path: &str) -> String {
-    path.trim().to_ascii_lowercase().replace('/', "\\")
+    path.trim().to_ascii_lowercase().replace('\\', "/")
+}
+
+const WINDOWS_CODEX_APP_PACKAGE_PATH_MARKER: &str = "/openai.codex_";
+const MACOS_CHATGPT_EXECUTABLE_SUFFIXES: [&str; 2] = [
+    "/chatgpt.app/contents/macos/chatgpt",
+    "/codex.app/contents/macos/chatgpt",
+];
+const MACOS_VSCODE_EXECUTABLE_SUFFIXES: [&str; 2] = [
+    "/visual studio code.app/contents/macos/electron",
+    "/visual studio code - insiders.app/contents/macos/electron",
+];
+
+fn codex_desktop_executable_name(name: &str, executable_path: &str) -> Option<String> {
+    let normalized_name = executable_leaf_name(name, executable_path).to_ascii_lowercase();
+    let normalized_path = normalize_executable_path(executable_path);
+    if normalized_name == "chatgpt.exe"
+        && normalized_path.contains(WINDOWS_CODEX_APP_PACKAGE_PATH_MARKER)
+        && normalized_path.ends_with("/app/chatgpt.exe")
+    {
+        return Some(normalized_name);
+    }
+    if normalized_name == "chatgpt"
+        && MACOS_CHATGPT_EXECUTABLE_SUFFIXES
+            .iter()
+            .any(|suffix| normalized_path.ends_with(suffix))
+    {
+        return Some(normalized_name);
+    }
+    None
+}
+
+pub(crate) fn codex_desktop_display_name(_executable_path: &str) -> &'static str {
+    "ChatGPT (Codex)"
 }
 
 pub(crate) fn detect_ide_app(
@@ -23,19 +56,19 @@ pub(crate) fn detect_ide_app(
     let normalized_name = executable_leaf_name(name, executable_path).to_ascii_lowercase();
     let normalized_path = normalize_executable_path(executable_path);
 
-    if normalized_name == "codex.exe"
-        && normalized_path.contains("\\openai.codex_")
-        && normalized_path.contains("\\app\\codex.exe")
-        && !normalized_path.contains("\\app\\resources\\codex.exe")
-    {
-        return Some(("codex", "Codex"));
+    if codex_desktop_executable_name(&normalized_name, &normalized_path).is_some() {
+        return Some(("codex", "ChatGPT (Codex)"));
     }
 
-    if normalized_name == "code.exe"
-        && normalized_path.ends_with("\\code.exe")
-        && (normalized_path.contains("\\microsoft vs code\\")
-            || normalized_path.contains("\\microsoft vs code insiders\\"))
-    {
+    let windows_vscode = normalized_name == "code.exe"
+        && normalized_path.ends_with("/code.exe")
+        && (normalized_path.contains("/microsoft vs code/")
+            || normalized_path.contains("/microsoft vs code insiders/"));
+    let macos_vscode = normalized_name == "electron"
+        && MACOS_VSCODE_EXECUTABLE_SUFFIXES
+            .iter()
+            .any(|suffix| normalized_path.ends_with(suffix));
+    if windows_vscode || macos_vscode {
         return Some(("vscode", "VS Code"));
     }
 
@@ -112,6 +145,7 @@ pub(crate) fn normalize_ide_entries(items: Vec<Value>) -> Vec<Value> {
 pub(crate) fn build_ide_summary(entries: &[Value]) -> Value {
     let mut codex_paths = HashSet::new();
     let mut vscode_paths = HashSet::new();
+    let mut codex_display_name = "Codex";
 
     for entry in entries {
         let kind = string_field(entry, "kind");
@@ -122,6 +156,9 @@ pub(crate) fn build_ide_summary(entries: &[Value]) -> Value {
         match kind.as_str() {
             "codex" => {
                 codex_paths.insert(executable_path);
+                if raw_string_field(entry, "displayName") == "ChatGPT (Codex)" {
+                    codex_display_name = "ChatGPT (Codex)";
+                }
             }
             "vscode" => {
                 vscode_paths.insert(executable_path);
@@ -134,7 +171,7 @@ pub(crate) fn build_ide_summary(entries: &[Value]) -> Value {
     if !codex_paths.is_empty() {
         summary.push(json!({
             "key": "codex",
-            "displayName": "Codex",
+            "displayName": codex_display_name,
             "count": codex_paths.len()
         }));
     }
@@ -146,4 +183,68 @@ pub(crate) fn build_ide_summary(entries: &[Value]) -> Value {
         }));
     }
     Value::Array(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_legacy_codex_desktop_executable() {
+        let path = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.623.5175.0_x64__2p2nqsd0c76g0\app\Codex.exe";
+
+        assert_eq!(detect_ide_app("Codex.exe", path), None);
+    }
+
+    #[test]
+    fn detects_chatgpt_hosted_codex_desktop_executable() {
+        let path = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe";
+
+        assert_eq!(
+            detect_ide_app("ChatGPT.exe", path),
+            Some(("codex", "ChatGPT (Codex)"))
+        );
+        assert_eq!(codex_desktop_display_name(path), "ChatGPT (Codex)");
+    }
+
+    #[test]
+    fn detects_macos_chatgpt_and_vscode_apps() {
+        assert_eq!(
+            detect_ide_app(
+                "ChatGPT",
+                "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
+            ),
+            Some(("codex", "ChatGPT (Codex)"))
+        );
+        assert_eq!(
+            detect_ide_app("ChatGPT", "/Applications/Codex.app/Contents/MacOS/ChatGPT"),
+            Some(("codex", "ChatGPT (Codex)"))
+        );
+        assert_eq!(
+            detect_ide_app(
+                "Electron",
+                "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+            ),
+            Some(("vscode", "VS Code"))
+        );
+    }
+
+    #[test]
+    fn rejects_codex_cli_and_unrelated_chatgpt_executables() {
+        assert_eq!(
+            detect_ide_app(
+                "codex.exe",
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe"
+            ),
+            None
+        );
+        assert_eq!(
+            detect_ide_app("ChatGPT.exe", r"C:\Tools\ChatGPT\ChatGPT.exe"),
+            None
+        );
+        assert_eq!(
+            detect_ide_app("Codex", "/Applications/Codex.app/Contents/MacOS/Codex"),
+            None
+        );
+    }
 }
