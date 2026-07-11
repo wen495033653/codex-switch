@@ -46,10 +46,15 @@ pub(crate) fn kill_process_tree(pid: u64) -> bool {
         }
     }
 
-    tree.into_iter()
+    let mut killed_any = false;
+    for process in tree
+        .into_iter()
         .rev()
         .filter_map(|tree_pid| system.process(tree_pid))
-        .fold(false, |killed, process| process.kill() || killed)
+    {
+        killed_any = process.kill() || killed_any;
+    }
+    killed_any
 }
 
 pub(crate) fn get_alive_pids(pids: &[u64]) -> Vec<u64> {
