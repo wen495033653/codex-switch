@@ -1,19 +1,19 @@
 html[data-theme="light"] {
-  --bg-app: #eef2f7;
-  --bg-subtle: #e7edf5;
-  --bg-panel: #f8fafc;
-  --bg-row-hover: #edf3fb;
+  --bg-app: #f9f9f9;
+  --bg-subtle: #f3f3f3;
+  --bg-panel: #ffffff;
+  --bg-row-hover: #f3f3f3;
 
-  --border-app: #c8d3e1;
-  --border-panel: #d4deeb;
+  --border-app: rgba(26, 28, 31, 0.08);
+  --border-panel: rgba(26, 28, 31, 0.12);
 
-  --text-primary: #182231;
-  --text-secondary: #536174;
-  --text-tertiary: #8a96a8;
+  --text-primary: #1a1c1f;
+  --text-secondary: #4f4f4f;
+  --text-tertiary: #5d5d5d;
 
-  --accent: #2563eb;
-  --accent-glow: rgba(37, 99, 235, 0.14);
-  --success: #059669;
-  --warning: #d97706;
-  --danger: #dc2626;
+  --accent: #339cff;
+  --accent-glow: rgba(51, 156, 255, 0.14);
+  --success: #00a240;
+  --warning: #e25507;
+  --danger: #e02e2a;
 }

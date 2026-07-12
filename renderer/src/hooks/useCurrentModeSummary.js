@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { API_MODE_ACCOUNT_ID, getAccountId, getAccountName, maskAccountDisplayName, parseAuthInfo } from '../utils/auth';
-import { getApiProviderDisplayName } from '../utils/appState';
 
 export function useCurrentModeSummary({
   apiDraft,
@@ -22,12 +21,9 @@ export function useCurrentModeSummary({
       : '';
     const apiBaseUrlText = (apiDraft && apiDraft.base_url) || codexState.openai_base_url || '';
     const apiKeyConfigured = Boolean((apiDraft && apiDraft.api_key) || codexState.api_key_present);
-    const apiProviderDisplayName = codexState.provider_name
-      || getApiProviderDisplayName(apiDraft)
-      || 'API Provider';
     const currentModeLabel = apiModeActive ? 'API 模式' : subscriptionModeActive ? '订阅模式' : '未识别';
     const currentModeDetail = apiModeActive
-      ? apiProviderDisplayName
+      ? ''
       : subscriptionModeActive
         ? `${activeSubscriptionDisplayName}${activeSubscriptionPlan ? ` · ${activeSubscriptionPlan}` : ''}`
         : '未检测到 Codex 登录状态';

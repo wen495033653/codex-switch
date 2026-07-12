@@ -255,6 +255,44 @@ html[data-theme="light"] .app.dev-build .navbar {
   border-bottom-color: rgba(217, 119, 6, 0.44);
 }
 
+html[data-theme="light"] .dev-build-chip {
+  border-color: #6ee7b7;
+  background: #ecfdf5;
+  color: #047857;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 18px rgba(5, 150, 105, 0.1);
+}
+
+html[data-theme="light"] .dev-build-chip:hover {
+  border-color: #34d399;
+  background: #d1fae5;
+}
+
+html[data-theme="light"] .dev-build-chip.has-warnings {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #b45309;
+  box-shadow: 0 8px 18px rgba(217, 119, 6, 0.1);
+}
+
+html[data-theme="light"] .dev-build-chip.has-warnings:hover {
+  border-color: #f59e0b;
+  background: #fef3c7;
+}
+
+html[data-theme="light"] .dev-build-chip.has-errors {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+  box-shadow: 0 8px 18px rgba(220, 38, 38, 0.1);
+}
+
+html[data-theme="light"] .dev-build-chip.has-errors:hover {
+  border-color: #f87171;
+  background: #fee2e2;
+}
+
 html[data-theme="light"] .dev-diagnostics-panel {
   background: #ffffff;
   border-color: rgba(217, 119, 6, 0.42);

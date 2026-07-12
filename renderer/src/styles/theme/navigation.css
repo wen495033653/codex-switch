@@ -1,9 +1,9 @@
 html[data-theme="light"] .nav-item {
-  color: #475569;
+  color: var(--text-secondary);
 }
 
 html[data-theme="light"] .settings-about-card-title {
-  color: #0f172a;
+  color: var(--text-primary);
 }
 
 html[data-theme="light"] .settings-about-card-icon.github {
@@ -22,37 +22,37 @@ html[data-theme="light"] .settings-path-value {
 }
 
 html[data-theme="light"] .nav-item span {
-  opacity: 0.72 !important;
+  opacity: 1 !important;
 }
 
 html[data-theme="light"] .account-filter-count {
-  color: #475569;
-  opacity: 0.82 !important;
+  color: var(--text-tertiary);
+  opacity: 1 !important;
 }
 
 html[data-theme="light"] .nav-item.active .account-filter-count {
-  color: #ffffff;
-  opacity: 0.92 !important;
+  color: var(--text-secondary);
+  opacity: 1 !important;
 }
 
 html[data-theme="light"] .nav-item.active {
-  background: #2563eb;
-  color: #ffffff;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+  background: rgba(26, 28, 31, 0.05);
+  color: var(--text-primary);
+  box-shadow: none;
 }
 
 html[data-theme="light"] .top-nav-item {
-  color: #475569;
+  color: var(--text-secondary);
 }
 
 html[data-theme="light"] .top-nav-item:hover {
-  color: #1d4ed8;
+  color: var(--text-primary);
 }
 
 html[data-theme="light"] .top-nav-item.active {
-  background: #2563eb;
-  color: #ffffff;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+  background: rgba(26, 28, 31, 0.05);
+  color: var(--text-primary);
+  box-shadow: none;
 }
 
 html[data-theme="light"] .current-mode-pill,
@@ -62,7 +62,7 @@ html[data-theme="light"] .mode-page-notice {
 }
 
 html[data-theme="light"] .current-mode-detail {
-  color: #64748b;
+  color: var(--text-tertiary);
 }
 
 html[data-theme="light"] .mode-page-notice strong {
@@ -70,15 +70,15 @@ html[data-theme="light"] .mode-page-notice strong {
 }
 
 html[data-theme="light"] .settings-tab {
-  color: #475569;
+  color: var(--text-secondary);
 }
 
 html[data-theme="light"] .settings-tab:hover {
-  color: #1d4ed8;
+  color: var(--text-primary);
 }
 
 html[data-theme="light"] .settings-tab.active {
-  background: #2563eb;
-  color: #ffffff;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+  background: rgba(26, 28, 31, 0.05);
+  color: var(--text-primary);
+  box-shadow: none;
 }

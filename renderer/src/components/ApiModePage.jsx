@@ -373,7 +373,7 @@ export default function ApiModePage({
               onClick={onAddApiProfile}
               disabled={savingApiMode || switching}
             >
-              <span className="btn-leading-icon">+</span>
+              <span className="btn-leading-icon" aria-hidden="true">+</span>
               <span>{t('新增 API')}</span>
             </button>
             </div>

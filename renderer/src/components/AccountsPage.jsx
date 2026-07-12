@@ -95,7 +95,7 @@ export default function AccountsPage({
                             <span>{t('导出账号')}</span>
                         </button>
                         <button type="button" className="btn btn-primary" onClick={onAddAccount}>
-                            <span className="btn-leading-icon">+</span>
+                            <span className="btn-leading-icon" aria-hidden="true">+</span>
                             <span>{t('添加账号')}</span>
                         </button>
                     </div>

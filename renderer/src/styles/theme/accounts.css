@@ -118,7 +118,7 @@ html[data-theme="light"] .icon-btn.codex-app-instance-running::after {
 
 html[data-theme="light"] .quota-reset-inline,
 html[data-theme="light"] .quota-reset-card {
-  color: #64748b;
+  color: var(--text-tertiary);
 }
 
 html[data-theme="light"] .quota-error {

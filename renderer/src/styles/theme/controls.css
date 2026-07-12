@@ -18,14 +18,14 @@ html[data-theme="light"] .search-input:focus,
 html[data-theme="light"] .api-mode-input:focus,
 html[data-theme="light"] .settings-input:focus {
   background: #ffffff;
-  border-color: rgba(37, 99, 235, 0.46);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+  border-color: rgba(51, 156, 255, 0.58);
+  box-shadow: 0 0 0 3px rgba(51, 156, 255, 0.12);
 }
 
 html[data-theme="light"] .btn-secondary,
 html[data-theme="light"] .icon-btn,
 html[data-theme="light"] .page-btn {
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(26, 28, 31, 0.04);
   border-color: var(--border-app);
   color: var(--text-secondary);
 }
@@ -43,19 +43,23 @@ html[data-theme="light"] .oauth-cancel-btn {
 }
 
 html[data-theme="light"] .btn-primary {
-  background: #182231;
+  border-color: #1a1c1f;
+  background: #1a1c1f;
   color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 html[data-theme="light"] .btn-primary:hover {
-  background: #0f172a;
+  border-color: #303030;
+  background: #303030;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 html[data-theme="light"] .btn:disabled {
   opacity: 1;
   cursor: not-allowed;
-  background: rgba(226, 232, 240, 0.86);
-  border-color: rgba(203, 213, 225, 0.8);
-  color: #64748b;
+  background: #f3f3f3;
+  border-color: rgba(26, 28, 31, 0.05);
+  color: rgba(26, 28, 31, 0.5);
   transform: none;
 }
