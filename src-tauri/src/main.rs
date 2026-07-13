@@ -6,6 +6,7 @@ use tauri::Manager;
 
 mod accounts;
 mod api_config;
+mod codex_app_server;
 mod codex_config;
 mod codex_launcher;
 mod codex_session_usage;
@@ -172,8 +173,13 @@ fn main() {
             usage_stats::usage_stats_get,
             session_manager::session_manager_scan,
             session_manager::session_manager_preview,
+            session_manager::session_manager_preview_deleted,
             session_manager::session_manager_export,
             session_manager::session_manager_import,
+            session_manager::session_manager_delete,
+            session_manager::session_manager_list_deleted,
+            session_manager::session_manager_restore_deleted,
+            session_manager::session_manager_purge_deleted,
             session_manager::session_manager_set_status,
             oauth_flow::oauth_start,
             oauth_flow::oauth_cancel,

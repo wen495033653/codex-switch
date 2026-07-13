@@ -42,7 +42,7 @@ mod remote_control;
 mod shell;
 
 pub(crate) use codex_app::*;
-pub(crate) use codex_app_instances::codex_desktop_support_status;
+pub(crate) use codex_app_instances::{codex_desktop_cli_source_path, codex_desktop_support_status};
 pub(crate) use codex_app_watcher::{CodexAppOpenOutcome, CodexProcess};
 pub(crate) use ide_snapshot::*;
 pub(crate) use plugins::*;

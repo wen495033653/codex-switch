@@ -575,6 +575,66 @@ fn codex_app_executable() -> Result<String, String> {
         })
 }
 
+pub(crate) fn codex_desktop_cli_source_path() -> Result<PathBuf, String> {
+    let mut desktop_candidates = running_codex_app_executables().unwrap_or_default();
+    extend_unique_paths(
+        &mut desktop_candidates,
+        installed_codex_app_desktop_executable_candidates(),
+    );
+
+    let mut cli_candidates = Vec::new();
+    for desktop_executable in desktop_candidates {
+        let cli_path = codex_desktop_cli_path_for_host(Path::new(&desktop_executable));
+        let cli_path = cli_path.to_string_lossy().to_string();
+        if cli_candidates
+            .iter()
+            .any(|candidate: &String| executable_paths_equal(candidate, &cli_path))
+        {
+            continue;
+        }
+        cli_candidates.push(cli_path);
+    }
+
+    cli_candidates
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            let status = codex_desktop_support_status();
+            let message = string_field(&status, "message");
+            if message.is_empty() {
+                "当前 Codex Desktop 安装缺少 resources/codex 可执行文件，请更新 Codex Desktop"
+                    .to_string()
+            } else {
+                message
+            }
+        })
+}
+
+#[cfg(windows)]
+fn codex_desktop_cli_path_for_host(desktop_executable: &Path) -> PathBuf {
+    desktop_executable
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join("resources")
+        .join("codex.exe")
+}
+
+#[cfg(target_os = "macos")]
+fn codex_desktop_cli_path_for_host(desktop_executable: &Path) -> PathBuf {
+    desktop_executable
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new(""))
+        .join("Resources")
+        .join("codex")
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn codex_desktop_cli_path_for_host(_desktop_executable: &Path) -> PathBuf {
+    PathBuf::new()
+}
+
 fn extend_unique_paths(paths: &mut Vec<String>, candidates: Vec<String>) {
     for candidate in candidates {
         if candidate.trim().is_empty() {
@@ -1622,6 +1682,21 @@ mod tests {
         assert!(candidates[0].ends_with("ChatGPT.exe"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn desktop_cli_path_is_resolved_from_windows_resources_directory() {
+        let host = Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+        );
+
+        assert_eq!(
+            codex_desktop_cli_path_for_host(host),
+            PathBuf::from(
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__2p2nqsd0c76g0\app\resources\codex.exe"
+            )
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn desktop_executable_candidates_include_macos_chatgpt_app() {
@@ -1633,6 +1708,17 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|candidate| candidate.ends_with("/ChatGPT.app/Contents/MacOS/ChatGPT")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_cli_path_is_resolved_from_macos_resources_directory() {
+        let host = Path::new("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT");
+
+        assert_eq!(
+            codex_desktop_cli_path_for_host(host),
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex")
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::{
+    codex_app_server::{list_interactive_threads, CodexDesktopThread},
     codex_sessions::lock_codex_session_io,
     json_util::raw_string_field,
     paths::{
@@ -39,6 +40,7 @@ const PREVIEW_MESSAGE_LIMIT_DEFAULT: usize = 80;
 const PREVIEW_MESSAGE_LIMIT_MAX: usize = 200;
 const PREVIEW_REVERSE_READ_BLOCK_BYTES: usize = 64 * 1024;
 const PREVIEW_CANCELLED_ERROR: &str = "会话预览请求已取消";
+const DELETED_SESSIONS_DIR: &str = "deleted-sessions";
 const CURRENT_STATE_REQUIRED_COLUMNS: &[&str] = &[
     "id",
     "rollout_path",
@@ -67,6 +69,26 @@ struct ConversationItem {
     preview: Option<String>,
     sha256: Option<String>,
     parse_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeletedSessionRecord {
+    delete_id: String,
+    id: String,
+    title: String,
+    deleted_at: String,
+    updated_at: Option<String>,
+    original_status: String,
+    original_relative_path: String,
+    deleted_relative_path: String,
+    root_path: String,
+    size_bytes: u64,
+    cwd: Option<String>,
+    session_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
+    #[serde(default = "default_deleted_session_state")]
+    state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,7 +127,6 @@ struct PreviewMessagePage {
 #[derive(Debug)]
 struct CurrentStateCatalog {
     conversations: Vec<ConversationItem>,
-    indexed_paths: HashSet<String>,
     warnings: Vec<String>,
 }
 
@@ -220,6 +241,29 @@ struct StatusMove {
     overwritten_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct DeleteCandidate {
+    id: String,
+    title: String,
+    updated_at: Option<String>,
+    source_path: PathBuf,
+    relative_path: PathBuf,
+    summary: SessionSummary,
+}
+
+#[derive(Debug, Clone)]
+struct RestoreCandidate {
+    record: DeletedSessionRecord,
+    record_dir: PathBuf,
+    source_file: PathBuf,
+    root: PathBuf,
+    target_path: PathBuf,
+    target_relative: PathBuf,
+    target_id: String,
+    rewrite_id: Option<(String, String)>,
+    overwritten_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ConflictStrategy {
     Ask,
@@ -297,6 +341,30 @@ pub(crate) async fn session_manager_preview(
 }
 
 #[tauri::command]
+pub(crate) async fn session_manager_preview_deleted(
+    delete_id: String,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<String>,
+    request_id: Option<u64>,
+) -> Result<Value, String> {
+    begin_preview_request(request_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_deleted_conversation_impl(
+            delete_id,
+            before_cursor,
+            snapshot_size,
+            limit,
+            message_source,
+            request_id,
+        )
+    })
+    .await
+    .map_err(|err| blocking_task_error("读取已删除预览", err))?
+}
+
+#[tauri::command]
 pub(crate) async fn session_manager_export(
     app: AppHandle,
     root: String,
@@ -314,6 +382,45 @@ pub(crate) async fn session_manager_import(app: AppHandle, root: String) -> Resu
     tauri::async_runtime::spawn_blocking(move || import_conversations_impl(app, root))
         .await
         .map_err(|err| blocking_task_error("导入会话", err))?
+}
+
+#[tauri::command]
+pub(crate) async fn session_manager_delete(
+    root: String,
+    relative_paths: Vec<String>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || delete_conversations_impl(root, relative_paths))
+        .await
+        .map_err(|err| blocking_task_error("删除会话", err))?
+}
+
+#[tauri::command]
+pub(crate) async fn session_manager_list_deleted() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(list_deleted_sessions_impl)
+        .await
+        .map_err(|err| blocking_task_error("读取已删除会话", err))?
+}
+
+#[tauri::command]
+pub(crate) async fn session_manager_restore_deleted(
+    root: String,
+    delete_ids: Vec<String>,
+    conflict_strategy: Option<String>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        restore_deleted_sessions_impl(root, delete_ids, conflict_strategy)
+    })
+    .await
+    .map_err(|err| blocking_task_error("恢复会话", err))?
+}
+
+#[tauri::command]
+pub(crate) async fn session_manager_purge_deleted(
+    delete_ids: Vec<String>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || purge_deleted_sessions_impl(delete_ids))
+        .await
+        .map_err(|err| blocking_task_error("彻底删除会话", err))?
 }
 
 #[tauri::command]
@@ -889,42 +996,10 @@ fn write_codex_desktop_migration_marker(path: &Path, report: &Value) -> Result<(
 fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
     let root = resolve_codex_root(root.as_deref())?;
     validate_codex_root(&root)?;
-    let mut warnings = Vec::new();
-    let session_index = read_session_index(&root, &mut warnings);
-
-    let CurrentStateCatalog {
-        mut conversations,
-        indexed_paths,
-        warnings: mut state_warnings,
-    } = read_current_state_conversations(&root, &session_index)?;
-    warnings.append(&mut state_warnings);
-    let mut errors = Vec::new();
-
-    let mut files = Vec::new();
-    collect_conversation_files(&root.join("sessions"), "active", &mut files, &mut errors);
-    collect_conversation_files(
-        &root.join("archived_sessions"),
-        "archived",
-        &mut files,
-        &mut errors,
-    );
-
-    let mut reconciled = 0usize;
-    for (status, path) in files {
-        if indexed_paths.contains(&conversation_path_key(&path)) {
-            continue;
-        }
-        match conversation_from_path(&root, &path, &status, false, &session_index) {
-            Ok(item) => conversations.push(item),
-            Err(err) => errors.push(err),
-        }
-        reconciled += 1;
-    }
-    if reconciled > 0 {
-        warnings.push(format!(
-            "发现 {reconciled} 个尚未写入新版 state_5.sqlite 的会话文件，已临时补充显示"
-        ));
-    }
+    let desktop_threads = list_interactive_threads(&root)
+        .map_err(|err| format!("通过 Codex Desktop 查询会话失败: {err}"))?;
+    let (mut conversations, warnings, errors) =
+        conversations_from_desktop_threads(&root, desktop_threads);
 
     conversations.sort_by(|a, b| {
         conversation_sort_key(b)
@@ -940,6 +1015,96 @@ fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
         "warnings": warnings,
         "errors": errors
     }))
+}
+
+fn conversations_from_desktop_threads(
+    root: &Path,
+    desktop_threads: Vec<CodexDesktopThread>,
+) -> (Vec<ConversationItem>, Vec<String>, Vec<String>) {
+    let mut conversations = Vec::with_capacity(desktop_threads.len());
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut seen_paths = HashSet::new();
+
+    for thread in desktop_threads {
+        let id = thread.id.clone();
+        let path_key = conversation_path_key(&thread.path);
+        if seen_ids.contains(&id) || seen_paths.contains(&path_key) {
+            warnings.push(format!("已忽略 Codex Desktop 返回的重复会话: {id}"));
+            continue;
+        }
+
+        let relative = match relative_path_under_root(root, &thread.path) {
+            Some(relative) => relative,
+            None => {
+                errors.push(format!(
+                    "Codex Desktop 返回了当前数据目录外的会话路径 {}: {}",
+                    id,
+                    thread.path.display()
+                ));
+                continue;
+            }
+        };
+        if let Err(err) = ensure_session_relative_path(&relative) {
+            errors.push(format!("Codex Desktop 返回了无效会话路径 {id}: {err}"));
+            continue;
+        }
+        let metadata = match thread.path.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => {
+                errors.push(format!(
+                    "Codex Desktop 会话路径不是文件 {}: {}",
+                    id,
+                    thread.path.display()
+                ));
+                continue;
+            }
+            Err(err) => {
+                errors.push(format!(
+                    "读取 Codex Desktop 会话文件失败 {}: {}: {err}",
+                    id,
+                    thread.path.display()
+                ));
+                continue;
+            }
+        };
+
+        seen_ids.insert(id.clone());
+        seen_paths.insert(path_key);
+
+        let preview = non_empty(thread.preview);
+        let title = thread
+            .name
+            .and_then(non_empty)
+            .or_else(|| preview.clone().map(|value| truncate_text(&value, 48)))
+            .unwrap_or_else(|| id.clone());
+        let updated_at = thread
+            .recency_at
+            .or(Some(thread.updated_at))
+            .and_then(timestamp_seconds_to_rfc3339)
+            .or_else(|| system_time_to_rfc3339(metadata.modified().ok()));
+
+        conversations.push(ConversationItem {
+            id,
+            title,
+            updated_at,
+            status: if thread.archived {
+                "archived".to_string()
+            } else {
+                "active".to_string()
+            },
+            source_path: thread.path.to_string_lossy().to_string(),
+            relative_path: path_to_slash(&relative),
+            size_bytes: metadata.len(),
+            cwd: Some(thread.cwd.to_string_lossy().to_string()),
+            preview,
+            sha256: None,
+            parse_error: None,
+        });
+    }
+
+    (conversations, warnings, errors)
 }
 
 fn preview_conversation_impl(
@@ -988,6 +1153,96 @@ fn preview_conversation_impl(
         },
         "warnings": [],
         "parse_error": null
+    }))
+}
+
+fn preview_deleted_conversation_impl(
+    delete_id: String,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<String>,
+    request_id: Option<u64>,
+) -> Result<Value, String> {
+    let deleted_root = deleted_sessions_dir()?;
+    preview_deleted_conversation_from_dir(
+        &deleted_root,
+        &delete_id,
+        before_cursor,
+        snapshot_size,
+        limit,
+        message_source.as_deref(),
+        request_id,
+    )
+}
+
+fn preview_deleted_conversation_from_dir(
+    deleted_root: &Path,
+    delete_id: &str,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<&str>,
+    request_id: Option<u64>,
+) -> Result<Value, String> {
+    let record_dir = deleted_session_record_dir_at(deleted_root, delete_id)?;
+    let record = read_deleted_session_record(&record_dir)?;
+    validate_deleted_record_identity(delete_id, &record)?;
+    let record = recover_deleted_session_record_state(&record_dir, record)?
+        .ok_or_else(|| "删除操作尚未完成，原会话文件仍然存在".to_string())?;
+    let session_file = deleted_record_session_path(&record_dir, &record)?;
+    if !session_file.exists() {
+        return Err(format!("已删除会话备份文件缺失: {}", record.title));
+    }
+    verify_deleted_session_backup(&record, &session_file)?;
+    let summary = parse_session_file_for_list(&session_file).unwrap_or_default();
+    let size_bytes = session_file
+        .metadata()
+        .map(|item| item.len())
+        .unwrap_or(record.size_bytes);
+    let title = if should_rebuild_deleted_title(&record.title) {
+        conversation_title_from_summary(&summary)
+    } else {
+        record.title.clone()
+    };
+    let conversation = ConversationItem {
+        id: record.id.clone(),
+        title,
+        updated_at: record
+            .updated_at
+            .clone()
+            .or(Some(record.deleted_at.clone())),
+        status: "deleted".to_string(),
+        source_path: session_file.to_string_lossy().to_string(),
+        relative_path: record.original_relative_path.clone(),
+        size_bytes,
+        cwd: summary.cwd.clone().or(record.cwd.clone()),
+        preview: summary.preview.clone(),
+        sha256: record.sha256.clone(),
+        parse_error: summary.parse_error.clone(),
+    };
+    let page = read_preview_message_page(
+        &session_file,
+        before_cursor,
+        snapshot_size,
+        limit,
+        message_source,
+        request_id,
+    )?;
+
+    Ok(json!({
+        "ok": true,
+        "conversation": conversation,
+        "messages": page.messages,
+        "message_page": {
+            "source": page.source.as_str(),
+            "next_before": page.next_before,
+            "has_more": page.has_more,
+            "file_size": page.file_size,
+            "limit": normalize_preview_limit(limit)
+        },
+        "warnings": [],
+        "parse_error": summary.parse_error
     }))
 }
 
@@ -1290,6 +1545,425 @@ fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, Stri
             "sqlite_updated": sqlite_updated,
             "sqlite_error": sqlite_error,
             "state_backup_path": state_backup_path.map(|path| path.to_string_lossy().to_string())
+        }
+    }))
+}
+
+fn delete_conversations_impl(root: String, relative_paths: Vec<String>) -> Result<Value, String> {
+    let root = resolve_codex_root(Some(&root))?;
+    validate_codex_root(&root)?;
+    if relative_paths.is_empty() {
+        return Err("请先选择要删除的会话".to_string());
+    }
+    let deleted_root = deleted_sessions_dir()?;
+    let _io_guard = lock_codex_session_io("删除会话")?;
+    delete_conversations_locked(&root, relative_paths, &deleted_root)
+}
+
+fn delete_conversations_locked(
+    root: &Path,
+    relative_paths: Vec<String>,
+    deleted_root: &Path,
+) -> Result<Value, String> {
+    let deleted_at = now_string();
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let session_index = read_session_index(root, &mut warnings);
+    let mut candidates = Vec::new();
+    let mut seen_paths = HashSet::new();
+
+    for relative_path in relative_paths {
+        let relative = match normalize_relative_path(&relative_path).and_then(|relative| {
+            ensure_session_relative_path(&relative)?;
+            Ok(relative)
+        }) {
+            Ok(relative) => relative,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        let relative_key = path_to_slash(&relative);
+        if !seen_paths.insert(relative_key.clone()) {
+            continue;
+        }
+        let source_path = root.join(&relative);
+        if !source_path.exists() {
+            errors.push(format!("会话文件不存在: {}", relative.display()));
+            continue;
+        }
+        if let Err(err) = validate_session_file_path(root, &source_path) {
+            errors.push(err);
+            continue;
+        }
+        let summary = parse_session_file_for_list(&source_path).unwrap_or_default();
+        let id = summary
+            .id
+            .clone()
+            .or_else(|| extract_uuid_like(&relative_key))
+            .unwrap_or_else(|| relative_key.clone());
+        let title = session_index_title(&session_index, &id)
+            .unwrap_or_else(|| conversation_title_from_summary(&summary));
+        let updated_at = session_index_entry(&session_index, &id)
+            .and_then(|entry| entry.updated_at.clone())
+            .or_else(|| summary.updated_at.clone())
+            .or_else(|| {
+                source_path
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| system_time_to_rfc3339(metadata.modified().ok()))
+            });
+        candidates.push(DeleteCandidate {
+            id,
+            title,
+            updated_at,
+            source_path,
+            relative_path: relative,
+            summary,
+        });
+    }
+
+    let mut deleted_records = Vec::new();
+    let mut rollout_paths = Vec::new();
+    for candidate in candidates {
+        let original_status = match status_from_relative_path(&candidate.relative_path) {
+            Ok(status) => status,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        let mut record = match save_deleted_session_record(
+            deleted_root,
+            root,
+            &candidate,
+            &original_status,
+            &deleted_at,
+        ) {
+            Ok(record) => record,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        let record_dir = match deleted_session_record_dir_at(deleted_root, &record.delete_id) {
+            Ok(path) => path,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        let expected_sha = record.sha256.as_deref().unwrap_or_default();
+        let source_sha = match sha256_file(&candidate.source_path) {
+            Ok(value) => value,
+            Err(err) => {
+                errors.push(format!(
+                    "删除前复核会话失败 {}: {err}",
+                    candidate.relative_path.display()
+                ));
+                discard_uncommitted_deleted_record(&record_dir, &mut errors);
+                continue;
+            }
+        };
+        if source_sha != expected_sha {
+            errors.push(format!(
+                "删除前会话内容发生变化，已保留原文件: {}",
+                candidate.relative_path.display()
+            ));
+            discard_uncommitted_deleted_record(&record_dir, &mut errors);
+            continue;
+        }
+        match fs::remove_file(&candidate.source_path) {
+            Ok(()) => {
+                remove_empty_parent_dirs(root, candidate.source_path.parent());
+                match mark_deleted_session_ready(&record_dir) {
+                    Ok(()) => record.state = "ready".to_string(),
+                    Err(err) => warnings.push(format!(
+                        "会话已删除且回收站备份完整，但写入 ready 标记失败；仍可恢复: {err}"
+                    )),
+                }
+                rollout_paths.push(candidate.source_path.clone());
+                deleted_records.push(record);
+            }
+            Err(err) => {
+                errors.push(format!(
+                    "删除会话文件失败 {}: {err}",
+                    candidate.relative_path.display()
+                ));
+                discard_uncommitted_deleted_record(&record_dir, &mut errors);
+            }
+        }
+    }
+
+    let delete_ids = deleted_records
+        .iter()
+        .map(|record| record.delete_id.clone())
+        .collect::<Vec<_>>();
+    let mut removed_ids = deleted_records
+        .iter()
+        .flat_map(|record| session_id_variants(&record.id))
+        .collect::<Vec<_>>();
+    dedupe_strings(&mut removed_ids);
+
+    let desktop_error = if deleted_records.is_empty() {
+        None
+    } else {
+        delete_state_threads_for_sessions(root, &removed_ids, &rollout_paths).err()
+    };
+    let global_state_error = if deleted_records.is_empty() {
+        None
+    } else {
+        remove_from_global_state(root, &removed_ids, "delete").err()
+    };
+    if let Some(err) = &desktop_error {
+        warnings.push(format!(
+            "Codex Desktop state 清理失败，已删除会话仍保留在回收站: {err}"
+        ));
+    }
+    if let Some(err) = &global_state_error {
+        warnings.push(format!(
+            "Codex global state 清理失败，已删除会话仍保留在回收站: {err}"
+        ));
+    }
+
+    Ok(json!({
+        "ok": errors.is_empty(),
+        "message": if errors.is_empty() {
+            format!("已删除 {} 个会话", delete_ids.len())
+        } else {
+            format!("已删除 {} 个会话，{} 个失败", delete_ids.len(), errors.len())
+        },
+        "delete_ids": delete_ids.clone(),
+        "report": {
+            "deleted": delete_ids.len(),
+            "delete_ids": delete_ids,
+            "soft_deleted": deleted_records.len(),
+            "desktop_error": desktop_error,
+            "global_state_error": global_state_error,
+            "failed": errors.len(),
+            "errors": errors,
+            "warnings": warnings
+        }
+    }))
+}
+
+fn list_deleted_sessions_impl() -> Result<Value, String> {
+    let deleted_root = deleted_sessions_dir()?;
+    list_deleted_sessions_from_dir(&deleted_root)
+}
+
+fn list_deleted_sessions_from_dir(deleted_root: &Path) -> Result<Value, String> {
+    let (mut records, errors) = read_deleted_session_records_from_dir(deleted_root)?;
+    for record in &mut records {
+        if should_rebuild_deleted_title(&record.title) {
+            let record_dir = deleted_session_record_dir_at(deleted_root, &record.delete_id)?;
+            if let Ok(session_file) = deleted_record_session_path(&record_dir, record) {
+                if let Ok(summary) = parse_session_file_for_list(&session_file) {
+                    record.title = conversation_title_from_summary(&summary);
+                    record.updated_at = record.updated_at.clone().or(summary.updated_at);
+                    record.cwd = record.cwd.clone().or(summary.cwd);
+                }
+            }
+        }
+    }
+    records.sort_by(|a, b| {
+        b.deleted_at
+            .cmp(&a.deleted_at)
+            .then_with(|| a.title.cmp(&b.title))
+            .then_with(|| a.delete_id.cmp(&b.delete_id))
+    });
+    Ok(json!({
+        "ok": errors.is_empty(),
+        "deleted": records,
+        "errors": errors
+    }))
+}
+
+fn restore_deleted_sessions_impl(
+    _root: String,
+    delete_ids: Vec<String>,
+    conflict_strategy: Option<String>,
+) -> Result<Value, String> {
+    if delete_ids.is_empty() {
+        return Err("请先选择要恢复的会话".to_string());
+    }
+    let conflict_strategy = parse_conflict_strategy(conflict_strategy)?;
+    let deleted_root = deleted_sessions_dir()?;
+    let _io_guard = lock_codex_session_io("恢复会话")?;
+    restore_deleted_sessions_locked(&deleted_root, delete_ids, conflict_strategy)
+}
+
+fn restore_deleted_sessions_locked(
+    deleted_root: &Path,
+    delete_ids: Vec<String>,
+    conflict_strategy: ConflictStrategy,
+) -> Result<Value, String> {
+    let mut candidates = Vec::new();
+    let mut conflicts = Vec::new();
+    let mut errors = Vec::new();
+    let mut skipped = 0usize;
+    let mut seen_delete_ids = HashSet::new();
+    let mut reserved_targets = HashSet::new();
+
+    for delete_id in delete_ids {
+        if !seen_delete_ids.insert(delete_id.clone()) {
+            continue;
+        }
+        let mut candidate =
+            match build_restore_deleted_candidate(deleted_root, &delete_id, conflict_strategy) {
+                Ok(Some(candidate)) => candidate,
+                Ok(None) => {
+                    skipped += 1;
+                    continue;
+                }
+                Err(err) => {
+                    if let Some(target) = err.strip_prefix("CONFLICT:") {
+                        conflicts.push(json!({
+                            "delete_id": delete_id,
+                            "target": target
+                        }));
+                    } else {
+                        errors.push(err);
+                    }
+                    continue;
+                }
+            };
+
+        let mut target_key = conversation_path_key(&candidate.target_path);
+        if reserved_targets.contains(&target_key) {
+            match conflict_strategy {
+                ConflictStrategy::Ask => {
+                    conflicts.push(json!({
+                        "delete_id": delete_id,
+                        "target": path_to_slash(&candidate.target_relative)
+                    }));
+                    continue;
+                }
+                ConflictStrategy::Skip => {
+                    skipped += 1;
+                    continue;
+                }
+                ConflictStrategy::Overwrite => {
+                    errors.push(format!(
+                        "同一批恢复包含重复目标，已跳过以避免覆盖刚恢复的会话: {}",
+                        candidate.target_path.display()
+                    ));
+                    continue;
+                }
+                ConflictStrategy::ModifyId => {
+                    reassign_restore_candidate(&mut candidate, &reserved_targets)?;
+                    target_key = conversation_path_key(&candidate.target_path);
+                }
+            }
+        }
+        reserved_targets.insert(target_key);
+        candidates.push(candidate);
+    }
+
+    if !conflicts.is_empty() && conflict_strategy == ConflictStrategy::Ask {
+        return Ok(json!({
+            "ok": true,
+            "message": format!("发现 {} 个恢复冲突", conflicts.len()),
+            "report": {
+                "restored": 0,
+                "restored_delete_ids": [],
+                "skipped": skipped,
+                "conflict_action_required": true,
+                "operation": "restore",
+                "conflicts": conflicts,
+                "failed": errors.len(),
+                "errors": errors,
+                "warnings": []
+            }
+        }));
+    }
+
+    let mut restored_delete_ids = Vec::new();
+    let mut trash_retained = Vec::new();
+    let mut sqlite_updated = 0usize;
+    let mut warnings = Vec::new();
+    for candidate in candidates {
+        let delete_id = candidate.record.delete_id.clone();
+        match restore_deleted_candidate(candidate, conflict_strategy) {
+            Ok((updated, trash_removed, mut candidate_warnings)) => {
+                sqlite_updated += updated;
+                restored_delete_ids.push(delete_id.clone());
+                if !trash_removed {
+                    trash_retained.push(delete_id);
+                }
+                warnings.append(&mut candidate_warnings);
+            }
+            Err(err) => errors.push(err),
+        }
+    }
+
+    Ok(json!({
+        "ok": errors.is_empty(),
+        "message": if errors.is_empty() {
+            format!("已恢复 {} 个会话", restored_delete_ids.len())
+        } else {
+            format!("已恢复 {} 个会话，{} 个失败", restored_delete_ids.len(), errors.len())
+        },
+        "report": {
+            "restored": restored_delete_ids.len(),
+            "restored_delete_ids": restored_delete_ids,
+            "trash_retained": trash_retained,
+            "skipped": skipped,
+            "conflict_action_required": false,
+            "operation": "restore",
+            "conflicts": conflicts,
+            "failed": errors.len(),
+            "errors": errors,
+            "warnings": warnings,
+            "sqlite_updated": sqlite_updated,
+            "sqlite_error": null
+        }
+    }))
+}
+
+fn purge_deleted_sessions_impl(delete_ids: Vec<String>) -> Result<Value, String> {
+    if delete_ids.is_empty() {
+        return Err("请先选择要彻底删除的会话".to_string());
+    }
+    let deleted_root = deleted_sessions_dir()?;
+    let _io_guard = lock_codex_session_io("彻底删除会话")?;
+    purge_deleted_sessions_locked(&deleted_root, delete_ids)
+}
+
+fn purge_deleted_sessions_locked(
+    deleted_root: &Path,
+    delete_ids: Vec<String>,
+) -> Result<Value, String> {
+    let mut purged_delete_ids = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = HashSet::new();
+    for delete_id in delete_ids {
+        if !seen.insert(delete_id.clone()) {
+            continue;
+        }
+        let result = deleted_session_record_dir_at(deleted_root, &delete_id).and_then(|dir| {
+            if !dir.exists() {
+                return Err(format!("已删除会话不存在: {delete_id}"));
+            }
+            fs::remove_dir_all(&dir).map_err(|err| format!("彻底删除失败 {}: {err}", dir.display()))
+        });
+        match result {
+            Ok(()) => purged_delete_ids.push(delete_id),
+            Err(err) => errors.push(err),
+        }
+    }
+    Ok(json!({
+        "ok": errors.is_empty(),
+        "message": if errors.is_empty() {
+            format!("已彻底删除 {} 个会话", purged_delete_ids.len())
+        } else {
+            format!("已彻底删除 {} 个会话，{} 个失败", purged_delete_ids.len(), errors.len())
+        },
+        "report": {
+            "purged": purged_delete_ids.len(),
+            "purged_delete_ids": purged_delete_ids,
+            "failed": errors.len(),
+            "errors": errors
         }
     }))
 }
@@ -1896,7 +2570,6 @@ fn read_current_state_conversations(
     }
     Ok(CurrentStateCatalog {
         conversations,
-        indexed_paths,
         warnings,
     })
 }
@@ -2669,6 +3342,694 @@ fn conversation_title_from_summary(summary: &SessionSummary) -> String {
         .or_else(|| summary.first_user_message.clone())
         .map(|value| truncate_text(&value, 80))
         .unwrap_or_else(|| "未命名会话".to_string())
+}
+
+fn save_deleted_session_record(
+    deleted_root: &Path,
+    root: &Path,
+    candidate: &DeleteCandidate,
+    original_status: &str,
+    deleted_at: &str,
+) -> Result<DeletedSessionRecord, String> {
+    fs::create_dir_all(deleted_root)
+        .map_err(|err| format!("创建已删除会话目录失败 {}: {err}", deleted_root.display()))?;
+    let (delete_id, record_dir) = create_deleted_session_record_dir(deleted_root, &candidate.id)?;
+    let result = (|| {
+        let session_file = record_dir.join("session.jsonl");
+        let temp_file = temporary_sibling_path(&session_file, "delete-copy")?;
+        let sha256 = copy_file_verified(&candidate.source_path, &temp_file, None)?;
+        fs::rename(&temp_file, &session_file).map_err(|err| {
+            format!(
+                "保存已删除会话备份失败 {} -> {}: {err}",
+                temp_file.display(),
+                session_file.display()
+            )
+        })?;
+        let size_bytes = session_file
+            .metadata()
+            .map_err(|err| {
+                format!(
+                    "读取已删除会话备份信息失败 {}: {err}",
+                    session_file.display()
+                )
+            })?
+            .len();
+        let record = DeletedSessionRecord {
+            delete_id,
+            id: candidate.id.clone(),
+            title: if candidate.title.trim().is_empty() {
+                "未命名会话".to_string()
+            } else {
+                candidate.title.clone()
+            },
+            deleted_at: deleted_at.to_string(),
+            updated_at: candidate
+                .updated_at
+                .clone()
+                .or_else(|| candidate.summary.updated_at.clone()),
+            original_status: original_status.to_string(),
+            original_relative_path: path_to_slash(&candidate.relative_path),
+            deleted_relative_path: path_to_slash(&candidate.relative_path),
+            root_path: root.to_string_lossy().to_string(),
+            size_bytes,
+            cwd: candidate.summary.cwd.clone(),
+            session_file: "session.jsonl".to_string(),
+            sha256: Some(sha256),
+            state: "prepared".to_string(),
+        };
+        write_deleted_session_record(&record_dir, &record)?;
+        let stored_record = read_deleted_session_record(&record_dir)?;
+        validate_deleted_record_identity(&record.delete_id, &stored_record)?;
+        verify_deleted_session_backup(&stored_record, &session_file)?;
+        Ok(record)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&record_dir);
+    }
+    result
+}
+
+fn create_deleted_session_record_dir(
+    deleted_root: &Path,
+    session_id: &str,
+) -> Result<(String, PathBuf), String> {
+    for _ in 0..16 {
+        let delete_id = unique_delete_id(session_id);
+        let record_dir = deleted_session_record_dir_at(deleted_root, &delete_id)?;
+        match fs::create_dir(&record_dir) {
+            Ok(()) => return Ok((delete_id, record_dir)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(format!(
+                    "创建已删除会话记录目录失败 {}: {err}",
+                    record_dir.display()
+                ));
+            }
+        }
+    }
+    Err("生成已删除会话记录 ID 失败，请重试".to_string())
+}
+
+fn discard_uncommitted_deleted_record(record_dir: &Path, errors: &mut Vec<String>) {
+    if record_dir.exists() {
+        if let Err(err) = fs::remove_dir_all(record_dir) {
+            errors.push(format!(
+                "清理未完成的已删除会话备份失败 {}: {err}",
+                record_dir.display()
+            ));
+        }
+    }
+}
+
+fn copy_file_verified(
+    source: &Path,
+    target: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<String, String> {
+    fs::copy(source, target).map_err(|err| {
+        format!(
+            "复制会话文件失败 {} -> {}: {err}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    sync_file_contents(target)?;
+    let source_sha = sha256_file(source)?;
+    let target_sha = sha256_file(target)?;
+    if source_sha != target_sha {
+        let _ = fs::remove_file(target);
+        return Err(format!(
+            "会话备份 SHA-256 校验失败 {} -> {}",
+            source.display(),
+            target.display()
+        ));
+    }
+    if expected_sha256.is_some_and(|expected| expected != target_sha) {
+        let _ = fs::remove_file(target);
+        return Err(format!(
+            "已删除会话备份 SHA-256 不匹配: {}",
+            source.display()
+        ));
+    }
+    Ok(target_sha)
+}
+
+fn sync_file_contents(path: &Path) -> Result<(), String> {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| format!("同步文件失败 {}: {err}", path.display()))
+}
+
+fn write_deleted_session_record(
+    record_dir: &Path,
+    record: &DeletedSessionRecord,
+) -> Result<(), String> {
+    let path = record_dir.join("metadata.json");
+    let mut content = serde_json::to_vec_pretty(record)
+        .map_err(|err| format!("序列化已删除会话元数据失败: {err}"))?;
+    content.push(b'\n');
+    write_new_file_atomically(&path, &content, "delete-metadata")
+}
+
+fn write_new_file_atomically(path: &Path, content: &[u8], label: &str) -> Result<(), String> {
+    if path.exists() {
+        return Err(format!("目标文件已存在，拒绝覆盖: {}", path.display()));
+    }
+    let temp_path = temporary_sibling_path(path, label)?;
+    let result = (|| {
+        let mut file = fs::File::create(&temp_path)
+            .map_err(|err| format!("创建临时文件失败 {}: {err}", temp_path.display()))?;
+        file.write_all(content)
+            .map_err(|err| format!("写入临时文件失败 {}: {err}", temp_path.display()))?;
+        file.sync_all()
+            .map_err(|err| format!("同步临时文件失败 {}: {err}", temp_path.display()))?;
+        drop(file);
+        fs::rename(&temp_path, path).map_err(|err| {
+            format!(
+                "原子保存文件失败 {} -> {}: {err}",
+                temp_path.display(),
+                path.display()
+            )
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn temporary_sibling_path(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("临时文件名无效: {}", path.display()))?;
+    let base_name = format!(
+        ".{file_name}.codex-switch-{label}-{}",
+        unique_backup_id("temp")
+    );
+    Ok(unique_sibling_path(path, &base_name))
+}
+
+fn read_deleted_session_records_from_dir(
+    deleted_root: &Path,
+) -> Result<(Vec<DeletedSessionRecord>, Vec<String>), String> {
+    if !deleted_root.exists() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let entries = fs::read_dir(deleted_root)
+        .map_err(|err| format!("读取已删除会话目录失败 {}: {err}", deleted_root.display()))?;
+    let mut records = Vec::new();
+    let mut errors = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                errors.push(format!("读取已删除会话目录项失败: {err}"));
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                errors.push(format!("读取已删除会话目录项类型失败: {err}"));
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let delete_id = entry.file_name().to_string_lossy().to_string();
+        match read_deleted_session_record(&entry.path()).and_then(|record| {
+            validate_deleted_record_identity(&delete_id, &record)?;
+            let Some(record) = recover_deleted_session_record_state(&entry.path(), record)? else {
+                return Ok(None);
+            };
+            let session_file = deleted_record_session_path(&entry.path(), &record)?;
+            verify_deleted_session_backup(&record, &session_file)?;
+            Ok(Some(record))
+        }) {
+            Ok(Some(record)) => records.push(record),
+            Ok(None) => {}
+            Err(err) => errors.push(err),
+        }
+    }
+    Ok((records, errors))
+}
+
+fn read_deleted_session_record(record_dir: &Path) -> Result<DeletedSessionRecord, String> {
+    let path = record_dir.join("metadata.json");
+    let content = fs::read_to_string(&path)
+        .map_err(|err| format!("读取已删除会话元数据失败 {}: {err}", path.display()))?;
+    serde_json::from_str(&content)
+        .map_err(|err| format!("解析已删除会话元数据失败 {}: {err}", path.display()))
+}
+
+fn default_deleted_session_state() -> String {
+    "ready".to_string()
+}
+
+fn mark_deleted_session_ready(record_dir: &Path) -> Result<(), String> {
+    let marker = record_dir.join("ready");
+    write_new_file_atomically(&marker, b"ready\n", "delete-ready")
+}
+
+fn recover_deleted_session_record_state(
+    record_dir: &Path,
+    mut record: DeletedSessionRecord,
+) -> Result<Option<DeletedSessionRecord>, String> {
+    match record.state.trim().to_ascii_lowercase().as_str() {
+        "" | "ready" => {
+            record.state = "ready".to_string();
+            Ok(Some(record))
+        }
+        "prepared" => {
+            if record_dir.join("ready").exists() {
+                record.state = "ready".to_string();
+                return Ok(Some(record));
+            }
+            let original_path = deleted_record_original_path(&record)?;
+            if original_path.exists() {
+                return Ok(None);
+            }
+            record.state = "ready".to_string();
+            Ok(Some(record))
+        }
+        other => Err(format!(
+            "已删除会话记录状态无效 {}: {other}",
+            record.delete_id
+        )),
+    }
+}
+
+fn deleted_record_original_path(record: &DeletedSessionRecord) -> Result<PathBuf, String> {
+    let root = record.root_path.trim();
+    if root.is_empty() {
+        return Err(format!("已删除会话缺少原 Codex 数据目录: {}", record.title));
+    }
+    let relative = normalize_relative_path(&record.original_relative_path)?;
+    ensure_session_relative_path(&relative)?;
+    Ok(PathBuf::from(root).join(relative))
+}
+
+fn validate_deleted_record_identity(
+    requested_delete_id: &str,
+    record: &DeletedSessionRecord,
+) -> Result<(), String> {
+    validate_delete_id(requested_delete_id)?;
+    validate_delete_id(&record.delete_id)?;
+    if record.delete_id != requested_delete_id {
+        return Err(format!(
+            "已删除会话记录 ID 不一致: {requested_delete_id} != {}",
+            record.delete_id
+        ));
+    }
+    Ok(())
+}
+
+fn deleted_record_session_path(
+    record_dir: &Path,
+    record: &DeletedSessionRecord,
+) -> Result<PathBuf, String> {
+    let session_file = record.session_file.trim();
+    if session_file.is_empty() {
+        return Err(format!("已删除会话备份文件名为空: {}", record.delete_id));
+    }
+    let relative = Path::new(session_file);
+    let mut components = relative.components();
+    let only_component =
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    if !only_component
+        || relative
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("jsonl"))
+    {
+        return Err(format!("已删除会话备份文件名无效: {}", record.session_file));
+    }
+    Ok(record_dir.join(relative))
+}
+
+fn verify_deleted_session_backup(
+    record: &DeletedSessionRecord,
+    session_file: &Path,
+) -> Result<(), String> {
+    let metadata = session_file.metadata().map_err(|err| {
+        format!(
+            "读取已删除会话备份信息失败 {}: {err}",
+            session_file.display()
+        )
+    })?;
+    if metadata.len() != record.size_bytes {
+        return Err(format!("已删除会话备份大小不匹配: {}", record.delete_id));
+    }
+    if let Some(expected) = record.sha256.as_deref() {
+        let actual = sha256_file(session_file)?;
+        if actual != expected {
+            return Err(format!(
+                "已删除会话备份 SHA-256 不匹配: {}",
+                record.delete_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_restore_deleted_candidate(
+    deleted_root: &Path,
+    delete_id: &str,
+    conflict_strategy: ConflictStrategy,
+) -> Result<Option<RestoreCandidate>, String> {
+    let record_dir = deleted_session_record_dir_at(deleted_root, delete_id)?;
+    let record = read_deleted_session_record(&record_dir)?;
+    validate_deleted_record_identity(delete_id, &record)?;
+    let record = recover_deleted_session_record_state(&record_dir, record)?
+        .ok_or_else(|| "删除操作尚未完成，原会话文件仍然存在".to_string())?;
+    let source_file = deleted_record_session_path(&record_dir, &record)?;
+    verify_deleted_session_backup(&record, &source_file)?;
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() {
+        return Err(format!("已删除会话缺少原 Codex 数据目录: {}", record.title));
+    }
+    let root = resolve_codex_root(Some(root_path))?;
+    validate_codex_root(&root)?;
+    let relative = normalize_relative_path(&record.original_relative_path)?;
+    ensure_session_relative_path(&relative)?;
+    let original_status = normalize_status(&record.original_status)?;
+    if status_from_relative_path(&relative)? != original_status {
+        return Err(format!("已删除会话状态与原路径不一致: {}", record.title));
+    }
+    let original_target_path = root.join(&relative);
+    let mut target_path = original_target_path.clone();
+    let mut target_relative = relative.clone();
+    let mut target_id = record.id.clone();
+    let mut rewrite_id = None;
+    let mut overwritten_id = None;
+
+    if original_target_path.exists() {
+        validate_session_file_path(&root, &original_target_path)?;
+        match conflict_strategy {
+            ConflictStrategy::Ask => {
+                return Err(format!("CONFLICT:{}", record.original_relative_path));
+            }
+            ConflictStrategy::Skip => return Ok(None),
+            ConflictStrategy::Overwrite => {
+                overwritten_id = parse_session_file_for_list(&original_target_path)
+                    .ok()
+                    .and_then(|summary| summary.id)
+                    .or_else(|| extract_uuid_like(&record.original_relative_path));
+            }
+            ConflictStrategy::ModifyId => {
+                let mut new_id = new_session_id(&record.id);
+                loop {
+                    let reassigned = reassigned_relative_path(&relative, &record.id, &new_id)?;
+                    let reassigned_path = root.join(&reassigned);
+                    if !reassigned_path.exists() {
+                        target_path = reassigned_path;
+                        target_relative = reassigned;
+                        target_id = new_id.clone();
+                        rewrite_id = Some((record.id.clone(), new_id));
+                        break;
+                    }
+                    new_id = new_session_id(&new_id);
+                }
+            }
+        }
+    }
+
+    Ok(Some(RestoreCandidate {
+        record,
+        record_dir,
+        source_file,
+        root,
+        target_path,
+        target_relative,
+        target_id,
+        rewrite_id,
+        overwritten_id,
+    }))
+}
+
+fn reassign_restore_candidate(
+    candidate: &mut RestoreCandidate,
+    reserved_targets: &HashSet<String>,
+) -> Result<(), String> {
+    let original_relative = normalize_relative_path(&candidate.record.original_relative_path)?;
+    let mut new_id = new_session_id(&candidate.target_id);
+    loop {
+        let reassigned =
+            reassigned_relative_path(&original_relative, &candidate.record.id, &new_id)?;
+        let target_path = candidate.root.join(&reassigned);
+        if !target_path.exists() && !reserved_targets.contains(&conversation_path_key(&target_path))
+        {
+            candidate.target_path = target_path;
+            candidate.target_relative = reassigned;
+            candidate.target_id = new_id.clone();
+            candidate.rewrite_id = Some((candidate.record.id.clone(), new_id));
+            candidate.overwritten_id = None;
+            return Ok(());
+        }
+        new_id = new_session_id(&new_id);
+    }
+}
+
+fn restore_deleted_candidate(
+    candidate: RestoreCandidate,
+    conflict_strategy: ConflictStrategy,
+) -> Result<(usize, bool, Vec<String>), String> {
+    verify_deleted_session_backup(&candidate.record, &candidate.source_file)?;
+    let parent = candidate
+        .target_path
+        .parent()
+        .ok_or_else(|| format!("恢复目标目录无效: {}", candidate.target_path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|err| format!("创建恢复目录失败 {}: {err}", parent.display()))?;
+    if candidate.target_path.exists() && conflict_strategy != ConflictStrategy::Overwrite {
+        return Err(format!(
+            "恢复目标在操作期间出现冲突，请重新选择处理方式: {}",
+            candidate.target_path.display()
+        ));
+    }
+
+    let temp_path = temporary_sibling_path(&candidate.target_path, "restore")?;
+    if let Err(err) = prepare_restored_temp_file(&candidate, &temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    let overwrite_backup = if candidate.target_path.exists() {
+        let backup = status_overwrite_backup_path(&candidate.target_path, &candidate.target_id);
+        if let Err(err) = fs::rename(&candidate.target_path, &backup) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!(
+                "备份恢复覆盖目标失败 {}: {err}",
+                candidate.target_path.display()
+            ));
+        }
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(err) = fs::rename(&temp_path, &candidate.target_path) {
+        let mut message = format!(
+            "恢复会话失败 {} -> {}: {err}",
+            candidate.source_file.display(),
+            candidate.target_path.display()
+        );
+        append_restore_rollback_error(
+            &mut message,
+            &candidate.target_path,
+            overwrite_backup.as_deref(),
+        );
+        let _ = fs::remove_file(&temp_path);
+        return Err(message);
+    }
+
+    let summary = match parse_session_file_for_list(&candidate.target_path) {
+        Ok(summary) => summary,
+        Err(err) => {
+            let mut message = format!("解析恢复后的会话失败: {err}");
+            append_restore_rollback_error(
+                &mut message,
+                &candidate.target_path,
+                overwrite_backup.as_deref(),
+            );
+            return Err(message);
+        }
+    };
+    if summary
+        .id
+        .as_deref()
+        .is_some_and(|id| id != candidate.target_id)
+    {
+        let mut message = format!("恢复后的会话 ID 不匹配: 期望 {}", candidate.target_id);
+        append_restore_rollback_error(
+            &mut message,
+            &candidate.target_path,
+            overwrite_backup.as_deref(),
+        );
+        return Err(message);
+    }
+    let manifest = ManifestSession {
+        id: candidate.target_id.clone(),
+        title: if should_rebuild_deleted_title(&candidate.record.title) {
+            conversation_title_from_summary(&summary)
+        } else {
+            candidate.record.title.clone()
+        },
+        updated_at: candidate
+            .record
+            .updated_at
+            .clone()
+            .or_else(|| summary.updated_at.clone()),
+        status: candidate.record.original_status.clone(),
+        relative_path: path_to_slash(&candidate.target_relative),
+        size_bytes: candidate
+            .target_path
+            .metadata()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0),
+        sha256: sha256_file(&candidate.target_path).unwrap_or_default(),
+    };
+    let thread_metadata =
+        thread_metadata_from_manifest(&manifest, &candidate.target_path, &summary);
+    let sqlite_updated = match upsert_state_threads(&candidate.root, &[thread_metadata]) {
+        Ok(updated) => updated,
+        Err(err) => {
+            let mut message = format!("恢复 Codex Desktop state 失败: {err}");
+            append_restore_rollback_error(
+                &mut message,
+                &candidate.target_path,
+                overwrite_backup.as_deref(),
+            );
+            return Err(message);
+        }
+    };
+
+    let mut warnings = Vec::new();
+    if let Some(overwritten_id) = candidate
+        .overwritten_id
+        .as_deref()
+        .filter(|id| *id != candidate.target_id)
+    {
+        let overwritten_ids = session_id_variants(overwritten_id);
+        if let Err(err) = delete_state_threads_for_sessions(&candidate.root, &overwritten_ids, &[])
+        {
+            warnings.push(format!("清理被覆盖会话的 Desktop state 失败: {err}"));
+        }
+        if let Err(err) =
+            remove_from_global_state(&candidate.root, &overwritten_ids, "restore-overwrite")
+        {
+            warnings.push(format!("清理被覆盖会话的 global state 失败: {err}"));
+        }
+    }
+
+    if let Some(backup) = overwrite_backup {
+        if let Err(err) = fs::remove_file(&backup) {
+            warnings.push(format!("清理恢复覆盖备份失败 {}: {err}", backup.display()));
+        }
+    }
+    let trash_removed = match fs::remove_dir_all(&candidate.record_dir) {
+        Ok(()) => true,
+        Err(err) => {
+            warnings.push(format!(
+                "恢复已完成，但清理回收站记录失败 {}: {err}",
+                candidate.record_dir.display()
+            ));
+            false
+        }
+    };
+    Ok((sqlite_updated, trash_removed, warnings))
+}
+
+fn prepare_restored_temp_file(
+    candidate: &RestoreCandidate,
+    temp_path: &Path,
+) -> Result<(), String> {
+    if let Some((old_id, new_id)) = &candidate.rewrite_id {
+        let source_sha_before = sha256_file(&candidate.source_file)?;
+        copy_session_with_new_id(&candidate.source_file, temp_path, old_id, new_id)?;
+        sync_file_contents(temp_path)?;
+        let source_sha_after = sha256_file(&candidate.source_file)?;
+        if source_sha_before != source_sha_after {
+            let _ = fs::remove_file(temp_path);
+            return Err(format!(
+                "恢复期间已删除会话备份发生变化: {}",
+                candidate.record.delete_id
+            ));
+        }
+        let summary = parse_session_file_for_list(temp_path)?;
+        if summary.id.as_deref() != Some(new_id.as_str()) {
+            let _ = fs::remove_file(temp_path);
+            return Err(format!("修改恢复会话 ID 失败: {}", candidate.record.title));
+        }
+        Ok(())
+    } else {
+        copy_file_verified(
+            &candidate.source_file,
+            temp_path,
+            candidate.record.sha256.as_deref(),
+        )
+        .map(|_| ())
+    }
+}
+
+fn append_restore_rollback_error(
+    message: &mut String,
+    target_path: &Path,
+    overwrite_backup: Option<&Path>,
+) {
+    if target_path.exists() {
+        if let Err(err) = fs::remove_file(target_path) {
+            message.push_str(&format!(
+                "；清理未完成恢复目标失败 {}: {err}",
+                target_path.display()
+            ));
+            return;
+        }
+    }
+    if let Some(backup) = overwrite_backup {
+        if let Err(err) = fs::rename(backup, target_path) {
+            message.push_str(&format!(
+                "；回滚原恢复目标失败 {}: {err}（备份保留于 {}）",
+                target_path.display(),
+                backup.display()
+            ));
+        }
+    }
+}
+
+fn should_rebuild_deleted_title(title: &str) -> bool {
+    title.trim().is_empty() || title == "未命名会话"
+}
+
+fn deleted_sessions_dir() -> Result<PathBuf, String> {
+    Ok(session_manager_data_dir()?.join(DELETED_SESSIONS_DIR))
+}
+
+fn deleted_session_record_dir_at(deleted_root: &Path, delete_id: &str) -> Result<PathBuf, String> {
+    validate_delete_id(delete_id)?;
+    Ok(deleted_root.join(delete_id))
+}
+
+fn validate_delete_id(delete_id: &str) -> Result<(), String> {
+    if delete_id.trim().is_empty()
+        || !delete_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        return Err("已删除会话 ID 无效".to_string());
+    }
+    Ok(())
+}
+
+fn unique_delete_id(id: &str) -> String {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}-{suffix}", backup_stamp(), sanitize_id_fragment(id))
 }
 
 fn session_manager_data_dir() -> Result<PathBuf, String> {
@@ -3843,6 +5204,15 @@ fn timestamp_millis_to_rfc3339(milliseconds: i64) -> Option<String> {
         })
 }
 
+fn timestamp_seconds_to_rfc3339(seconds: i64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp(seconds)
+        .ok()
+        .and_then(|time| {
+            time.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+}
+
 fn now_unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4193,6 +5563,271 @@ mod tests {
             )
             .unwrap();
         connection
+    }
+
+    fn write_test_session(root: &Path, relative: &Path, id: &str, label: &str) -> PathBuf {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                json!({
+                    "timestamp": "2026-07-13T00:00:00Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": "C:\\work",
+                        "originator": "codex-switch-test"
+                    }
+                }),
+                json!({
+                    "timestamp": "2026-07-13T00:00:01Z",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": label}
+                }),
+                json!({
+                    "timestamp": "2026-07-13T00:00:02Z",
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": format!("reply-{label}")}
+                })
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    fn delete_test_session(root: &Path, deleted_root: &Path, relative: &Path) -> (Value, String) {
+        let result =
+            delete_conversations_locked(root, vec![path_to_slash(relative)], deleted_root).unwrap();
+        assert_eq!(result["report"]["deleted"], 1, "{result}");
+        let delete_id = result["delete_ids"][0].as_str().unwrap().to_string();
+        (result, delete_id)
+    }
+
+    #[test]
+    fn soft_delete_preview_and_restore_round_trip() {
+        let base = temp_path("delete-restore-round-trip");
+        let root = base.join("codex");
+        let deleted_root = base.join("deleted-sessions");
+        let relative = PathBuf::from("sessions/2026/07/13/rollout-delete-restore.jsonl");
+        let session_id = "019f0000-0000-7000-8000-000000000001";
+        let source = write_test_session(&root, &relative, session_id, "delete me");
+        let original = fs::read(&source).unwrap();
+
+        let (delete_result, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+        assert_eq!(delete_result["report"]["deleted"], 1);
+        assert!(!source.exists());
+        let record_dir = deleted_root.join(&delete_id);
+        let record = read_deleted_session_record(&record_dir).unwrap();
+        assert_eq!(record.root_path, root.to_string_lossy());
+        assert_eq!(
+            record.sha256.as_deref(),
+            Some(sha256_bytes(&original).as_str())
+        );
+
+        let preview = preview_deleted_conversation_from_dir(
+            &deleted_root,
+            &delete_id,
+            None,
+            None,
+            Some(1),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(preview["conversation"]["status"], "deleted");
+        assert_eq!(preview["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(preview["message_page"]["has_more"], true);
+
+        let restore = restore_deleted_sessions_locked(
+            &deleted_root,
+            vec![delete_id.clone()],
+            ConflictStrategy::Ask,
+        )
+        .unwrap();
+        assert_eq!(restore["report"]["restored"], 1);
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert!(!record_dir.exists());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn purge_removes_persistent_trash_record() {
+        let base = temp_path("delete-purge");
+        let root = base.join("codex");
+        let deleted_root = base.join("deleted-sessions");
+        let relative = PathBuf::from("sessions/2026/07/13/rollout-delete-purge.jsonl");
+        write_test_session(
+            &root,
+            &relative,
+            "019f0000-0000-7000-8000-000000000002",
+            "purge me",
+        );
+        let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+        let record_dir = deleted_root.join(&delete_id);
+        assert!(record_dir.exists());
+
+        let result = purge_deleted_sessions_locked(&deleted_root, vec![delete_id.clone()]).unwrap();
+        assert_eq!(result["report"]["purged"], 1);
+        assert_eq!(result["report"]["purged_delete_ids"][0], delete_id);
+        assert!(!record_dir.exists());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn delete_cleanup_failure_keeps_verified_trash() {
+        let base = temp_path("delete-cleanup-failure");
+        let root = base.join("codex");
+        let deleted_root = base.join("deleted-sessions");
+        let relative = PathBuf::from("sessions/2026/07/13/rollout-cleanup-failure.jsonl");
+        let source = write_test_session(
+            &root,
+            &relative,
+            "019f0000-0000-7000-8000-000000000003",
+            "cleanup failure",
+        );
+        fs::write(root.join("state_5.sqlite"), b"not sqlite").unwrap();
+        fs::write(root.join(".codex-global-state.json"), b"not json").unwrap();
+
+        let (result, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+        assert!(!source.exists());
+        assert!(deleted_root.join(&delete_id).join("session.jsonl").exists());
+        assert!(result["report"]["desktop_error"].is_string());
+        assert!(result["report"]["global_state_error"].is_string());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn prepared_record_is_hidden_until_original_file_is_gone() {
+        let base = temp_path("delete-prepared-recovery");
+        let root = base.join("codex");
+        let deleted_root = base.join("deleted-sessions");
+        let relative = PathBuf::from("sessions/2026/07/13/rollout-prepared-recovery.jsonl");
+        let source = write_test_session(
+            &root,
+            &relative,
+            "019f0000-0000-7000-8000-000000000006",
+            "prepared recovery",
+        );
+        let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+        let record_dir = deleted_root.join(&delete_id);
+        fs::remove_file(record_dir.join("ready")).unwrap();
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"original still exists\n").unwrap();
+
+        let hidden = list_deleted_sessions_from_dir(&deleted_root).unwrap();
+        assert!(hidden["deleted"].as_array().unwrap().is_empty());
+        fs::remove_file(&source).unwrap();
+
+        let recovered = list_deleted_sessions_from_dir(&deleted_root).unwrap();
+        assert_eq!(recovered["deleted"].as_array().unwrap().len(), 1);
+        assert_eq!(recovered["deleted"][0]["state"], "ready");
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restore_db_failure_rolls_back_overwrite_and_keeps_trash() {
+        let base = temp_path("restore-db-failure-rollback");
+        let root = base.join("codex");
+        let deleted_root = base.join("deleted-sessions");
+        let relative = PathBuf::from("sessions/2026/07/13/rollout-restore-rollback.jsonl");
+        let source = write_test_session(
+            &root,
+            &relative,
+            "019f0000-0000-7000-8000-000000000004",
+            "trashed version",
+        );
+        let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+        let replacement = b"existing target must survive\n".to_vec();
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, &replacement).unwrap();
+        fs::write(root.join("state_5.sqlite"), b"not sqlite").unwrap();
+
+        let result = restore_deleted_sessions_locked(
+            &deleted_root,
+            vec![delete_id.clone()],
+            ConflictStrategy::Overwrite,
+        )
+        .unwrap();
+        assert_eq!(result["report"]["restored"], 0);
+        assert_eq!(result["report"]["failed"], 1);
+        assert_eq!(fs::read(&source).unwrap(), replacement);
+        assert!(deleted_root.join(&delete_id).join("session.jsonl").exists());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restore_conflict_supports_ask_skip_and_modify_id() {
+        let base = temp_path("restore-conflict-strategies");
+        let root = base.join("codex");
+        let deleted_root = base.join("deleted-sessions");
+        let relative = PathBuf::from("sessions/2026/07/13/rollout-restore-conflict.jsonl");
+        let source = write_test_session(
+            &root,
+            &relative,
+            "019f0000-0000-7000-8000-000000000005",
+            "trashed conflict",
+        );
+        let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+        let existing = b"existing target\n".to_vec();
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, &existing).unwrap();
+
+        let ask = restore_deleted_sessions_locked(
+            &deleted_root,
+            vec![delete_id.clone()],
+            ConflictStrategy::Ask,
+        )
+        .unwrap();
+        assert_eq!(ask["report"]["conflict_action_required"], true);
+        assert_eq!(fs::read(&source).unwrap(), existing);
+
+        let skip = restore_deleted_sessions_locked(
+            &deleted_root,
+            vec![delete_id.clone()],
+            ConflictStrategy::Skip,
+        )
+        .unwrap();
+        assert_eq!(skip["report"]["skipped"], 1);
+        assert!(deleted_root.join(&delete_id).exists());
+
+        let modified = restore_deleted_sessions_locked(
+            &deleted_root,
+            vec![delete_id.clone()],
+            ConflictStrategy::ModifyId,
+        )
+        .unwrap();
+        assert_eq!(modified["report"]["restored"], 1);
+        assert_eq!(fs::read(&source).unwrap(), existing);
+        assert!(!deleted_root.join(&delete_id).exists());
+        let mut files = Vec::new();
+        let mut collect_errors = Vec::new();
+        collect_conversation_files(
+            &root.join("sessions"),
+            "active",
+            &mut files,
+            &mut collect_errors,
+        );
+        assert!(collect_errors.is_empty());
+        assert_eq!(files.len(), 2);
+        let restored = files
+            .iter()
+            .map(|(_, path)| path)
+            .find(|path| **path != source)
+            .unwrap();
+        let restored_summary = parse_session_file_for_list(restored).unwrap();
+        assert_ne!(
+            restored_summary.id.as_deref(),
+            Some("019f0000-0000-7000-8000-000000000005")
+        );
+
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
@@ -4550,80 +6185,43 @@ mod tests {
     }
 
     #[test]
-    fn scan_uses_current_state_metadata_and_ignores_metadata_only_rows() {
-        let root = temp_path("scan-current-state");
+    fn scan_catalog_uses_only_codex_desktop_thread_list() {
+        let root = temp_path("scan-desktop-thread-list");
         let session_id = "019e20f9-34b7-7a82-a95b-fe461de8983a";
         let file_name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de8983a.jsonl";
         let archived_path = root.join("archived_sessions").join(file_name);
         fs::create_dir_all(archived_path.parent().unwrap()).unwrap();
-        fs::write(
-            &archived_path,
-            format!(
-                "{}\n",
-                json!({
-                    "timestamp": "2026-05-13T10:54:26.757Z",
-                    "type": "session_meta",
-                    "payload": {
-                        "id": session_id,
-                        "cwd": "C:\\Users\\yuhon\\Documents\\Codex\\hello"
-                    }
-                })
-            ),
-        )
-        .unwrap();
-        let connection = create_current_state_db(&root);
-        connection
-            .execute(
-                "INSERT INTO threads
-                 (id, rollout_path, title, cwd, archived, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
-                 VALUES (?1, ?2, '新版数据库标题', 'C:\\current', 1, 10, 10000, '新版预览', 10, 10000)",
-                params![session_id, archived_path.to_string_lossy()],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO threads
-                 (id, rollout_path, title, archived, updated_at, updated_at_ms, preview, recency_at, recency_at_ms)
-                 VALUES ('metadata-only', ?1, '仅元数据', 0, 20, 20000, 'ghost', 20, 20000)",
-                [root.join("sessions/missing.jsonl").to_string_lossy().to_string()],
-            )
-            .unwrap();
-        drop(connection);
-        fs::write(
-            root.join("session_index.jsonl"),
-            format!(
-                "{}\n{}\n",
-                json!({
-                    "id": session_id,
-                    "thread_name": "Codex 原生标题",
-                    "updated_at": "2026-05-13T10:54:27.000Z"
-                }),
-                json!({
-                    "id": "active-session",
-                    "thread_name": "进行中会话",
-                    "updated_at": "2026-05-13T10:55:27.000Z"
-                })
-            ),
-        )
-        .unwrap();
+        fs::write(&archived_path, b"{}\n").unwrap();
+        let unreturned_path = root.join("sessions").join("subagent.jsonl");
+        fs::create_dir_all(unreturned_path.parent().unwrap()).unwrap();
+        fs::write(&unreturned_path, b"{}\n").unwrap();
 
-        let result = scan_conversations_impl(Some(root.to_string_lossy().to_string())).unwrap();
-        let scanned_index = fs::read_to_string(root.join("session_index.jsonl")).unwrap();
-        let conversations = result
-            .get("conversations")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let desktop_threads = vec![CodexDesktopThread {
+            id: session_id.to_string(),
+            name: Some("Codex Desktop 标题".to_string()),
+            preview: "Desktop 预览".to_string(),
+            cwd: root.join("workspace"),
+            path: archived_path.clone(),
+            updated_at: 10,
+            recency_at: Some(20),
+            archived: true,
+        }];
+        let (conversations, warnings, errors) =
+            conversations_from_desktop_threads(&root, desktop_threads);
 
         fs::remove_dir_all(&root).unwrap();
 
-        assert!(scanned_index.contains(session_id));
-        assert!(scanned_index.contains("active-session"));
+        assert!(warnings.is_empty());
+        assert!(errors.is_empty());
         assert_eq!(conversations.len(), 1);
-        assert_eq!(conversations[0]["id"], session_id);
-        assert_eq!(conversations[0]["title"], "Codex 原生标题");
-        assert_eq!(conversations[0]["preview"], "新版预览");
-        assert_eq!(conversations[0]["status"], "archived");
+        assert_eq!(conversations[0].id, session_id);
+        assert_eq!(conversations[0].title, "Codex Desktop 标题");
+        assert_eq!(conversations[0].preview.as_deref(), Some("Desktop 预览"));
+        assert_eq!(conversations[0].status, "archived");
+        assert_eq!(
+            conversations[0].source_path,
+            archived_path.to_string_lossy()
+        );
     }
 
     #[test]

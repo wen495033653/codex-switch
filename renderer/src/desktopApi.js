@@ -91,11 +91,30 @@ const COMMAND_BINDINGS = {
     messageSource: payload.messageSource || null,
     requestId: payload.requestId || null
   })],
+  previewDeletedSession: ['session_manager_preview_deleted', payload => ({
+    deleteId: payload.deleteId,
+    beforeCursor: payload.beforeCursor ?? null,
+    snapshotSize: payload.snapshotSize ?? null,
+    limit: payload.limit,
+    messageSource: payload.messageSource || null,
+    requestId: payload.requestId || null
+  })],
   exportSessions: ['session_manager_export', payload => ({
     root: payload.root,
     relativePaths: payload.relativePaths
   })],
   importSessions: ['session_manager_import', root => ({ root })],
+  deleteSessions: ['session_manager_delete', payload => ({
+    root: payload.root,
+    relativePaths: payload.relativePaths
+  })],
+  listDeletedSessions: ['session_manager_list_deleted'],
+  restoreDeletedSessions: ['session_manager_restore_deleted', payload => ({
+    root: payload.root,
+    deleteIds: payload.deleteIds,
+    conflictStrategy: payload.conflictStrategy
+  })],
+  purgeDeletedSessions: ['session_manager_purge_deleted', deleteIds => ({ deleteIds })],
   setSessionStatus: ['session_manager_set_status', payload => ({
     root: payload.root,
     relativePaths: payload.relativePaths,

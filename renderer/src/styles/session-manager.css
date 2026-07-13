@@ -44,6 +44,43 @@
   flex-wrap: wrap;
 }
 
+.session-delete-undo {
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid rgba(51, 156, 255, 0.34);
+  border-radius: 11px;
+  background: rgba(51, 156, 255, 0.1);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.session-delete-undo-action {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.session-delete-undo-action:hover:not(:disabled) {
+  background: rgba(51, 156, 255, 0.14);
+}
+
+.session-delete-undo-action:disabled {
+  cursor: default;
+  opacity: 0.56;
+}
+
 .session-search {
   width: 320px;
   flex-basis: 320px;
@@ -255,6 +292,12 @@
   color: var(--warning);
   border-color: rgba(246, 196, 83, 0.28);
   background: rgba(246, 196, 83, 0.08);
+}
+
+.session-status-pill.deleted {
+  color: var(--danger);
+  border-color: rgba(255, 123, 138, 0.3);
+  background: rgba(255, 123, 138, 0.08);
 }
 
 .session-muted {
@@ -485,6 +528,75 @@
   background: var(--bg-row-hover);
 }
 
+.session-context-menu button.danger {
+  color: var(--danger);
+}
+
+.session-delete-confirm {
+  display: grid;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.session-delete-confirm p {
+  margin: 0;
+}
+
+.session-delete-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.session-delete-summary span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--border-app);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.session-delete-list {
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-app);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.session-delete-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.session-delete-item strong,
+.session-delete-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-delete-item strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.session-delete-item span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
 .session-conflict-list {
   max-height: 180px;
   overflow: auto;
@@ -614,6 +726,12 @@ html[data-theme="light"] .session-status-pill.archived {
   color: #b45309;
 }
 
+html[data-theme="light"] .session-status-pill.deleted {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #be123c;
+}
+
 html[data-theme="light"] .session-message-bubble {
   background: #ffffff;
   border-color: #dbe4f0;
@@ -647,6 +765,21 @@ html[data-theme="light"] .session-context-menu button {
 
 html[data-theme="light"] .session-context-menu button:hover {
   background: var(--bg-row-hover);
+}
+
+html[data-theme="light"] .session-context-menu button.danger {
+  color: var(--danger);
+}
+
+html[data-theme="light"] .session-delete-undo {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+html[data-theme="light"] .session-delete-list,
+html[data-theme="light"] .session-delete-summary span {
+  background: #f8fafc;
+  border-color: #dbe4f0;
 }
 
 html[data-theme="light"] .session-conflict-list {
