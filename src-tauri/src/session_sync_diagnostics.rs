@@ -18,13 +18,17 @@ fn dev_log_buffer() -> &'static Mutex<Vec<Value>> {
 }
 
 fn event_level(event: &str) -> &'static str {
-    if event.ends_with("_error") || event == "session_sync_error" {
+    if is_error_event(event) {
         "error"
     } else if event.ends_with("_skip") {
         "warn"
     } else {
         "debug"
     }
+}
+
+fn is_error_event(event: &str) -> bool {
+    event.ends_with("_error") || event == "session_sync_error"
 }
 
 fn pick_labeled_details(details: &Value, keys: &[(&str, &str)]) -> Value {
@@ -154,6 +158,8 @@ fn dev_log_message(event: &str) -> &'static str {
         "ide_reopen_discard_without_config_apply" => "忽略 IDE 重开",
         "codex_app_watcher_scan_error" => "Codex App Watcher 扫描失败",
         "codex_app_watcher_on_open_error" => "Codex App Watcher 打开处理失败",
+        "codex_app_watcher_on_open_panic_error" => "Codex App Watcher 打开处理异常",
+        "codex_app_watcher_panic_error" => "Codex App Watcher 异常退出",
         "codex_desktop_data_migration_error" => "Codex Desktop 数据迁移失败",
         "codex_app_instance_data_migration_error" => "Codex 多开数据迁移失败",
         _ => "未知调试事件",
@@ -460,9 +466,13 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
                 ("sessionSyncProvider", "会话同步 provider"),
             ],
         )),
-        "codex_app_watcher_scan_error" | "codex_app_watcher_on_open_error" => {
-            Some(pick_labeled_details(details, &[("error", "错误")]))
-        }
+        "codex_app_watcher_scan_error"
+        | "codex_app_watcher_on_open_error"
+        | "codex_app_watcher_on_open_panic_error"
+        | "codex_app_watcher_panic_error" => Some(pick_labeled_details(
+            details,
+            &[("error", "错误"), ("retry", "将重试")],
+        )),
         "codex_desktop_data_migration_error" => Some(pick_labeled_details(
             details,
             &[("root", "Codex home"), ("error", "错误")],
@@ -476,7 +486,7 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
 }
 
 fn dev_log_event_visible(event: &str) -> bool {
-    if event.ends_with("_error") || event == "session_sync_error" {
+    if is_error_event(event) {
         return true;
     }
 
@@ -505,7 +515,7 @@ pub(crate) fn init_session_sync_diagnostics(app: AppHandle) {
 }
 
 pub(crate) fn log_session_sync_event(event: &str, details: Value) {
-    if !cfg!(debug_assertions) {
+    if !cfg!(debug_assertions) && !is_error_event(event) {
         return;
     }
     if !dev_log_event_visible(event) {
@@ -543,10 +553,6 @@ pub(crate) fn log_session_sync_event(event: &str, details: Value) {
 
 #[tauri::command]
 pub(crate) fn get_dev_log_entries() -> Value {
-    if !cfg!(debug_assertions) {
-        return Value::Array(Vec::new());
-    }
-
     let entries = dev_log_buffer()
         .lock()
         .map(|buffer| buffer.clone())
