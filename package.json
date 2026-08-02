@@ -12,7 +12,7 @@
   ],
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "repository": {
     "type": "git",
@@ -30,15 +30,15 @@
     "dist": "npm run tauri:build"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "lottie-web": "^5.13.0",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.1",
-    "@vitejs/plugin-react": "^6.0.1",
-    "vite": "^8.0.11"
+    "@tauri-apps/cli": "^2.11.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "vite": "^8.2.0"
   }
 }
