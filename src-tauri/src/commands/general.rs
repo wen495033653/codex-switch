@@ -256,7 +256,7 @@ pub(crate) async fn test_api_base_url(
         let responses_request = json!({
             "model": selected_model,
             "input": "Reply with OK.",
-            "max_output_tokens": 8,
+            "max_output_tokens": 128,
             "stream": false
         });
         let responses_request_snapshot = json!({
