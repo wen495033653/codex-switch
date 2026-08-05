@@ -79,10 +79,20 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
     );
     const chatgptAccountId = getChatgptAccountId(acc);
     const accountTag = chatgptAccountId ? chatgptAccountId.split('-')[0] : '';
-    const usageNoticeTitle = info.usageNotice
-        ? (info.usageNotice.detail || info.usageNotice.message)
+    const authStatusMessage = typeof info.authStatusMessage === 'string'
+        ? info.authStatusMessage.trim()
         : '';
-    const localizedUsageNoticeTitle = translateRuntimeText(usageNoticeTitle);
+    const accountNotice = info.authStatus === 'error'
+        ? {
+            tone: 'error',
+            message: authStatusMessage || (authBadge && authBadge.label) || t('刷新失败'),
+            detail: authStatusMessage || (authBadge && authBadge.label) || t('刷新失败')
+        }
+        : info.usageNotice;
+    const accountNoticeTitle = accountNotice
+        ? (accountNotice.detail || accountNotice.message)
+        : '';
+    const localizedAccountNoticeTitle = translateRuntimeText(accountNoticeTitle);
 
     return (
         <div className={`account-card ${isCurrent ? 'active' : ''}`}>
@@ -121,15 +131,15 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
             </div>
 
             <div className="account-card-body">
-                <div className={`account-card-quotas ${info.usageNotice ? 'account-card-quotas-status' : ''}`}>
-                    {info.usageNotice ? (
+                <div className={`account-card-quotas ${accountNotice ? 'account-card-quotas-status' : ''}`}>
+                    {accountNotice ? (
                         <div
-                            className={info.usageNotice.tone === 'error' ? 'quota-error' : 'quota-status quota-status-info'}
-                            title={localizedUsageNoticeTitle}
-                            aria-label={localizedUsageNoticeTitle}
+                            className={accountNotice.tone === 'error' ? 'quota-error' : 'quota-status quota-status-info'}
+                            title={localizedAccountNoticeTitle}
+                            aria-label={localizedAccountNoticeTitle}
                         >
-                            <span className="error-icon">{info.usageNotice.tone === 'error' ? '⚠️' : 'ℹ️'}</span>
-                            <span className="error-msg" title={localizedUsageNoticeTitle}>{translateRuntimeText(info.usageNotice.message)}</span>
+                            <span className="error-icon">{accountNotice.tone === 'error' ? '⚠️' : 'ℹ️'}</span>
+                            <span className="error-msg" title={localizedAccountNoticeTitle}>{translateRuntimeText(accountNotice.message)}</span>
                         </div>
                     ) : (
                         <>
