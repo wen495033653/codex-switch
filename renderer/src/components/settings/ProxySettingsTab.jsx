@@ -185,12 +185,12 @@ export default function ProxySettingsTab({
         || (remoteControlLegacyMatches.length === 1 ? remoteControlLegacyMatches[0] : null);
     const remoteControlSelectedAccountId = remoteControlAccount
         ? getAccountId(remoteControlAccount)
-        : remoteControlAccountId;
+        : '';
     const remoteControlAccountLabel = remoteControlAccount
         ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName, t)
-        : remoteControlAccountId
-            ? t('账号不存在，请重新选择')
-            : t('未选择');
+        : t('未选择');
+    const remoteControlMissingAccount = !remoteControlAccount;
+    const remoteControlStatusPollingEnabled = codexRemoteControlEnabled;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = t('切换订阅/API 模式后，重新打开 Codex 或 VS Code 前同步会话列表。');
     const [remoteControlStatus, setRemoteControlStatus] = useState({
@@ -207,12 +207,12 @@ export default function ProxySettingsTab({
         onRemoteControlAutoDisabledRef.current = onCodexRemoteControlAutoDisabled;
     }, [onCodexRemoteControlAutoDisabled]);
     useEffect(() => {
-        if (remoteControlEnabledInCurrentMode) {
+        if (remoteControlStatusPollingEnabled) {
             remoteControlAutoDisableNotifiedRef.current = false;
         }
-    }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
+    }, [remoteControlStatusPollingEnabled, remoteControlAccountId]);
     useEffect(() => {
-        if (!remoteControlEnabledInCurrentMode) {
+        if (!remoteControlStatusPollingEnabled) {
             setRemoteControlStatus({
                 loading: false,
                 error: '',
@@ -222,7 +222,7 @@ export default function ProxySettingsTab({
                 connectionStatus: null
             });
         }
-    }, [remoteControlEnabledInCurrentMode, remoteControlAccountId]);
+    }, [remoteControlStatusPollingEnabled, remoteControlAccountId]);
     useAsyncPolling(async ({ isCurrent }) => {
         if (!window.api || !window.api.getCodexRemoteControlStatus) return;
 
@@ -230,9 +230,10 @@ export default function ProxySettingsTab({
         try {
             const result = await window.api.getCodexRemoteControlStatus();
             if (!isCurrent()) return;
-            if (result && result.autoDisabled === true && !remoteControlAutoDisableNotifiedRef.current) {
-                remoteControlAutoDisableNotifiedRef.current = true;
-                if (typeof onRemoteControlAutoDisabledRef.current === 'function') {
+            if (result && result.settings && typeof onRemoteControlAutoDisabledRef.current === 'function') {
+                const autoDisabled = result.autoDisabled === true;
+                if (!autoDisabled || !remoteControlAutoDisableNotifiedRef.current) {
+                    if (autoDisabled) remoteControlAutoDisableNotifiedRef.current = true;
                     onRemoteControlAutoDisabledRef.current(result);
                 }
             }
@@ -257,7 +258,7 @@ export default function ProxySettingsTab({
             }
         }
     }, {
-        enabled: remoteControlEnabledInCurrentMode,
+        enabled: remoteControlStatusPollingEnabled,
         intervalMs: 4000,
         refreshKey: remoteControlAccountId
     });
@@ -305,11 +306,11 @@ export default function ProxySettingsTab({
     const remoteControlStatusTitle = (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
         || remoteControlRawStatusMessage
         || (remoteControlStatusState === 'warning' ? remoteControlDisplayStatus : '');
-    const remoteControlMissingAccount = !remoteControlBlockedBySubscription && !remoteControlEnabledInCurrentMode && !remoteControlAccount;
+    const remoteControlEnableBlocked = !codexRemoteControlEnabled
+        && (remoteControlBlockedBySubscription || remoteControlMissingAccount);
     const remoteControlToggleDisabled = savingCodexRemoteControl
         || switching
-        || remoteControlBlockedBySubscription
-        || remoteControlMissingAccount;
+        || remoteControlEnableBlocked;
     const remoteControlSwitchLabel = codexRemoteControlPendingEnabled === true
         ? t('打开中')
         : codexRemoteControlPendingEnabled === false
@@ -406,7 +407,11 @@ export default function ProxySettingsTab({
                         aria-pressed={codexRemoteControlEnabled}
                         aria-label={codexRemoteControlEnabled ? t('关闭远程控制') : t('开启远程控制')}
                         disabled={remoteControlToggleDisabled}
-                        title={remoteControlBlockedBySubscription ? t('订阅模式下不可开启远程控制') : remoteControlMissingAccount ? t('请先选择远程控制账号') : ''}
+                        title={!codexRemoteControlEnabled && remoteControlBlockedBySubscription
+                            ? t('订阅模式下不可开启远程控制')
+                            : !codexRemoteControlEnabled && remoteControlMissingAccount
+                                ? t('请先选择远程控制账号')
+                                : ''}
                         onClick={() => setCodexRemoteControlEnabled(!codexRemoteControlEnabled)}
                     >
                         <span className="settings-remote-control-switch-label">
@@ -433,9 +438,6 @@ export default function ProxySettingsTab({
                                 onChange={e => setCodexRemoteControlAccountId(e.target.value)}
                             >
                                 <option value="">{t('未选择')}</option>
-                                {remoteControlAccountId && !remoteControlAccount && (
-                                    <option value={remoteControlAccountId}>{t('账号不存在')}</option>
-                                )}
                                 {remoteControlAccounts.map(account => {
                                     const accountId = getAccountId(account);
                                     return (

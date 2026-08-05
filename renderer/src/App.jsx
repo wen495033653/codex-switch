@@ -219,9 +219,27 @@ function MainApp() {
       toastError(err, '同步远程控制状态失败', 7000);
     }
 
+    if (res && res.codex_state) {
+      setCodexState(res.codex_state);
+    }
+
+    if (!res || res.autoDisabled !== true) return;
+
+    if (res.runtimeError) {
+      toastError(new Error(res.runtimeError), '远程控制运行配置同步失败', 7000);
+    }
+
+    const noticeMessage = res.runtimeError
+      ? '远程控制已关闭并清空账号；API 运行配置同步失败，请重试'
+      : res.restartRequired
+        ? `${res.message || '远程控制已关闭并切换到 API 模式'}；重启 Codex 后生效`
+        : res.processStatusError
+          ? `${res.message || '远程控制已关闭并切换到 API 模式'}；无法确认 Codex 运行状态，建议重启`
+          : (res.message || '当前控制账号过期，远程控制关闭');
+
     setRemoteControlNotice({
       visible: true,
-      message: (res && res.message) || '当前控制账号过期，远程控制关闭'
+      message: noticeMessage
     });
   };
 
@@ -363,23 +381,6 @@ function MainApp() {
   });
 
   const {
-    closeDeleteAccountModal,
-    confirmDeleteAccount,
-    deleteAccountDisplayName,
-    deleteAccountModal,
-    exportAccountsToBackup,
-    handleRefreshAccount,
-    openDeleteAccountModal,
-    refreshingAccountId
-  } = useAccountOperations({
-    handleRes,
-    maskAccountName,
-    setStore,
-    toast,
-    toastError
-  });
-
-  const {
     addModal,
     applyOauthUpdate,
     cancelOauth,
@@ -423,6 +424,8 @@ function MainApp() {
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,
+    setPluginRestartNoticeMessage,
+    setPluginRestartNoticeVisible,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   } = useSettingsActions({
@@ -432,6 +435,26 @@ function MainApp() {
     setSettingsDraft,
     setViewMode,
     subscriptionModeActive,
+    toast,
+    toastError
+  });
+
+  const {
+    closeDeleteAccountModal,
+    confirmDeleteAccount,
+    deleteAccountDisplayName,
+    deleteAccountModal,
+    exportAccountsToBackup,
+    handleRefreshAccount,
+    openDeleteAccountModal,
+    refreshingAccountId
+  } = useAccountOperations({
+    applySettings,
+    handleRes,
+    maskAccountName,
+    setPluginRestartNoticeMessage,
+    setPluginRestartNoticeVisible,
+    setStore,
     toast,
     toastError
   });

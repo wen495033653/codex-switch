@@ -29,6 +29,13 @@ export function useModeSwitching({
   const [savingApiMode, setSavingApiMode] = useState(false);
   const [switching, setSwitching] = useState(false);
 
+  const handleModeSwitchResponse = (res) => {
+    if (res && res.settings && typeof res.settings === 'object') {
+      applySettings(res);
+    }
+    return handleRes(res);
+  };
+
   const switchToApiModeFromPage = async (profileId = activeApiProfileId) => {
     if (switching || savingApiMode) return;
     setSavingApiMode(true);
@@ -70,7 +77,7 @@ export function useModeSwitching({
       applySettings(saveRes);
 
       const res = await window.api.switchApiMode(activeProfile.id);
-      handleRes(res);
+      handleModeSwitchResponse(res);
       if (typeof onUsageStatsRefresh === 'function') onUsageStatsRefresh();
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);
     } catch (err) {
@@ -90,7 +97,7 @@ export function useModeSwitching({
     setSwitching(true);
     try {
       const res = await window.api.switchAccount(accountId);
-      handleRes(res);
+      handleModeSwitchResponse(res);
       if (typeof onUsageStatsRefresh === 'function') onUsageStatsRefresh();
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);
     } catch (err) {

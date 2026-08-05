@@ -10,8 +10,11 @@ const EMPTY_DELETE_ACCOUNT_MODAL = {
 };
 
 export function useAccountOperations({
+  applySettings,
   handleRes,
   maskAccountName,
+  setPluginRestartNoticeMessage,
+  setPluginRestartNoticeVisible,
   setStore,
   toast,
   toastError
@@ -60,7 +63,14 @@ export function useAccountOperations({
     setDeleteAccountModal(prev => ({ ...prev, loading: true }));
     try {
       const res = await window.api.deleteAccount(deleteAccountModal.accountId);
+      if (res && res.settings && typeof res.settings === 'object') {
+        applySettings(res);
+      }
       handleRes(res);
+      if (res && res.restartRequired) {
+        setPluginRestartNoticeMessage('控制账号已删除，远程控制已关闭；重启 Codex 后生效。');
+        setPluginRestartNoticeVisible(true);
+      }
       setDeleteAccountModal(EMPTY_DELETE_ACCOUNT_MODAL);
     } catch (err) {
       toastError(err, '删除账号失败');

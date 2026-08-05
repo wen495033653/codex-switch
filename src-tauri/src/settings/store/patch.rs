@@ -574,6 +574,44 @@ mod tests {
     }
 
     #[test]
+    fn apply_settings_patch_resets_missing_remote_control_account() {
+        let mut object = Map::new();
+        object.insert("codex_remote_control_enabled".to_string(), json!(true));
+        object.insert(
+            "codex_remote_control_account_id".to_string(),
+            json!("profile-missing"),
+        );
+        object.insert("codex_active_mode".to_string(), json!("chatgpt"));
+
+        apply_settings_patch(
+            &mut object,
+            &json!({
+                "codex_remote_control_enabled": false,
+                "codex_remote_control_account_id": null,
+                "codex_active_mode": "api"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object
+                .get("codex_remote_control_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            object
+                .get("codex_remote_control_account_id")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        assert_eq!(
+            object.get("codex_active_mode").and_then(Value::as_str),
+            Some("api")
+        );
+    }
+
+    #[test]
     fn apply_settings_patch_updates_auto_start_launch_mode() {
         let mut object = Map::new();
 

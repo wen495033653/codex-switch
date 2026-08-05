@@ -3,7 +3,7 @@ use super::kill_process_tree;
 use super::{json_as_array, parse_json_output, run_pwsh};
 use crate::{
     accounts::{
-        find_store_account, get_codex_state_value, profile_id_from_account,
+        get_codex_state_value, lookup_store_account, profile_id_from_account,
         profile_id_from_tokens_value, read_api_key_from_auth, read_api_key_from_provider_config,
         read_auth_value, set_api_mode, set_subscription_mode, write_account_auth,
     },
@@ -29,6 +29,8 @@ const REMOTE_CONTROL_ENVIRONMENTS_ENDPOINT: &str =
 const REMOTE_CONTROL_BACKEND_STATUS_TIMEOUT_MS: u64 = 6_000;
 const REMOTE_CONTROL_BACKEND_ERROR_TEXT_MAX_LEN: usize = 1800;
 const REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE: &str = "当前控制账号过期，远程控制关闭";
+const REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE: &str =
+    "远程控制账号不存在，已关闭远程控制并切换到 API 模式";
 
 fn remote_control_config_enabled_from_settings(settings: &Value) -> bool {
     bool_field(settings, REMOTE_CONTROL_ENABLED_SETTING_KEY)
@@ -39,21 +41,84 @@ fn remote_control_suspended_by_subscription(settings: &Value) -> bool {
     string_field(settings, "codex_active_mode") == "chatgpt"
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemoteControlRuntimeTarget {
+    MixedApi,
+    Subscription,
+    Api,
+}
+
 pub(crate) fn remote_control_enabled_from_settings(settings: &Value) -> bool {
     remote_control_config_enabled_from_settings(settings)
         && !remote_control_suspended_by_subscription(settings)
+}
+
+fn remote_control_runtime_target(settings: &Value) -> RemoteControlRuntimeTarget {
+    if remote_control_enabled_from_settings(settings) {
+        RemoteControlRuntimeTarget::MixedApi
+    } else if remote_control_suspended_by_subscription(settings) {
+        RemoteControlRuntimeTarget::Subscription
+    } else {
+        RemoteControlRuntimeTarget::Api
+    }
 }
 
 fn remote_control_account_id_from_settings(settings: &Value) -> String {
     string_field(settings, REMOTE_CONTROL_ACCOUNT_SETTING_KEY)
 }
 
+fn missing_remote_control_account_id_with_lookup<F>(
+    settings: &Value,
+    lookup: F,
+) -> Result<Option<String>, String>
+where
+    F: FnOnce(&str) -> Result<Option<Value>, String>,
+{
+    if !remote_control_config_enabled_from_settings(settings) {
+        return Ok(None);
+    }
+
+    let account_id = remote_control_account_id_from_settings(settings);
+    if account_id.is_empty() {
+        return Ok(Some(account_id));
+    }
+
+    lookup(&account_id).map(|account| account.is_none().then_some(account_id))
+}
+
+fn missing_remote_control_account_id(settings: &Value) -> Result<Option<String>, String> {
+    missing_remote_control_account_id_with_lookup(settings, lookup_store_account)
+}
+
+fn missing_remote_control_account_fallback_patch() -> Value {
+    json!({
+        REMOTE_CONTROL_ENABLED_SETTING_KEY: false,
+        REMOTE_CONTROL_ACCOUNT_SETTING_KEY: Value::Null,
+        "codex_active_mode": "api"
+    })
+}
+
+pub(crate) fn reset_remote_control_to_api_mode_settings() -> Result<Value, String> {
+    update_settings_value(&missing_remote_control_account_fallback_patch())
+}
+
+fn remote_control_sync_changed(legacy_runtime_changed: bool, runtime_config_changed: bool) -> bool {
+    legacy_runtime_changed || runtime_config_changed
+}
+
+fn missing_account_fallback_changes_live_runtime_target(
+    before: RemoteControlRuntimeTarget,
+    after: RemoteControlRuntimeTarget,
+) -> bool {
+    before == RemoteControlRuntimeTarget::Subscription && after == RemoteControlRuntimeTarget::Api
+}
+
 fn remote_control_account(account_id: &str) -> Result<Value, String> {
     if account_id.trim().is_empty() {
         return Err("远程控制需要先单独选择一个订阅账号".to_string());
     }
-    find_store_account(account_id)
-        .map_err(|_| format!("远程控制账号不存在，请重新选择: {account_id}"))
+    lookup_store_account(account_id)?
+        .ok_or_else(|| format!("远程控制账号不存在，请重新选择: {account_id}"))
 }
 
 fn validate_remote_control_account_id(account_id: &str) -> Result<(), String> {
@@ -310,6 +375,9 @@ pub(crate) fn preview_remote_control_runtime_for_current_settings(
     _trigger: &str,
 ) -> Result<bool, String> {
     let settings = read_settings_value()?;
+    if missing_remote_control_account_id(&settings)?.is_some() {
+        return Ok(true);
+    }
     if remote_control_enabled_from_settings(&settings) {
         validate_remote_control_enable_prerequisites()?;
         return Ok(!remote_control_mixed_config_applied(&settings));
@@ -329,25 +397,52 @@ fn legacy_remote_control_home_removed_pending() -> bool {
 pub(crate) fn sync_remote_control_runtime_for_current_settings(
     context: &str,
 ) -> Result<bool, String> {
-    let settings = read_settings_value()?;
-    let mut changed = cleanup_legacy_remote_control_runtime()?;
+    let mut settings = read_settings_value()?;
+    let runtime_target_before_fallback = remote_control_runtime_target(&settings);
+    let missing_account_id = missing_remote_control_account_id(&settings)?;
 
-    if remote_control_enabled_from_settings(&settings) {
-        let pending = !remote_control_mixed_config_applied(&settings);
-        apply_remote_control_mixed_config(&settings)?;
-        changed |= pending;
-    } else if remote_control_config_enabled_from_settings(&settings)
-        && remote_control_suspended_by_subscription(&settings)
-    {
-        let pending = remote_control_mixed_config_present();
-        set_subscription_mode()?;
-        remove_remote_control_config()?;
-        changed |= pending;
-    } else {
-        let pending = remote_control_mixed_config_present();
-        restore_api_config_after_remote_control_disabled(&settings)?;
-        remove_remote_control_config()?;
-        changed |= pending;
+    if missing_account_id.is_some() {
+        settings = reset_remote_control_to_api_mode_settings()?;
+    }
+    let runtime_target = remote_control_runtime_target(&settings);
+    let fallback_changed_runtime_target = missing_account_id.is_some()
+        && missing_account_fallback_changes_live_runtime_target(
+            runtime_target_before_fallback,
+            runtime_target,
+        );
+    let legacy_runtime_changed = cleanup_legacy_remote_control_runtime()?;
+
+    let runtime_config_changed = match runtime_target {
+        RemoteControlRuntimeTarget::MixedApi => {
+            let pending = !remote_control_mixed_config_applied(&settings);
+            apply_remote_control_mixed_config(&settings)?;
+            pending
+        }
+        RemoteControlRuntimeTarget::Subscription => {
+            let pending = remote_control_mixed_config_present();
+            set_subscription_mode()?;
+            remove_remote_control_config()?;
+            pending
+        }
+        RemoteControlRuntimeTarget::Api => {
+            let pending = remote_control_mixed_config_present();
+            restore_api_config_after_remote_control_disabled(&settings)?;
+            remove_remote_control_config()?;
+            pending
+        }
+    } || fallback_changed_runtime_target;
+    let changed = remote_control_sync_changed(legacy_runtime_changed, runtime_config_changed);
+
+    if let Some(account_id) = missing_account_id {
+        log_session_sync_event(
+            "codex_remote_control_auto_disabled",
+            json!({
+                "context": context,
+                "reason": "missing_account",
+                "accountId": account_id,
+                "message": REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE
+            }),
+        );
     }
 
     if changed {
@@ -724,6 +819,35 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
     Ok((settings, changed))
 }
 
+pub(crate) fn remote_control_codex_app_running() -> Result<bool, String> {
+    Ok(!super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty())
+}
+
+fn attach_remote_control_auto_disabled_response(
+    mut response: Value,
+    settings: Value,
+    message: &str,
+    changed: bool,
+    restart_required: bool,
+    runtime_error: Option<String>,
+    process_status_error: Option<String>,
+) -> Value {
+    if let Some(response) = response.as_object_mut() {
+        response.insert("autoDisabled".to_string(), json!(true));
+        response.insert("message".to_string(), json!(message));
+        response.insert("settings".to_string(), settings);
+        response.insert("changed".to_string(), json!(changed));
+        response.insert("restartRequired".to_string(), json!(restart_required));
+        if let Some(error) = runtime_error {
+            response.insert("runtimeError".to_string(), Value::String(error));
+        }
+        if let Some(error) = process_status_error {
+            response.insert("processStatusError".to_string(), Value::String(error));
+        }
+    }
+    response
+}
+
 #[tauri::command]
 pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(get_codex_remote_control_status_impl)
@@ -733,23 +857,63 @@ pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
 
 fn get_codex_remote_control_status_impl() -> Result<Value, String> {
     let mut settings = read_settings_value()?;
+    let missing_account_id = missing_remote_control_account_id(&settings)?;
+    let mut auto_disable_message = None;
+    let mut changed = false;
+    let mut restart_required = false;
+    let mut runtime_error = None;
+    let mut process_status_error = None;
+
+    if let Some(account_id) = missing_account_id {
+        let codex_app_running = match remote_control_codex_app_running() {
+            Ok(running) => running,
+            Err(err) => {
+                process_status_error = Some(err);
+                false
+            }
+        };
+        match sync_remote_control_runtime_for_current_settings("remote_control_missing_account") {
+            Ok(runtime_changed) => {
+                changed = runtime_changed;
+                restart_required =
+                    runtime_changed && (codex_app_running || process_status_error.is_some());
+            }
+            Err(err) => {
+                runtime_error = Some(err);
+            }
+        }
+        settings = read_settings_value()?;
+        if remote_control_config_enabled_from_settings(&settings) {
+            return Err(runtime_error.unwrap_or_else(|| "自动关闭远程控制失败，请重试".to_string()));
+        }
+        auto_disable_message = Some(REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE);
+        log_session_sync_event(
+            "codex_remote_control_auto_disabled",
+            json!({
+                "reason": "missing_account",
+                "accountId": account_id,
+                "changed": changed,
+                "restartRequired": restart_required,
+                "runtimeError": runtime_error.clone(),
+                "processStatusError": process_status_error.clone()
+            }),
+        );
+    }
+
     let backend_environment = remote_control_backend_environment_status(&settings);
     let mut connection_status =
         remote_control_status_value(&settings, backend_environment.as_ref());
-    let mut auto_disabled = false;
-    let mut changed = false;
-    let mut restart_required = false;
 
-    if remote_control_status_is_login_expired(&connection_status)
+    if auto_disable_message.is_none()
+        && remote_control_status_is_login_expired(&connection_status)
         && remote_control_enabled_from_settings(&settings)
     {
-        let codex_app_running =
-            !super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty();
+        let codex_app_running = remote_control_codex_app_running()?;
         let (disabled_settings, runtime_changed) = disable_remote_control_after_login_expired()?;
         settings = disabled_settings;
-        auto_disabled = true;
         changed = runtime_changed;
         restart_required = codex_app_running && runtime_changed;
+        auto_disable_message = Some(REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE);
         if let Some(status) = connection_status.as_object_mut() {
             status.insert(
                 "message".to_string(),
@@ -772,19 +936,23 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
         "enabled": remote_control_config_enabled_from_settings(&settings),
         "effectiveEnabled": remote_control_enabled_from_settings(&settings),
         "accountId": remote_control_account_id_from_settings(&settings),
+        "codex_state": get_codex_state_value(),
         "backendEnvironment": backend_environment,
         "connectionStatus": connection_status
     });
-    if auto_disabled {
+    if let Some(message) = auto_disable_message {
+        response = attach_remote_control_auto_disabled_response(
+            response,
+            settings,
+            message,
+            changed,
+            restart_required,
+            runtime_error,
+            if changed { process_status_error } else { None },
+        );
+    } else if !remote_control_config_enabled_from_settings(&settings) {
         if let Some(response) = response.as_object_mut() {
-            response.insert("autoDisabled".to_string(), json!(true));
-            response.insert(
-                "message".to_string(),
-                json!(REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE),
-            );
             response.insert("settings".to_string(), settings);
-            response.insert("changed".to_string(), json!(changed));
-            response.insert("restartRequired".to_string(), json!(restart_required));
         }
     }
     Ok(response)
@@ -917,6 +1085,111 @@ mod tests {
 
         assert!(remote_control_config_enabled_from_settings(&settings));
         assert!(!remote_control_enabled_from_settings(&settings));
+    }
+
+    #[test]
+    fn missing_remote_control_account_is_distinguished_from_store_errors() {
+        let settings = json!({
+            "codex_remote_control_enabled": true,
+            "codex_remote_control_account_id": "profile-missing",
+            "codex_active_mode": "chatgpt"
+        });
+
+        let missing = missing_remote_control_account_id_with_lookup(&settings, |_| Ok(None))
+            .expect("missing account should be a recoverable state");
+        assert_eq!(missing.as_deref(), Some("profile-missing"));
+
+        let err = missing_remote_control_account_id_with_lookup(
+            &settings,
+            |_| -> Result<Option<Value>, String> {
+                Err("读取 accounts.json 失败: invalid json".to_string())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, "读取 accounts.json 失败: invalid json");
+    }
+
+    #[test]
+    fn enabled_remote_control_without_selection_is_reconciled_without_account_lookup() {
+        let settings = json!({
+            "codex_remote_control_enabled": true,
+            "codex_remote_control_account_id": "",
+            "codex_active_mode": "chatgpt"
+        });
+
+        let missing = missing_remote_control_account_id_with_lookup(
+            &settings,
+            |_| -> Result<Option<Value>, String> {
+                panic!("empty selection must not read the account store")
+            },
+        )
+        .unwrap();
+
+        assert_eq!(missing.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn subscription_to_api_fallback_is_reported_for_restart_decisions() {
+        assert!(!remote_control_sync_changed(false, false));
+        assert!(remote_control_sync_changed(false, true));
+        assert!(remote_control_sync_changed(true, false));
+        assert!(missing_account_fallback_changes_live_runtime_target(
+            RemoteControlRuntimeTarget::Subscription,
+            RemoteControlRuntimeTarget::Api
+        ));
+        assert!(!missing_account_fallback_changes_live_runtime_target(
+            RemoteControlRuntimeTarget::MixedApi,
+            RemoteControlRuntimeTarget::Api
+        ));
+    }
+
+    #[test]
+    fn disabled_remote_control_preserves_subscription_runtime_target() {
+        let settings = json!({
+            "codex_remote_control_enabled": false,
+            "codex_active_mode": "chatgpt"
+        });
+
+        assert_eq!(
+            remote_control_runtime_target(&settings),
+            RemoteControlRuntimeTarget::Subscription
+        );
+    }
+
+    #[test]
+    fn auto_disabled_status_response_carries_settings_and_runtime_state() {
+        let settings = json!({
+            "codex_remote_control_enabled": false,
+            "codex_remote_control_account_id": "",
+            "codex_active_mode": "api"
+        });
+        let response = attach_remote_control_auto_disabled_response(
+            json!({ "ok": true }),
+            settings.clone(),
+            REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE,
+            true,
+            true,
+            Some("runtime failed".to_string()),
+            Some("process check failed".to_string()),
+        );
+
+        assert_eq!(
+            response.get("autoDisabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(response.get("settings"), Some(&settings));
+        assert_eq!(
+            response.get("message").and_then(Value::as_str),
+            Some(REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE)
+        );
+        assert_eq!(
+            response.get("runtimeError").and_then(Value::as_str),
+            Some("runtime failed")
+        );
+        assert_eq!(
+            response.get("processStatusError").and_then(Value::as_str),
+            Some("process check failed")
+        );
     }
 
     #[test]

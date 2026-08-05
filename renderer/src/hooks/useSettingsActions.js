@@ -286,6 +286,8 @@ export function useSettingsActions({
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,
+    setPluginRestartNoticeMessage,
+    setPluginRestartNoticeVisible,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   };
