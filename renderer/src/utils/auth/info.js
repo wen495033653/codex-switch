@@ -12,6 +12,29 @@ function normalizePlanType(value) {
     return PLAN_TYPE_ALIASES[raw.toLowerCase()] || raw;
 }
 
+export function isAuthSessionInvalid(info) {
+    if (!info || info.isApiMode || info.authStatus !== 'error') return false;
+    const message = typeof info.authStatusMessage === 'string'
+        ? info.authStatusMessage.toLowerCase()
+        : '';
+    return [
+        'refresh_token_invalidated',
+        'refresh token invalidated',
+        'session has ended',
+        'invalid_grant',
+        'unauthorized',
+        'authorization expired',
+        'authentication token is expired',
+        'please log out and sign in again',
+        '缺少 refreshtoken',
+        '缺少 refresh_token',
+        '刷新结果缺少 refresh_token',
+        '登录已失效',
+        '登录已过期',
+        '请重新登录'
+    ].some(pattern => message.includes(pattern));
+}
+
 export function parseAuthInfo(account) {
     if (isApiModeAccount(account)) {
         const api = account.api && typeof account.api === 'object' ? account.api : {};

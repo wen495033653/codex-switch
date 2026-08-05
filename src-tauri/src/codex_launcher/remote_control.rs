@@ -3,9 +3,10 @@ use super::kill_process_tree;
 use super::{json_as_array, parse_json_output, run_pwsh};
 use crate::{
     accounts::{
-        get_codex_state_value, lookup_store_account, profile_id_from_account,
-        profile_id_from_tokens_value, read_api_key_from_auth, read_api_key_from_provider_config,
-        read_auth_value, set_api_mode, set_subscription_mode, write_account_auth,
+        get_codex_state_value, lookup_store_account, mark_account_auth_error,
+        profile_id_from_account, profile_id_from_tokens_value, read_api_key_from_auth,
+        read_api_key_from_provider_config, read_auth_value, read_store_value, set_api_mode,
+        set_subscription_mode, write_account_auth,
     },
     api_config::API_PROVIDER_ID,
     codex_config::{
@@ -29,6 +30,8 @@ const REMOTE_CONTROL_ENVIRONMENTS_ENDPOINT: &str =
 const REMOTE_CONTROL_BACKEND_STATUS_TIMEOUT_MS: u64 = 6_000;
 const REMOTE_CONTROL_BACKEND_ERROR_TEXT_MAX_LEN: usize = 1800;
 const REMOTE_CONTROL_LOGIN_EXPIRED_AUTO_DISABLE_MESSAGE: &str = "当前控制账号过期，远程控制关闭";
+const REMOTE_CONTROL_ACCOUNT_INVALID_AUTO_DISABLE_MESSAGE: &str =
+    "控制账号登录已失效，已关闭远程控制";
 const REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE: &str =
     "远程控制账号不存在，已关闭远程控制并切换到 API 模式";
 
@@ -67,10 +70,69 @@ fn remote_control_account_id_from_settings(settings: &Value) -> String {
     string_field(settings, REMOTE_CONTROL_ACCOUNT_SETTING_KEY)
 }
 
-fn missing_remote_control_account_id_with_lookup<F>(
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RemoteControlAccountIssue {
+    Missing(String),
+    LoginExpired(String),
+}
+
+impl RemoteControlAccountIssue {
+    fn account_id(&self) -> &str {
+        match self {
+            Self::Missing(account_id) | Self::LoginExpired(account_id) => account_id,
+        }
+    }
+
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Missing(_) => "missing_account",
+            Self::LoginExpired(_) => "login_expired",
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Missing(_) => REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE,
+            Self::LoginExpired(_) => REMOTE_CONTROL_ACCOUNT_INVALID_AUTO_DISABLE_MESSAGE,
+        }
+    }
+}
+
+fn remote_control_account_login_expired(account: &Value) -> bool {
+    let custom = account.get("custom").unwrap_or(&Value::Null);
+    if string_field(custom, "auth_status") != "error" {
+        return false;
+    }
+
+    let auth_error = custom.get("auth_error").unwrap_or(&Value::Null);
+    let text = format!(
+        "{} {} {} {}",
+        string_field(custom, "auth_status_message"),
+        string_field(auth_error, "code"),
+        string_field(auth_error, "message"),
+        string_field(auth_error, "raw_message")
+    )
+    .to_ascii_lowercase();
+    [
+        "refresh_token_invalidated",
+        "refresh token invalidated",
+        "session has ended",
+        "invalid_grant",
+        "unauthorized",
+        "authorization expired",
+        "authentication token is expired",
+        "登录已失效",
+        "登录已过期",
+        "请重新登录",
+    ]
+    .iter()
+    .any(|pattern| text.contains(pattern))
+}
+
+fn remote_control_account_issue_with_lookup<F>(
     settings: &Value,
     lookup: F,
-) -> Result<Option<String>, String>
+) -> Result<Option<RemoteControlAccountIssue>, String>
 where
     F: FnOnce(&str) -> Result<Option<Value>, String>,
 {
@@ -80,14 +142,22 @@ where
 
     let account_id = remote_control_account_id_from_settings(settings);
     if account_id.is_empty() {
-        return Ok(Some(account_id));
+        return Ok(Some(RemoteControlAccountIssue::Missing(account_id)));
     }
 
-    lookup(&account_id).map(|account| account.is_none().then_some(account_id))
+    let Some(account) = lookup(&account_id)? else {
+        return Ok(Some(RemoteControlAccountIssue::Missing(account_id)));
+    };
+    if remote_control_account_login_expired(&account) {
+        return Ok(Some(RemoteControlAccountIssue::LoginExpired(account_id)));
+    }
+    Ok(None)
 }
 
-fn missing_remote_control_account_id(settings: &Value) -> Result<Option<String>, String> {
-    missing_remote_control_account_id_with_lookup(settings, lookup_store_account)
+fn remote_control_account_issue(
+    settings: &Value,
+) -> Result<Option<RemoteControlAccountIssue>, String> {
+    remote_control_account_issue_with_lookup(settings, lookup_store_account)
 }
 
 fn missing_remote_control_account_fallback_patch() -> Value {
@@ -375,7 +445,7 @@ pub(crate) fn preview_remote_control_runtime_for_current_settings(
     _trigger: &str,
 ) -> Result<bool, String> {
     let settings = read_settings_value()?;
-    if missing_remote_control_account_id(&settings)?.is_some() {
+    if remote_control_account_issue(&settings)?.is_some() {
         return Ok(true);
     }
     if remote_control_enabled_from_settings(&settings) {
@@ -399,17 +469,27 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
 ) -> Result<bool, String> {
     let mut settings = read_settings_value()?;
     let runtime_target_before_fallback = remote_control_runtime_target(&settings);
-    let missing_account_id = missing_remote_control_account_id(&settings)?;
+    let account_issue = remote_control_account_issue(&settings)?;
 
-    if missing_account_id.is_some() {
-        settings = reset_remote_control_to_api_mode_settings()?;
+    match account_issue.as_ref() {
+        Some(RemoteControlAccountIssue::Missing(_)) => {
+            settings = reset_remote_control_to_api_mode_settings()?;
+        }
+        Some(RemoteControlAccountIssue::LoginExpired(_)) => {
+            settings = update_settings_value(&json!({
+                REMOTE_CONTROL_ENABLED_SETTING_KEY: false
+            }))?;
+        }
+        None => {}
     }
     let runtime_target = remote_control_runtime_target(&settings);
-    let fallback_changed_runtime_target = missing_account_id.is_some()
-        && missing_account_fallback_changes_live_runtime_target(
-            runtime_target_before_fallback,
-            runtime_target,
-        );
+    let fallback_changed_runtime_target = matches!(
+        account_issue.as_ref(),
+        Some(RemoteControlAccountIssue::Missing(_))
+    ) && missing_account_fallback_changes_live_runtime_target(
+        runtime_target_before_fallback,
+        runtime_target,
+    );
     let legacy_runtime_changed = cleanup_legacy_remote_control_runtime()?;
 
     let runtime_config_changed = match runtime_target {
@@ -433,14 +513,14 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
     } || fallback_changed_runtime_target;
     let changed = remote_control_sync_changed(legacy_runtime_changed, runtime_config_changed);
 
-    if let Some(account_id) = missing_account_id {
+    if let Some(issue) = account_issue {
         log_session_sync_event(
             "codex_remote_control_auto_disabled",
             json!({
                 "context": context,
-                "reason": "missing_account",
-                "accountId": account_id,
-                "message": REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE
+                "reason": issue.reason(),
+                "accountId": issue.account_id(),
+                "message": issue.message()
             }),
         );
     }
@@ -667,6 +747,8 @@ fn remote_control_backend_error_message(
         }
         _ if text.contains("refresh_token_reused")
             || text.contains("refresh token has already been used")
+            || text.contains("refresh_token_invalidated")
+            || text.contains("session has ended")
             || text.contains("authentication token is expired")
             || text.contains("please log out and sign in again") =>
         {
@@ -811,6 +893,20 @@ fn remote_control_status_is_login_expired(status: &Value) -> bool {
 }
 
 fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String> {
+    let current_settings = read_settings_value()?;
+    let account_id = remote_control_account_id_from_settings(&current_settings);
+    if !account_id.is_empty() {
+        if let Err(err) = mark_account_auth_error(&account_id, "控制账号登录已过期，请重新登录")
+        {
+            log_session_sync_event(
+                "codex_remote_control_account_status_update_failed",
+                json!({
+                    "reason": "login_expired",
+                    "error": err
+                }),
+            );
+        }
+    }
     let settings = update_settings_value(&json!({
         REMOTE_CONTROL_ENABLED_SETTING_KEY: false
     }))?;
@@ -836,6 +932,9 @@ fn attach_remote_control_auto_disabled_response(
         response.insert("autoDisabled".to_string(), json!(true));
         response.insert("message".to_string(), json!(message));
         response.insert("settings".to_string(), settings);
+        if let Ok(store) = read_store_value() {
+            response.insert("store".to_string(), store);
+        }
         response.insert("changed".to_string(), json!(changed));
         response.insert("restartRequired".to_string(), json!(restart_required));
         if let Some(error) = runtime_error {
@@ -857,14 +956,14 @@ pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
 
 fn get_codex_remote_control_status_impl() -> Result<Value, String> {
     let mut settings = read_settings_value()?;
-    let missing_account_id = missing_remote_control_account_id(&settings)?;
+    let account_issue = remote_control_account_issue(&settings)?;
     let mut auto_disable_message = None;
     let mut changed = false;
     let mut restart_required = false;
     let mut runtime_error = None;
     let mut process_status_error = None;
 
-    if let Some(account_id) = missing_account_id {
+    if let Some(issue) = account_issue {
         let codex_app_running = match remote_control_codex_app_running() {
             Ok(running) => running,
             Err(err) => {
@@ -872,7 +971,7 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
                 false
             }
         };
-        match sync_remote_control_runtime_for_current_settings("remote_control_missing_account") {
+        match sync_remote_control_runtime_for_current_settings("remote_control_account_invalid") {
             Ok(runtime_changed) => {
                 changed = runtime_changed;
                 restart_required =
@@ -886,12 +985,12 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
         if remote_control_config_enabled_from_settings(&settings) {
             return Err(runtime_error.unwrap_or_else(|| "自动关闭远程控制失败，请重试".to_string()));
         }
-        auto_disable_message = Some(REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE);
+        auto_disable_message = Some(issue.message());
         log_session_sync_event(
             "codex_remote_control_auto_disabled",
             json!({
-                "reason": "missing_account",
-                "accountId": account_id,
+                "reason": issue.reason(),
+                "accountId": issue.account_id(),
                 "changed": changed,
                 "restartRequired": restart_required,
                 "runtimeError": runtime_error.clone(),
@@ -953,6 +1052,9 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
     } else if !remote_control_config_enabled_from_settings(&settings) {
         if let Some(response) = response.as_object_mut() {
             response.insert("settings".to_string(), settings);
+            if let Ok(store) = read_store_value() {
+                response.insert("store".to_string(), store);
+            }
         }
     }
     Ok(response)
@@ -1095,11 +1197,16 @@ mod tests {
             "codex_active_mode": "chatgpt"
         });
 
-        let missing = missing_remote_control_account_id_with_lookup(&settings, |_| Ok(None))
+        let missing = remote_control_account_issue_with_lookup(&settings, |_| Ok(None))
             .expect("missing account should be a recoverable state");
-        assert_eq!(missing.as_deref(), Some("profile-missing"));
+        assert_eq!(
+            missing,
+            Some(RemoteControlAccountIssue::Missing(
+                "profile-missing".to_string()
+            ))
+        );
 
-        let err = missing_remote_control_account_id_with_lookup(
+        let err = remote_control_account_issue_with_lookup(
             &settings,
             |_| -> Result<Option<Value>, String> {
                 Err("读取 accounts.json 失败: invalid json".to_string())
@@ -1117,7 +1224,7 @@ mod tests {
             "codex_active_mode": "chatgpt"
         });
 
-        let missing = missing_remote_control_account_id_with_lookup(
+        let missing = remote_control_account_issue_with_lookup(
             &settings,
             |_| -> Result<Option<Value>, String> {
                 panic!("empty selection must not read the account store")
@@ -1125,7 +1232,55 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(missing.as_deref(), Some(""));
+        assert_eq!(
+            missing,
+            Some(RemoteControlAccountIssue::Missing(String::new()))
+        );
+    }
+
+    #[test]
+    fn invalidated_refresh_token_is_classified_as_login_expired() {
+        let settings = json!({
+            "codex_remote_control_enabled": true,
+            "codex_remote_control_account_id": "profile-expired",
+            "codex_active_mode": "api"
+        });
+        let account = json!({
+            "custom": {
+                "auth_status": "error",
+                "auth_status_message": "HTTP 401: refresh_token_invalidated; Your session has ended. Please log in again."
+            }
+        });
+
+        let issue = remote_control_account_issue_with_lookup(&settings, |_| Ok(Some(account)))
+            .expect("invalidated refresh token should be classified");
+
+        assert_eq!(
+            issue,
+            Some(RemoteControlAccountIssue::LoginExpired(
+                "profile-expired".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn transient_auth_refresh_error_does_not_disable_remote_control() {
+        let settings = json!({
+            "codex_remote_control_enabled": true,
+            "codex_remote_control_account_id": "profile-network-error",
+            "codex_active_mode": "api"
+        });
+        let account = json!({
+            "custom": {
+                "auth_status": "error",
+                "auth_status_message": "network timeout while refreshing token"
+            }
+        });
+
+        let issue = remote_control_account_issue_with_lookup(&settings, |_| Ok(Some(account)))
+            .expect("transient refresh errors should remain retryable");
+
+        assert_eq!(issue, None);
     }
 
     #[test]
@@ -1307,6 +1462,13 @@ mod tests {
 
         assert_eq!(
             remote_control_backend_error_message(None, raw),
+            Some(("login_expired", "控制账号登录已过期，请重新登录"))
+        );
+        assert_eq!(
+            remote_control_backend_error_message(
+                None,
+                "HTTP 401: refresh_token_invalidated; Your session has ended."
+            ),
             Some(("login_expired", "控制账号登录已过期，请重新登录"))
         );
     }

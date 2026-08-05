@@ -1,7 +1,7 @@
 import QuotaItem from './QuotaItem';
 import UsageStatsSummary from './UsageStatsSummary';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
-import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, maskAccountDisplayName } from '../utils/auth';
+import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, isAuthSessionInvalid, maskAccountDisplayName } from '../utils/auth';
 import { useI18n } from '../i18n';
 
 const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
@@ -23,6 +23,9 @@ function getAuthErrorLabel(info, t) {
     if (message.includes('刷新后账号标识不一致')) {
         return t('账号不匹配');
     }
+    if (isAuthSessionInvalid(info)) {
+        return t('登录已失效');
+    }
     if (authErrorIncludes(message, ['timeout', 'timed out', 'dns', 'proxy', 'connect', 'connection', 'tls', 'network'])) {
         return t('网络刷新失败');
     }
@@ -35,10 +38,6 @@ function getAuthErrorLabel(info, t) {
     if (authErrorIncludes(message, ['deactivated_workspace', 'workspace has been deactivated'])) {
         return t('Workspace 已停用');
     }
-    if (authErrorIncludes(message, ['invalid_grant', 'unauthorized', 'authorization expired', '缺少 refreshtoken', '缺少 refresh_token', '刷新结果缺少 refresh_token'])) {
-        return t('登录已失效');
-    }
-
     return t('刷新失败');
 }
 

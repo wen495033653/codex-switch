@@ -222,6 +222,9 @@ function MainApp() {
     if (res && res.codex_state) {
       setCodexState(res.codex_state);
     }
+    if (res && res.store) {
+      setStore(res.store);
+    }
 
     if (!res || res.autoDisabled !== true) return;
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
-import { getAccountName, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
+import { getAccountName, isAuthSessionInvalid, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 import { useI18n } from '../../i18n';
 
 const CODEX_DESKTOP_UPDATE_URL = 'https://learn.chatgpt.com/docs/whats-new#use-codex-in-the-chatgpt-desktop-app';
@@ -21,7 +21,7 @@ function formatRemoteControlAccountLabel(account, maskAccountName, t) {
     const plan = info.planType ? info.planType.toUpperCase() : '';
     const chatgptAccountId = getChatgptAccountId(account);
     const accountTag = chatgptAccountId ? chatgptAccountId.split('-')[0] : '';
-    const details = [plan, accountTag].filter(Boolean);
+    const details = [isAuthSessionInvalid(info) ? t('登录已失效') : '', plan, accountTag].filter(Boolean);
     const label = displayName || accountId || t('账号数据异常');
     return details.length ? `${label} · ${details.join(' · ')}` : label;
 }
@@ -183,6 +183,8 @@ export default function ProxySettingsTab({
         .filter(account => getChatgptAccountId(account) === remoteControlAccountId);
     const remoteControlAccount = remoteControlAccounts.find(account => getAccountId(account) === remoteControlAccountId)
         || (remoteControlLegacyMatches.length === 1 ? remoteControlLegacyMatches[0] : null);
+    const remoteControlAccountInfo = remoteControlAccount ? parseAuthInfo(remoteControlAccount) : null;
+    const remoteControlAccountInvalid = isAuthSessionInvalid(remoteControlAccountInfo);
     const remoteControlSelectedAccountId = remoteControlAccount
         ? getAccountId(remoteControlAccount)
         : '';
@@ -276,7 +278,9 @@ export default function ProxySettingsTab({
         || (remoteControlBackendError && remoteControlBackendError.message)
         || (remoteControlHelperStatus && remoteControlHelperStatus.message)
         || '';
-    const remoteControlStatusState = remoteControlBlockedBySubscription
+    const remoteControlStatusState = remoteControlAccountInvalid
+        ? 'error'
+        : remoteControlBlockedBySubscription
         ? 'muted'
         : remoteControlConnectionStatus && remoteControlConnectionStatus.state
             ? remoteControlConnectionStatus.state
@@ -294,7 +298,9 @@ export default function ProxySettingsTab({
         : remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
         ? t('需要 MFA')
         : (translateRuntimeText(remoteControlStatusMessage) || t('需要重新登录')).replace(/[。.]$/, '');
-    const remoteControlDisplayStatus = remoteControlBlockedBySubscription
+    const remoteControlDisplayStatus = remoteControlAccountInvalid
+        ? t('登录已失效')
+        : remoteControlBlockedBySubscription
         ? t('订阅模式不可用')
         : remoteControlPendingStatus || (!remoteControlEnabledInCurrentMode
             ? t('未启用')
@@ -303,11 +309,13 @@ export default function ProxySettingsTab({
                 : remoteControlStatusState === 'warning'
                     ? remoteControlWarningStatus
                     : (translateRuntimeText(remoteControlStatusMessage) || t('等待连接')).replace(/[。.]$/, ''));
-    const remoteControlStatusTitle = (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
+    const remoteControlStatusTitle = remoteControlAccountInvalid
+        ? (translateRuntimeText(remoteControlAccountInfo.authStatusMessage) || t('控制账号登录已过期，请重新登录'))
+        : (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
         || remoteControlRawStatusMessage
         || (remoteControlStatusState === 'warning' ? remoteControlDisplayStatus : '');
     const remoteControlEnableBlocked = !codexRemoteControlEnabled
-        && (remoteControlBlockedBySubscription || remoteControlMissingAccount);
+        && (remoteControlBlockedBySubscription || remoteControlMissingAccount || remoteControlAccountInvalid);
     const remoteControlToggleDisabled = savingCodexRemoteControl
         || switching
         || remoteControlEnableBlocked;
@@ -317,7 +325,7 @@ export default function ProxySettingsTab({
             ? t('关闭中')
             : codexRemoteControlEnabled
                 ? t('启动')
-                : remoteControlBlockedBySubscription
+                : remoteControlBlockedBySubscription || remoteControlAccountInvalid
                     ? t('不可用')
                     : t('启用');
     const remoteControlAccountSelectDisabled = remoteControlBlockedBySubscription
@@ -409,6 +417,8 @@ export default function ProxySettingsTab({
                         disabled={remoteControlToggleDisabled}
                         title={!codexRemoteControlEnabled && remoteControlBlockedBySubscription
                             ? t('订阅模式下不可开启远程控制')
+                            : !codexRemoteControlEnabled && remoteControlAccountInvalid
+                                ? t('控制账号登录已过期，请重新登录')
                             : !codexRemoteControlEnabled && remoteControlMissingAccount
                                 ? t('请先选择远程控制账号')
                                 : ''}
