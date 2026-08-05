@@ -3,6 +3,7 @@ import { safeParseJwt } from './jwt';
 import { getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
 
 const PLAN_TYPE_ALIASES = {
+    prolite: 'pro',
     self_serve_business_usage_based: 'team'
 };
 
