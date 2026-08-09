@@ -1401,9 +1401,9 @@ fn stable_hex_hash(value: &str) -> String {
 mod tests {
     use super::*;
 
-    const TEST_MODEL_INSTRUCTIONS_FILE: &str = "C:/CodexSwitch/gpt5.5-unrestricted.md";
+    const TEST_MODEL_INSTRUCTIONS_FILE: &str = "C:/CodexSwitch/gpt-unrestricted.md";
     const TEST_MODEL_INSTRUCTIONS_CONFIG_LINE: &str =
-        "model_instructions_file = \"C:/CodexSwitch/gpt5.5-unrestricted.md\"";
+        "model_instructions_file = \"C:/CodexSwitch/gpt-unrestricted.md\"";
 
     fn lines(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()

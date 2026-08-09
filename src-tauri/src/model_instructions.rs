@@ -5,7 +5,7 @@ use std::{
 };
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
-pub(crate) const FILE_NAME: &str = "gpt5.5-unrestricted.md";
+pub(crate) const FILE_NAME: &str = "gpt-unrestricted.md";
 pub(crate) const CONFIG_KEY: &str = "model_instructions_file";
 pub(crate) const SETTING_KEY: &str = "codex_model_instructions_enabled";
 
@@ -90,15 +90,15 @@ mod tests {
     fn path_for_config_uses_normal_slashes_without_extended_prefix() {
         assert_eq!(
             path_for_config(Path::new(
-                r"\\?\C:\AppData\Roaming\codex-switch\gpt5.5-unrestricted.md"
+                r"\\?\C:\AppData\Roaming\codex-switch\gpt-unrestricted.md"
             )),
-            "C:/AppData/Roaming/codex-switch/gpt5.5-unrestricted.md"
+            "C:/AppData/Roaming/codex-switch/gpt-unrestricted.md"
         );
         assert_eq!(
             path_for_config(Path::new(
-                r"C:\AppData\Roaming\codex-switch\gpt5.5-unrestricted.md"
+                r"C:\AppData\Roaming\codex-switch\gpt-unrestricted.md"
             )),
-            "C:/AppData/Roaming/codex-switch/gpt5.5-unrestricted.md"
+            "C:/AppData/Roaming/codex-switch/gpt-unrestricted.md"
         );
     }
 
@@ -108,7 +108,7 @@ mod tests {
 
         assert_eq!(
             target,
-            PathBuf::from("codex-switch").join("gpt5.5-unrestricted.md")
+            PathBuf::from("codex-switch").join("gpt-unrestricted.md")
         );
     }
 }

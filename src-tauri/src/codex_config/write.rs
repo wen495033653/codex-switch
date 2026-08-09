@@ -253,7 +253,7 @@ mod tests {
             ]),
             vec![(
                 "model_instructions_file".to_string(),
-                Value::String("C:/CodexSwitch/gpt5.5-unrestricted.md".to_string()),
+                Value::String("C:/CodexSwitch/gpt-unrestricted.md".to_string()),
             )],
         );
 
@@ -261,7 +261,7 @@ mod tests {
             output,
             lines(&[
                 "model_provider = \"api\"",
-                "model_instructions_file = \"C:/CodexSwitch/gpt5.5-unrestricted.md\"",
+                "model_instructions_file = \"C:/CodexSwitch/gpt-unrestricted.md\"",
                 "",
                 "[features]",
                 "remote_control = true",
