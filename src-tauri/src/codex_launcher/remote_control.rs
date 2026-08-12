@@ -3,10 +3,10 @@ use super::kill_process_tree;
 use super::{json_as_array, parse_json_output, run_pwsh};
 use crate::{
     accounts::{
-        get_codex_state_value, lookup_store_account, mark_account_auth_error,
-        profile_id_from_account, profile_id_from_tokens_value, read_api_key_from_auth,
-        read_api_key_from_provider_config, read_auth_value, read_store_value, set_api_mode,
-        set_subscription_mode, write_account_auth,
+        auth_error_is_login_expired, get_codex_state_value, lookup_store_account,
+        mark_account_auth_error, profile_id_from_account, profile_id_from_tokens_value,
+        read_api_key_from_auth, read_api_key_from_provider_config, read_auth_value,
+        read_store_value, set_api_mode, set_subscription_mode, write_account_auth,
     },
     api_config::API_PROVIDER_ID,
     codex_config::{
@@ -111,22 +111,8 @@ fn remote_control_account_login_expired(account: &Value) -> bool {
         string_field(auth_error, "code"),
         string_field(auth_error, "message"),
         string_field(auth_error, "raw_message")
-    )
-    .to_ascii_lowercase();
-    [
-        "refresh_token_invalidated",
-        "refresh token invalidated",
-        "session has ended",
-        "invalid_grant",
-        "unauthorized",
-        "authorization expired",
-        "authentication token is expired",
-        "登录已失效",
-        "登录已过期",
-        "请重新登录",
-    ]
-    .iter()
-    .any(|pattern| text.contains(pattern))
+    );
+    auth_error_is_login_expired(&text)
 }
 
 fn remote_control_account_issue_with_lookup<F>(
