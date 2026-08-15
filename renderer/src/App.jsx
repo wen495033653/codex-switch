@@ -286,7 +286,6 @@ function MainApp() {
     setApiProfiles,
     updateApiProfileModalDraft
   } = useApiModeDraft({
-    apiTestResults: settings.api_test_results,
     applySettings,
     toastError
   });
@@ -359,10 +358,8 @@ function MainApp() {
     activeApiProfileId,
     apiDraft,
     apiProfiles,
-    apiTestResults: settings.api_test_results,
     applySettings,
     handleRes,
-    onSaveApiTestResults: saveApiTestResults,
     onUsageStatsRefresh: () => refreshUsageStats({ silent: true }),
     showIdeReopen,
     toastError

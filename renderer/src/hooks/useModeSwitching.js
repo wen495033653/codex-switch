@@ -5,23 +5,13 @@ import {
   getActiveApiProfile,
   normalizeApiProfiles
 } from '../utils/appState';
-import {
-  DEFAULT_API_TEST_MODEL,
-  getApiPrecheckFailureMessage,
-  hasFreshSuccessfulApiPrecheck,
-  mergeApiTestResult,
-  normalizeApiTestResults,
-  runApiProfilePrecheck
-} from '../utils/apiPrecheck';
 
 export function useModeSwitching({
   activeApiProfileId,
   apiDraft,
   apiProfiles,
-  apiTestResults,
   applySettings,
   handleRes,
-  onSaveApiTestResults,
   onUsageStatsRefresh,
   showIdeReopen,
   toastError
@@ -48,31 +38,12 @@ export function useModeSwitching({
           api_profiles: profiles,
           api_mode: apiDraft
         });
-      const currentApiTestResults = normalizeApiTestResults(apiTestResults);
-      const existingTest = currentApiTestResults[activeProfile.id] || null;
-      let nextApiTestResults = currentApiTestResults;
-      if (!hasFreshSuccessfulApiPrecheck(activeProfile, existingTest, DEFAULT_API_TEST_MODEL)) {
-        const precheckResult = await runApiProfilePrecheck({
-          profile: activeProfile,
-          profileName: activeProfile.name,
-          model: DEFAULT_API_TEST_MODEL,
-          previousTest: existingTest
-        });
-        nextApiTestResults = mergeApiTestResult(currentApiTestResults, activeProfile.id, precheckResult);
-        if (!precheckResult.ok) {
-          if (typeof onSaveApiTestResults === 'function') {
-            await onSaveApiTestResults(nextApiTestResults);
-          }
-          throw new Error(getApiPrecheckFailureMessage(precheckResult));
-        }
-      }
 
       const settingsPatch = buildApiSettingsPayload({
         activeId: activeProfile.id,
         activeProfile,
         profiles
       });
-      settingsPatch.api_test_results = nextApiTestResults;
       const saveRes = await window.api.updateSettings(settingsPatch);
       applySettings(saveRes);
 

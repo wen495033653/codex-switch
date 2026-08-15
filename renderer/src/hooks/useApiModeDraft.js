@@ -7,13 +7,6 @@ import {
   normalizeApiProfiles,
   upsertApiProfile
 } from '../utils/appState';
-import {
-  DEFAULT_API_TEST_MODEL,
-  hasFreshSuccessfulApiPrecheck,
-  mergeApiTestResult,
-  normalizeApiTestResults,
-  runApiProfilePrecheck
-} from '../utils/apiPrecheck';
 import { getErrorMessage } from '../utils/errors';
 
 function createApiProfileId() {
@@ -48,7 +41,6 @@ function createEmptyApiProfileDeleteModal() {
 }
 
 export function useApiModeDraft({
-  apiTestResults,
   applySettings,
   toastError
 }) {
@@ -59,15 +51,12 @@ export function useApiModeDraft({
   const [apiProfileDeleteModal, setApiProfileDeleteModal] = useState(createEmptyApiProfileDeleteModal);
   const [savingApiProfile, setSavingApiProfile] = useState(false);
 
-  const persistApiSettings = async ({ activeId, activeProfile, profiles, nextApiTestResults }) => {
+  const persistApiSettings = async ({ activeId, activeProfile, profiles }) => {
     const patch = buildApiSettingsPayload({
       activeId,
       activeProfile,
       profiles
     });
-    if (nextApiTestResults) {
-      patch.api_test_results = nextApiTestResults;
-    }
     const res = await window.api.updateSettings(patch);
     applySettings(res);
     return res;
@@ -169,37 +158,13 @@ export function useApiModeDraft({
     const nextActive = profile.id === activeApiProfileId
       ? profile
       : getProfileById(nextProfiles, activeApiProfileId);
-    const currentApiTestResults = normalizeApiTestResults(apiTestResults);
-    let nextApiTestResults = currentApiTestResults;
 
     setSavingApiProfile(true);
     try {
-      const existingTest = currentApiTestResults[profile.id] || null;
-      if (!hasFreshSuccessfulApiPrecheck(profile, existingTest, DEFAULT_API_TEST_MODEL)) {
-        const precheckResult = await runApiProfilePrecheck({
-          profile,
-          profileName: profile.name,
-          model: DEFAULT_API_TEST_MODEL,
-          previousTest: existingTest,
-          onUpdate: test => {
-            setApiProfileModal(prev => ({
-              ...prev,
-              error: '',
-              precheck: test
-            }));
-          }
-        });
-        nextApiTestResults = mergeApiTestResult(currentApiTestResults, profile.id, precheckResult);
-        setApiProfileModal(prev => ({
-          ...prev,
-          precheck: precheckResult
-        }));
-      }
       await persistApiSettings({
         activeId: nextActive.id,
         activeProfile: nextActive,
-        profiles: nextProfiles,
-        nextApiTestResults
+        profiles: nextProfiles
       });
       closeApiProfileModal();
     } catch (err) {
