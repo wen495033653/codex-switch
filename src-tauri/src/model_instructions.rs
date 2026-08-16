@@ -1,4 +1,4 @@
-use crate::paths::{app_data_dir, ensure_parent_dir};
+use crate::paths::{codex_dir, ensure_parent_dir};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -43,7 +43,11 @@ fn bundled_model_instructions_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn user_model_instructions_file() -> Result<PathBuf, String> {
-    Ok(app_data_dir()?.join(FILE_NAME))
+    Ok(model_instructions_file_in_codex_home(&codex_dir()?))
+}
+
+fn model_instructions_file_in_codex_home(codex_home: &Path) -> PathBuf {
+    codex_home.join(FILE_NAME)
 }
 
 fn copy_model_instructions_file(source: &Path, target: &Path) -> Result<(), String> {
@@ -89,26 +93,20 @@ mod tests {
     #[test]
     fn path_for_config_uses_normal_slashes_without_extended_prefix() {
         assert_eq!(
-            path_for_config(Path::new(
-                r"\\?\C:\AppData\Roaming\codex-switch\gpt-unrestricted.md"
-            )),
-            "C:/AppData/Roaming/codex-switch/gpt-unrestricted.md"
+            path_for_config(Path::new(r"\\?\C:\CodexHome\gpt-unrestricted.md")),
+            "C:/CodexHome/gpt-unrestricted.md"
         );
         assert_eq!(
-            path_for_config(Path::new(
-                r"C:\AppData\Roaming\codex-switch\gpt-unrestricted.md"
-            )),
-            "C:/AppData/Roaming/codex-switch/gpt-unrestricted.md"
+            path_for_config(Path::new(r"C:\CodexHome\gpt-unrestricted.md")),
+            "C:/CodexHome/gpt-unrestricted.md"
         );
     }
 
     #[test]
-    fn user_model_instructions_file_name_stays_at_app_data_root() {
-        let target = PathBuf::from("codex-switch").join(FILE_NAME);
+    fn user_model_instructions_file_stays_in_codex_home() {
+        let codex_home = PathBuf::from(".codex");
+        let target = model_instructions_file_in_codex_home(&codex_home);
 
-        assert_eq!(
-            target,
-            PathBuf::from("codex-switch").join("gpt-unrestricted.md")
-        );
+        assert_eq!(target, codex_home.join("gpt-unrestricted.md"));
     }
 }
