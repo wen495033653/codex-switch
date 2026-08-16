@@ -8,10 +8,12 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
 };
 use time::{OffsetDateTime, UtcOffset};
 
@@ -22,6 +24,7 @@ const PROVIDER_API: &str = "api";
 const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 const CODEX_APP_INSTANCE_MARKER_FILE: &str = "codex-switch-instance.json";
 const META_STATS_STARTED_AT: &str = "stats_started_at";
+const META_PRICING_UPDATED_AT: &str = "pricing_updated_at";
 const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
 const PRICING_UPDATED_AT: &str = "2026-07-10";
 const LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 270_000;
@@ -29,6 +32,13 @@ const PRICING_CONTEXT_STANDARD_SHORT: &str = "standard_short_context";
 const PRICING_CONTEXT_STANDARD_LONG: &str = "standard_long_context";
 const UNPRICED_REASON_MISSING_MODEL_PRICE: &str = "missing_model_price";
 const UNPRICED_REASON_MISSING_CACHED_INPUT_PRICE: &str = "missing_cached_input_price";
+const SCAN_OUTCOME_INDEXED: &str = "indexed";
+const SCAN_OUTCOME_IGNORED: &str = "ignored";
+const SCAN_OUTCOME_DUPLICATE: &str = "duplicate";
+const SCAN_OUTCOME_MISSING_ATTRIBUTION: &str = "missing_attribution";
+const SCAN_OUTCOME_BEFORE_START: &str = "before_start";
+
+static USAGE_STATS_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct TokenPrices {
@@ -123,6 +133,20 @@ struct ScanWarnings {
     skipped_before_start: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SessionFileStamp {
+    modified_nanos: i64,
+    size: u64,
+}
+
+#[derive(Clone, Debug)]
+struct SessionScanState {
+    stamp: SessionFileStamp,
+    scan_scope: String,
+    session_id: String,
+    outcome: String,
+}
+
 #[derive(Clone, Default)]
 struct TokenUsage {
     input_tokens: u64,
@@ -178,6 +202,11 @@ struct TokenUsageWindows {
     days_30: TokenUsage,
 }
 
+struct TokenUsageEvent {
+    timestamp_seconds: i64,
+    usage: TokenUsage,
+}
+
 #[derive(Clone)]
 struct TimestampValue {
     raw: String,
@@ -195,6 +224,7 @@ struct ParsedSession {
     model_context_window: Option<u64>,
     previous_event_usage: Option<TokenUsage>,
     window_usage: TokenUsageWindows,
+    token_events: Vec<TokenUsageEvent>,
 }
 
 #[derive(Clone)]
@@ -305,6 +335,10 @@ pub(crate) fn record_current_attribution_if_available() -> Result<(), String> {
 }
 
 fn usage_stats_get_impl() -> Result<Value, String> {
+    let _scan_guard = USAGE_STATS_SCAN_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "token 统计扫描锁异常".to_string())?;
     let db_path = usage_db_path()?;
     let codex_home = codex_dir()?;
     let scan_sources = default_usage_scan_sources(&codex_home)?;
@@ -370,6 +404,28 @@ fn ensure_database(connection: &Connection, now: &str) -> Result<(), String> {
             );
             CREATE INDEX IF NOT EXISTS session_usage_owner_idx
                 ON session_usage(owner_type, owner_id, started_at_seconds);
+            CREATE TABLE IF NOT EXISTS session_token_events (
+                source_path TEXT NOT NULL,
+                event_index INTEGER NOT NULL,
+                timestamp_seconds INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                reasoning_output_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                PRIMARY KEY(source_path, event_index)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS session_token_events_time_idx
+                ON session_token_events(timestamp_seconds);
+            CREATE TABLE IF NOT EXISTS session_scan_state (
+                source_path TEXT PRIMARY KEY,
+                modified_nanos INTEGER NOT NULL,
+                file_size INTEGER NOT NULL,
+                scan_scope TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                last_scanned_at TEXT NOT NULL
+            );
             "#,
         )
         .map_err(|err| db_error("初始化 token 统计库失败", err))?;
@@ -497,6 +553,12 @@ fn record_attribution_at(
             ],
         )
         .map_err(|err| db_error("写入 token 统计归属失败", err))?;
+    connection
+        .execute(
+            "DELETE FROM session_scan_state WHERE outcome = ?1",
+            [SCAN_OUTCOME_MISSING_ATTRIBUTION],
+        )
+        .map_err(|err| db_error("刷新 token 统计扫描缓存失败", err))?;
     Ok(())
 }
 
@@ -522,6 +584,8 @@ fn usage_stats_get_for_scan_sources(
     let stats_started_at_seconds = parse_rfc3339_seconds(&stats_started_at)
         .ok_or_else(|| "token 统计起始时间无效".to_string())?;
     let mut warnings = ScanWarnings::default();
+    // 先一次性载入全部 cursor，避免每个 session 都单独查询 SQLite。
+    let mut scan_states = load_session_scan_states(&connection)?;
     for source in scan_sources {
         scan_codex_sessions(
             &connection,
@@ -530,9 +594,11 @@ fn usage_stats_get_for_scan_sources(
             stats_started_at_seconds,
             now,
             &mut warnings,
+            &mut scan_states,
         )?;
     }
-    recompute_existing_costs(&connection)?;
+    recompute_existing_costs_if_needed(&connection)?;
+    warnings.missing_price = count_unpriced_sessions(&connection)?;
     let response = aggregate_usage(&connection, now_seconds, &warnings)?;
     Ok(response)
 }
@@ -644,10 +710,32 @@ fn scan_codex_sessions(
     stats_started_at_seconds: i64,
     now: &str,
     warnings: &mut ScanWarnings,
+    scan_states: &mut HashMap<String, SessionScanState>,
 ) -> Result<(), String> {
     let files = collect_session_files(&source.codex_home)?;
+    let scan_scope = session_scan_scope(source, stats_started_at_seconds);
     let mut seen_session_ids = HashSet::new();
     for path in files {
+        let source_path = path.to_string_lossy().into_owned();
+        let stamp = match session_file_stamp(&path) {
+            Ok(stamp) => stamp,
+            Err(err) => {
+                eprintln!("{err}");
+                continue;
+            }
+        };
+        if let Some(state) = scan_states.get(&source_path) {
+            let duplicate_needs_promotion = state.outcome == SCAN_OUTCOME_DUPLICATE
+                && !state.session_id.is_empty()
+                && !seen_session_ids.contains(&state.session_id);
+            if state.stamp == stamp && state.scan_scope == scan_scope && !duplicate_needs_promotion
+            {
+                // 稳态只读取目录项和 metadata，不再重复顺序读取整份 JSONL。
+                apply_cached_scan_state(state, warnings, &mut seen_session_ids);
+                continue;
+            }
+        }
+
         let parsed = match parse_session_file(&path, window_starts) {
             Ok(parsed) => parsed,
             Err(err) => {
@@ -656,15 +744,45 @@ fn scan_codex_sessions(
             }
         };
         if parsed.session_id.is_empty() || parsed.usage.is_none() || parsed.started_at.is_none() {
+            upsert_session_scan_state(
+                connection,
+                scan_states,
+                &source_path,
+                stamp,
+                &scan_scope,
+                "",
+                SCAN_OUTCOME_IGNORED,
+                now,
+            )?;
             continue;
         }
         if !seen_session_ids.insert(parsed.session_id.clone()) {
+            upsert_session_scan_state(
+                connection,
+                scan_states,
+                &source_path,
+                stamp,
+                &scan_scope,
+                &parsed.session_id,
+                SCAN_OUTCOME_DUPLICATE,
+                now,
+            )?;
             continue;
         }
         let started_at = parsed.started_at.as_ref().expect("checked above");
         let updated_at = parsed.updated_at.as_ref().unwrap_or(started_at);
         if updated_at.seconds < stats_started_at_seconds {
             warnings.skipped_before_start += 1;
+            upsert_session_scan_state(
+                connection,
+                scan_states,
+                &source_path,
+                stamp,
+                &scan_scope,
+                &parsed.session_id,
+                SCAN_OUTCOME_BEFORE_START,
+                now,
+            )?;
             continue;
         }
         let attribution = if let Some(attribution) = source.attribution_override.as_ref() {
@@ -674,15 +792,22 @@ fn scan_codex_sessions(
                 find_owner_attribution(connection, &parsed.provider, started_at.seconds)?
             else {
                 warnings.missing_attribution += 1;
+                upsert_session_scan_state(
+                    connection,
+                    scan_states,
+                    &source_path,
+                    stamp,
+                    &scan_scope,
+                    &parsed.session_id,
+                    SCAN_OUTCOME_MISSING_ATTRIBUTION,
+                    now,
+                )?;
                 continue;
             };
             attribution
         };
         let usage = parsed.usage.as_ref().expect("checked above");
         let estimated = estimate_cost(&parsed.model, usage, parsed.model_context_window);
-        if !estimated.priced {
-            warnings.missing_price += 1;
-        }
         upsert_session_usage(
             connection,
             &path,
@@ -692,8 +817,145 @@ fn scan_codex_sessions(
             &estimated,
             now,
         )?;
+        upsert_session_scan_state(
+            connection,
+            scan_states,
+            &source_path,
+            stamp,
+            &scan_scope,
+            &parsed.session_id,
+            SCAN_OUTCOME_INDEXED,
+            now,
+        )?;
     }
     Ok(())
+}
+
+fn session_scan_scope(source: &UsageScanSource, stats_started_at_seconds: i64) -> String {
+    match source.attribution_override.as_ref() {
+        Some(attribution) => format!(
+            "{stats_started_at_seconds}:{}:{}",
+            attribution.owner_type, attribution.owner_id
+        ),
+        None => format!("{stats_started_at_seconds}:automatic"),
+    }
+}
+
+fn session_file_stamp(path: &Path) -> Result<SessionFileStamp, String> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        format!(
+            "读取 Codex session 文件元数据失败 {}: {err}",
+            path.display()
+        )
+    })?;
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0);
+    Ok(SessionFileStamp {
+        modified_nanos,
+        size: metadata.len(),
+    })
+}
+
+fn load_session_scan_states(
+    connection: &Connection,
+) -> Result<HashMap<String, SessionScanState>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT source_path, modified_nanos, file_size, scan_scope, session_id, outcome
+            FROM session_scan_state
+            "#,
+        )
+        .map_err(|err| db_error("读取 token 统计扫描缓存失败", err))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                SessionScanState {
+                    stamp: SessionFileStamp {
+                        modified_nanos: row.get(1)?,
+                        size: row
+                            .get::<_, i64>(2)
+                            .map(|value| u64::try_from(value).unwrap_or(0))?,
+                    },
+                    scan_scope: row.get(3)?,
+                    session_id: row.get(4)?,
+                    outcome: row.get(5)?,
+                },
+            ))
+        })
+        .map_err(|err| db_error("读取 token 统计扫描缓存失败", err))?;
+    rows.collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|err| db_error("读取 token 统计扫描缓存失败", err))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn upsert_session_scan_state(
+    connection: &Connection,
+    scan_states: &mut HashMap<String, SessionScanState>,
+    source_path: &str,
+    stamp: SessionFileStamp,
+    scan_scope: &str,
+    session_id: &str,
+    outcome: &str,
+    now: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            r#"
+            INSERT INTO session_scan_state(
+                source_path, modified_nanos, file_size, scan_scope,
+                session_id, outcome, last_scanned_at
+            )
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(source_path) DO UPDATE SET
+                modified_nanos = excluded.modified_nanos,
+                file_size = excluded.file_size,
+                scan_scope = excluded.scan_scope,
+                session_id = excluded.session_id,
+                outcome = excluded.outcome,
+                last_scanned_at = excluded.last_scanned_at
+            "#,
+            params![
+                source_path,
+                stamp.modified_nanos,
+                i64::try_from(stamp.size).unwrap_or(i64::MAX),
+                scan_scope,
+                session_id,
+                outcome,
+                now
+            ],
+        )
+        .map_err(|err| db_error("写入 token 统计扫描缓存失败", err))?;
+    scan_states.insert(
+        source_path.to_string(),
+        SessionScanState {
+            stamp,
+            scan_scope: scan_scope.to_string(),
+            session_id: session_id.to_string(),
+            outcome: outcome.to_string(),
+        },
+    );
+    Ok(())
+}
+
+fn apply_cached_scan_state(
+    state: &SessionScanState,
+    warnings: &mut ScanWarnings,
+    seen_session_ids: &mut HashSet<String>,
+) {
+    match state.outcome.as_str() {
+        SCAN_OUTCOME_MISSING_ATTRIBUTION => warnings.missing_attribution += 1,
+        SCAN_OUTCOME_BEFORE_START => warnings.skipped_before_start += 1,
+        _ => {}
+    }
+    if !state.session_id.is_empty() && state.outcome != SCAN_OUTCOME_IGNORED {
+        seen_session_ids.insert(state.session_id.clone());
+    }
 }
 
 fn collect_session_files(codex_home: &Path) -> Result<Vec<PathBuf>, String> {
@@ -829,9 +1091,6 @@ fn apply_token_count_delta_to_windows(
     timestamp_seconds: i64,
     window_starts: Option<&UsageWindowStarts>,
 ) {
-    let Some(window_starts) = window_starts else {
-        return;
-    };
     let delta = parsed
         .previous_event_usage
         .as_ref()
@@ -847,6 +1106,14 @@ fn apply_token_count_delta_to_windows(
     if !delta.has_tokens() {
         return;
     }
+
+    parsed.token_events.push(TokenUsageEvent {
+        timestamp_seconds,
+        usage: delta.clone(),
+    });
+    let Some(window_starts) = window_starts else {
+        return;
+    };
 
     if timestamp_seconds >= window_starts.today {
         parsed.window_usage.today.add_assign(&delta);
@@ -1060,6 +1327,88 @@ fn upsert_session_usage(
             ],
         )
         .map_err(|err| db_error("写入 session token 统计失败", err))?;
+    replace_session_token_events(connection, path, &parsed.token_events)?;
+    Ok(())
+}
+
+fn replace_session_token_events(
+    connection: &Connection,
+    path: &Path,
+    events: &[TokenUsageEvent],
+) -> Result<(), String> {
+    // token delta 很小，持久化后滚动窗口可直接从 SQLite 计算；文件未变化时
+    // 无需为了 today / 7d / 30d 的时间边界重新读取 JSONL。
+    let source_path = path.to_string_lossy().into_owned();
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|err| db_error("开启 session token 事件事务失败", err))?;
+    transaction
+        .execute(
+            "DELETE FROM session_token_events WHERE source_path = ?1",
+            [&source_path],
+        )
+        .map_err(|err| db_error("清理 session token 事件失败", err))?;
+    {
+        let mut statement = transaction
+            .prepare_cached(
+                r#"
+                INSERT INTO session_token_events(
+                    source_path,
+                    event_index,
+                    timestamp_seconds,
+                    input_tokens,
+                    cached_input_tokens,
+                    output_tokens,
+                    reasoning_output_tokens,
+                    total_tokens
+                )
+                VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+            )
+            .map_err(|err| db_error("准备 session token 事件写入失败", err))?;
+        for (event_index, event) in events.iter().enumerate() {
+            statement
+                .execute(params![
+                    source_path,
+                    i64::try_from(event_index).unwrap_or(i64::MAX),
+                    event.timestamp_seconds,
+                    i64::try_from(event.usage.input_tokens).unwrap_or(i64::MAX),
+                    i64::try_from(event.usage.cached_input_tokens).unwrap_or(i64::MAX),
+                    i64::try_from(event.usage.output_tokens).unwrap_or(i64::MAX),
+                    i64::try_from(event.usage.reasoning_output_tokens).unwrap_or(i64::MAX),
+                    i64::try_from(event.usage.total_tokens).unwrap_or(i64::MAX)
+                ])
+                .map_err(|err| db_error("写入 session token 事件失败", err))?;
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|err| db_error("提交 session token 事件失败", err))?;
+    Ok(())
+}
+
+fn recompute_existing_costs_if_needed(connection: &Connection) -> Result<(), String> {
+    let existing: Option<String> = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            [META_PRICING_UPDATED_AT],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|err| db_error("读取 token 定价版本失败", err))?;
+    if existing.as_deref() == Some(PRICING_UPDATED_AT) {
+        return Ok(());
+    }
+    recompute_existing_costs(connection)?;
+    connection
+        .execute(
+            r#"
+            INSERT INTO meta(key, value) VALUES(?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            "#,
+            params![META_PRICING_UPDATED_AT, PRICING_UPDATED_AT],
+        )
+        .map_err(|err| db_error("写入 token 定价版本失败", err))?;
     Ok(())
 }
 
@@ -1130,6 +1479,17 @@ fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn count_unpriced_sessions(connection: &Connection) -> Result<u64, String> {
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM session_usage WHERE priced = 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| u64::try_from(value).unwrap_or(0))
+        .map_err(|err| db_error("读取未定价 session 数量失败", err))
 }
 
 fn estimate_cost(
@@ -1212,7 +1572,7 @@ fn aggregate_usage(
     now_seconds: i64,
     warnings: &ScanWarnings,
 ) -> Result<Value, String> {
-    let _window_starts = usage_window_starts(now_seconds);
+    let window_starts = usage_window_starts(now_seconds);
     let mut subscriptions: BTreeMap<String, OwnerUsage> = BTreeMap::new();
     let mut api_profiles: BTreeMap<String, OwnerUsage> = BTreeMap::new();
 
@@ -1229,55 +1589,98 @@ fn aggregate_usage(
                    output_tokens,
                    reasoning_output_tokens,
                    total_tokens,
-                   today_input_tokens,
-                   today_cached_input_tokens,
-                   today_output_tokens,
-                   today_reasoning_output_tokens,
-                   today_total_tokens,
-                   days_7_input_tokens,
-                   days_7_cached_input_tokens,
-                   days_7_output_tokens,
-                   days_7_reasoning_output_tokens,
-                   days_7_total_tokens,
-                   days_30_input_tokens,
-                   days_30_cached_input_tokens,
-                   days_30_output_tokens,
-                   days_30_reasoning_output_tokens,
-                   days_30_total_tokens,
+                   COALESCE(events.today_input_tokens, 0),
+                   COALESCE(events.today_cached_input_tokens, 0),
+                   COALESCE(events.today_output_tokens, 0),
+                   COALESCE(events.today_reasoning_output_tokens, 0),
+                   COALESCE(events.today_total_tokens, 0),
+                   COALESCE(events.days_7_input_tokens, 0),
+                   COALESCE(events.days_7_cached_input_tokens, 0),
+                   COALESCE(events.days_7_output_tokens, 0),
+                   COALESCE(events.days_7_reasoning_output_tokens, 0),
+                   COALESCE(events.days_7_total_tokens, 0),
+                   COALESCE(events.days_30_input_tokens, 0),
+                   COALESCE(events.days_30_cached_input_tokens, 0),
+                   COALESCE(events.days_30_output_tokens, 0),
+                   COALESCE(events.days_30_reasoning_output_tokens, 0),
+                   COALESCE(events.days_30_total_tokens, 0),
                    model_context_window,
                    estimated_cost_usd,
                    priced,
                    COALESCE(pricing_context, ''),
                    COALESCE(unpriced_reason, '')
             FROM session_usage
+            LEFT JOIN (
+                SELECT source_path,
+                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN input_tokens ELSE 0 END)
+                           AS today_input_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN cached_input_tokens ELSE 0 END)
+                           AS today_cached_input_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN output_tokens ELSE 0 END)
+                           AS today_output_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN reasoning_output_tokens ELSE 0 END)
+                           AS today_reasoning_output_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN total_tokens ELSE 0 END)
+                           AS today_total_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN input_tokens ELSE 0 END)
+                           AS days_7_input_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN cached_input_tokens ELSE 0 END)
+                           AS days_7_cached_input_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN output_tokens ELSE 0 END)
+                           AS days_7_output_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN reasoning_output_tokens ELSE 0 END)
+                           AS days_7_reasoning_output_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN total_tokens ELSE 0 END)
+                           AS days_7_total_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN input_tokens ELSE 0 END)
+                           AS days_30_input_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN cached_input_tokens ELSE 0 END)
+                           AS days_30_cached_input_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN output_tokens ELSE 0 END)
+                           AS days_30_output_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN reasoning_output_tokens ELSE 0 END)
+                           AS days_30_reasoning_output_tokens,
+                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN total_tokens ELSE 0 END)
+                           AS days_30_total_tokens
+                FROM session_token_events
+                WHERE timestamp_seconds >= ?3
+                GROUP BY source_path
+            ) AS events ON events.source_path = session_usage.source_path
             "#,
         )
         .map_err(|err| db_error("读取 session token 统计失败", err))?;
     let rows = statement
-        .query_map([], |row| {
-            Ok(UsageRow {
-                owner_type: row.get(0)?,
-                owner_id: row.get(1)?,
-                model: row.get(2)?,
-                updated_at: row.get(3)?,
-                updated_at_seconds: row.get(4)?,
-                input_tokens: row.get::<_, i64>(5).map(sql_i64_to_u64)?,
-                cached_input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
-                output_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
-                reasoning_output_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
-                total_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
-                today_usage: token_usage_from_row(row, 10)?,
-                days_7_usage: token_usage_from_row(row, 15)?,
-                days_30_usage: token_usage_from_row(row, 20)?,
-                model_context_window: row
-                    .get::<_, Option<i64>>(25)?
-                    .and_then(|value| u64::try_from(value).ok()),
-                estimated_cost_usd: row.get(26)?,
-                priced: row.get::<_, i64>(27)? == 1,
-                pricing_context: row.get(28)?,
-                unpriced_reason: row.get(29)?,
-            })
-        })
+        .query_map(
+            params![
+                window_starts.today,
+                window_starts.days_7,
+                window_starts.days_30
+            ],
+            |row| {
+                Ok(UsageRow {
+                    owner_type: row.get(0)?,
+                    owner_id: row.get(1)?,
+                    model: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    updated_at_seconds: row.get(4)?,
+                    input_tokens: row.get::<_, i64>(5).map(sql_i64_to_u64)?,
+                    cached_input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
+                    output_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
+                    reasoning_output_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
+                    total_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
+                    today_usage: token_usage_from_row(row, 10)?,
+                    days_7_usage: token_usage_from_row(row, 15)?,
+                    days_30_usage: token_usage_from_row(row, 20)?,
+                    model_context_window: row
+                        .get::<_, Option<i64>>(25)?
+                        .and_then(|value| u64::try_from(value).ok()),
+                    estimated_cost_usd: row.get(26)?,
+                    priced: row.get::<_, i64>(27)? == 1,
+                    pricing_context: row.get(28)?,
+                    unpriced_reason: row.get(29)?,
+                })
+            },
+        )
         .map_err(|err| db_error("读取 session token 统计失败", err))?;
 
     for row in rows {
@@ -1625,6 +2028,29 @@ mod tests {
             .unwrap();
     }
 
+    fn scan_state_last_scanned_at(db_path: &Path, source_path: &Path) -> String {
+        let connection = Connection::open(db_path).unwrap();
+        connection
+            .query_row(
+                "SELECT last_scanned_at FROM session_scan_state WHERE source_path = ?1",
+                [source_path.to_string_lossy().to_string()],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn token_event_count(db_path: &Path, source_path: &Path) -> u64 {
+        let connection = Connection::open(db_path).unwrap();
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM session_token_events WHERE source_path = ?1",
+                [source_path.to_string_lossy().to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| u64::try_from(value).unwrap())
+            .unwrap()
+    }
+
     fn window_total(response: &Value, owner_map: &str, owner_id: &str, window: &str) -> u64 {
         response
             .get(owner_map)
@@ -1718,6 +2144,127 @@ mod tests {
         assert_eq!(
             window_total(&response, "subscriptions", "sub-a", "all"),
             150
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_session_uses_persistent_scan_cache_and_append_refreshes_it() {
+        let root = temp_root("scan-cache");
+        let db_path = root.join("usage.sqlite");
+        let codex_home = root.join("codex");
+        record_attribution_at(
+            &db_path,
+            OWNER_TYPE_SUBSCRIPTION,
+            "sub-a",
+            PROVIDER_SUBSCRIPTION,
+            "2026-06-15T00:00:00Z",
+        )
+        .unwrap();
+        let session_path = write_session(
+            &codex_home,
+            "15",
+            "rollout-cache",
+            &[
+                session_meta_line(
+                    "session-cache",
+                    PROVIDER_SUBSCRIPTION,
+                    "2026-06-15T01:00:00Z",
+                    Some("gpt-5.5"),
+                ),
+                token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
+            ],
+        );
+
+        let first =
+            usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
+        assert_eq!(window_total(&first, "subscriptions", "sub-a", "all"), 120);
+        assert_eq!(token_event_count(&db_path, &session_path), 1);
+        assert_eq!(
+            scan_state_last_scanned_at(&db_path, &session_path),
+            "2026-06-15T03:00:00Z"
+        );
+
+        let unchanged =
+            usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T04:00:00Z").unwrap();
+        assert_eq!(
+            window_total(&unchanged, "subscriptions", "sub-a", "all"),
+            120
+        );
+        assert_eq!(
+            scan_state_last_scanned_at(&db_path, &session_path),
+            "2026-06-15T03:00:00Z"
+        );
+
+        let mut lines = fs::read_to_string(&session_path).unwrap();
+        lines.push_str(&token_count_line(
+            "2026-06-15T04:01:00Z",
+            200,
+            0,
+            40,
+            10,
+            240,
+            258_400,
+        ));
+        lines.push('\n');
+        fs::write(&session_path, lines).unwrap();
+
+        let appended =
+            usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T05:00:00Z").unwrap();
+        assert_eq!(
+            window_total(&appended, "subscriptions", "sub-a", "all"),
+            240
+        );
+        assert_eq!(token_event_count(&db_path, &session_path), 2);
+        assert_eq!(
+            scan_state_last_scanned_at(&db_path, &session_path),
+            "2026-06-15T05:00:00Z"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cached_session_windows_age_from_token_events_without_rescanning_file() {
+        let root = temp_root("cached-windows");
+        let db_path = root.join("usage.sqlite");
+        let codex_home = root.join("codex");
+        record_attribution_at(
+            &db_path,
+            OWNER_TYPE_API_PROFILE,
+            "api-a",
+            PROVIDER_API,
+            "2026-06-15T00:00:00Z",
+        )
+        .unwrap();
+        let session_path = write_session(
+            &codex_home,
+            "15",
+            "rollout-window-cache",
+            &[
+                session_meta_line(
+                    "session-window-cache",
+                    PROVIDER_API,
+                    "2026-06-15T01:00:00Z",
+                    Some("gpt-5.5"),
+                ),
+                token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
+            ],
+        );
+
+        let first =
+            usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
+        assert_eq!(window_total(&first, "api_profiles", "api-a", "today"), 120);
+
+        let next_day =
+            usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-16T03:00:00Z").unwrap();
+        assert_eq!(window_total(&next_day, "api_profiles", "api-a", "today"), 0);
+        assert_eq!(
+            window_total(&next_day, "api_profiles", "api-a", "days_7"),
+            120
+        );
+        assert_eq!(
+            scan_state_last_scanned_at(&db_path, &session_path),
+            "2026-06-15T03:00:00Z"
         );
         fs::remove_dir_all(root).unwrap();
     }

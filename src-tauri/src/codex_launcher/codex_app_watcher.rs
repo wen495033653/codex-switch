@@ -671,16 +671,41 @@ fn codex_root_pids(processes: &[CodexProcess]) -> Vec<u64> {
 }
 
 fn running_codex_processes() -> Result<Vec<CodexProcess>, String> {
-    let refresh_kind = ProcessRefreshKind::nothing()
+    let mut system = System::new();
+    // 第一阶段只取 Toolhelp 快照自带的 pid/name/parent/start；筛出 ChatGPT 后
+    // 才读取 exe/cmd，避免 watcher 每 5 秒查询系统中每个进程的命令行。
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    let candidate_pids = system
+        .processes()
+        .iter()
+        .filter(|(_, process)| {
+            let name = process.name().to_string_lossy();
+            name.eq_ignore_ascii_case("ChatGPT.exe") || name.eq_ignore_ascii_case("ChatGPT")
+        })
+        .map(|(pid, _)| *pid)
+        .collect::<Vec<_>>();
+    if candidate_pids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let detail_refresh_kind = ProcessRefreshKind::nothing()
         .with_cmd(UpdateKind::Always)
         .with_exe(UpdateKind::Always)
         .without_tasks();
-    let mut system = System::new();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&candidate_pids),
+        false,
+        detail_refresh_kind,
+    );
 
     let mut processes = system
         .processes()
         .iter()
+        .filter(|(pid, _)| candidate_pids.contains(pid))
         .filter_map(|(pid, process)| {
             let executable_path = process
                 .exe()
