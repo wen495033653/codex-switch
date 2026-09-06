@@ -62,13 +62,21 @@ pub(crate) async fn get_current_codex_app_processes() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, String> {
-    codex_app_open::restart_current_codex_app_for_plugin_setting()
+pub(crate) async fn restart_current_codex_app_for_plugin_setting() -> Result<Value, String> {
+    run_codex_restart(
+        "restart_current_codex_app_for_plugin_setting",
+        codex_app_open::restart_current_codex_app_for_plugin_setting,
+    )
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
-    codex_app_open::restart_current_codex_app_normal()
+pub(crate) async fn restart_current_codex_app_normal() -> Result<Value, String> {
+    run_codex_restart(
+        "restart_current_codex_app_normal",
+        codex_app_open::restart_current_codex_app_normal,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -84,4 +92,47 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
 #[tauri::command]
 pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
     codex_app_instances::get_codex_app_instance_status()
+}
+
+async fn run_codex_restart(
+    command: &'static str,
+    restart: impl FnOnce() -> Result<Value, String> + Send + 'static,
+) -> Result<Value, String> {
+    let started = Instant::now();
+    let result = tauri::async_runtime::spawn_blocking(restart)
+        .await
+        .map_err(|err| format!("后台重启 Codex 任务失败: {err}"))
+        .and_then(|result| result);
+    if let Err(err) = &result {
+        crate::session_sync_diagnostics::log_session_sync_event(
+            "codex_app_restart_command_error",
+            json!({ "command": command, "elapsedMs": started.elapsed().as_millis(), "error": err }),
+        );
+    }
+    result
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+
+    #[test]
+    fn restart_runs_off_calling_thread_and_returns_result() {
+        let caller = thread::current().id();
+        let result = tauri::async_runtime::block_on(run_codex_restart("test_restart", move || {
+            assert_ne!(caller, thread::current().id());
+            Ok(json!({ "ok": true, "restartedCount": 1 }))
+        }))
+        .unwrap();
+        assert_eq!(result["restartedCount"], 1);
+    }
+
+    #[test]
+    fn restart_returns_worker_failure() {
+        let result =
+            tauri::async_runtime::block_on(run_codex_restart("test_restart_failure", || {
+                Err("fixture: process did not exit".to_string())
+            }));
+        assert_eq!(result.unwrap_err(), "fixture: process did not exit");
+    }
 }
