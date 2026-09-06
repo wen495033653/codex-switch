@@ -17,7 +17,7 @@ const EN_TRANSLATIONS = {
   '保留本地会使用你修改过的内容；覆盖前会在同目录备份原文件。': 'Keep local to use your edits. Replacing creates a backup in the same folder first.',
   '覆盖并启用': 'Replace and enable',
   '保留本地并启用': 'Keep local and enable',
-  '使用自定义提示词': 'Use custom instructions',
+  '替换instruction.md': 'Replace instruction.md',
   '账号': 'Accounts',
   '会话': 'Sessions',
   '设置': 'Settings',
