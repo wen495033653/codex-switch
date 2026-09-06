@@ -6,6 +6,17 @@ const LANGUAGE_STORAGE_KEY = 'codex-switch.ui-language';
 const SUPPORTED_LANGUAGE_PREFERENCES = new Set(['zh-CN', 'en']);
 
 const EN_TRANSLATIONS = {
+  '请先切换到 API 模式': 'Switch to API mode first',
+  '已选控制账号不存在，请重新选择': 'The selected control account no longer exists. Select another account.',
+  '控制账号已移除': 'Control account removed',
+  '未选择控制账号': 'No control account selected',
+  '保存代理配置后需重启 Codex，开关不代表当前连接状态。': 'Restart Codex after saving proxy settings. The toggle does not indicate connection status.',
+  '已配置': 'Configured',
+  '未配置': 'Not configured',
+  'API 模式支持安装 Plugin；开关变更需重启 Codex。': 'Install plugins in API mode. Restart Codex after changing this setting.',
+  'Codex 代理配置已保存，重启 Codex 后生效。': 'Proxy settings saved. Restart Codex to apply.',
+  'Codex 代理配置已启用，重启 Codex 后生效。': 'Proxy configuration enabled. Restart Codex to apply.',
+  'Codex 代理配置已关闭，重启 Codex 后生效。': 'Proxy configuration disabled. Restart Codex to apply.',
   '账号': 'Accounts',
   '会话': 'Sessions',
   '设置': 'Settings',

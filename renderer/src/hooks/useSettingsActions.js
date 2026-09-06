@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { REPOSITORY_URL } from '../utils/appState';
 import { getErrorMessage } from '../utils/errors';
+import { proxySaveFeedback } from '../utils/codexSettingsStatus';
 
 function hasRunningCodexApp(processStatus) {
   const pids = Array.isArray(processStatus && processStatus.pids) ? processStatus.pids : [];
@@ -44,14 +45,13 @@ export function useSettingsActions({
 
   const updateSettingsDraftAndSave = async (patch) => {
     const pluginEnabledBeforeSave = settingsDraft.codex_plugins_enabled === true;
-    const enablesPlugin = Object.prototype.hasOwnProperty.call(patch, 'codex_plugins_enabled')
-      && pluginEnabledBeforeSave === false
-      && patch.codex_plugins_enabled === true;
+    const changesPlugin = Object.prototype.hasOwnProperty.call(patch, 'codex_plugins_enabled')
+      && pluginEnabledBeforeSave !== patch.codex_plugins_enabled;
     setSettingsDraft(prev => ({ ...prev, ...patch }));
     try {
       const res = await window.api.updateSettings(patch);
       applySettings(res);
-      if (enablesPlugin) {
+      if (changesPlugin) {
         let processStatus;
         try {
           processStatus = await window.api.getCurrentCodexAppProcesses();
@@ -80,6 +80,15 @@ export function useSettingsActions({
     }
   };
 
+  const showProxySaveFeedback = (result) => {
+    const feedback = proxySaveFeedback(result);
+    if (feedback.message) toast(feedback.message, feedback.warning ? 7000 : undefined);
+    if (feedback.restartRequired) {
+      setPluginRestartNoticeMessage('Codex 代理配置已保存，重启 Codex 后生效。');
+      setPluginRestartNoticeVisible(true);
+    }
+  };
+
   const updateCodexProxySettings = async (patch) => {
     if (savingProxySettings) return;
     const nextPatch = patch && typeof patch === 'object' ? { ...patch } : {};
@@ -96,6 +105,7 @@ export function useSettingsActions({
         })
         : await window.api.updateSettings(nextPatch);
       applySettings(saveRes);
+      showProxySaveFeedback(saveRes);
     } catch (err) {
       setSettingsDraft(settings);
       toast(getErrorMessage(err, '更新 Codex 代理设置失败'), 7000);
@@ -116,7 +126,7 @@ export function useSettingsActions({
     try {
       const res = await window.api.setCodexProxyEnvEnabled({ enabled, proxyUrl });
       applySettings(res);
-      toast((res && res.message) || (enabled ? 'Codex 代理已启用' : 'Codex 代理已关闭'));
+      showProxySaveFeedback(res);
     } catch (err) {
       setSettingsDraft(settings);
       toast(getErrorMessage(err, enabled ? '启用 Codex 代理失败' : '关闭 Codex 代理失败'), 7000);
