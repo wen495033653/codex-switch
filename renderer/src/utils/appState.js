@@ -39,7 +39,6 @@ export const DEFAULT_SETTINGS = {
   background_refresh_interval_minutes: DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES,
   codex_proxy_url: DEFAULT_CODEX_PROXY_URL,
   codex_proxy_env_enabled: false,
-  codex_plugins_enabled: false,
   codex_model_instructions_enabled: true,
   codex_remote_control_enabled: false,
   codex_remote_control_account_id: '',

@@ -158,7 +158,6 @@ fn main() {
             codex_launcher::set_codex_remote_control_enabled,
             codex_launcher::get_codex_remote_control_status,
             codex_launcher::get_current_codex_app_processes,
-            codex_launcher::restart_current_codex_app_for_plugin_setting,
             codex_launcher::restart_current_codex_app_normal,
             codex_launcher::open_codex_app_instance,
             codex_launcher::show_codex_app_instance,

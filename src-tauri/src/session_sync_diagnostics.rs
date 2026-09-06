@@ -231,10 +231,7 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
         )),
         "codex_app_open_handler_start" => Some(pick_labeled_details(
             details,
-            &[
-                ("pluginUnlockEnabled", "Plugin 增强已启用"),
-                ("sessionSyncEnabled", "会话同步已启用"),
-            ],
+            &[("sessionSyncEnabled", "会话同步已启用")],
         )),
         "codex_app_open_handler_skip"
         | "codex_app_open_handler_remote_control_runtime_skip"

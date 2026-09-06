@@ -172,7 +172,6 @@ export default function ProxySettingsTab({
 }) {
     const { t, translateRuntimeText } = useI18n();
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;
-    const codexPluginsEnabled = settingsDraft.codex_plugins_enabled === true;
     const codexRemoteControlEnabled = settingsDraft.codex_remote_control_enabled === true;
     const remoteControlBlockedBySubscription = subscriptionModeActive === true;
     const remoteControlEnabledInCurrentMode = codexRemoteControlEnabled && !remoteControlBlockedBySubscription;
@@ -382,28 +381,6 @@ export default function ProxySettingsTab({
                         <span className="settings-switch-thumb" />
                     </span>
                 </button>
-            </section>
-
-            <section className="settings-section settings-app-card-section settings-plugin-section">
-                <div className="settings-feature-head">
-                    <div className="settings-section-head">
-                        <div className="settings-section-title">{t('Plugin 增强')}</div>
-                        <div className="settings-section-desc">{t('API 模式支持安装 Plugin；开关变更需重启 Codex。')}</div>
-                    </div>
-                    <button
-                        type="button"
-                        className={`settings-feature-switch ${codexPluginsEnabled ? 'active' : ''}`}
-                        aria-pressed={codexPluginsEnabled}
-                        aria-label={codexPluginsEnabled ? t('关闭 Plugin 增强') : t('开启 Plugin 增强')}
-                        disabled={switching}
-                        onClick={() => updateSettingsDraftAndSave({ codex_plugins_enabled: !codexPluginsEnabled })}
-                    >
-                        <span className="settings-feature-switch-label">{t('启用')}</span>
-                        <span className="settings-switch" aria-hidden="true">
-                            <span className="settings-switch-thumb" />
-                        </span>
-                    </button>
-                </div>
             </section>
 
             <section className={`settings-section settings-app-card-section settings-remote-control-section ${remoteControlBlockedBySubscription ? 'disabled' : ''}`}>

@@ -8,12 +8,11 @@ use std::{
 };
 use url::Url;
 
-pub(crate) const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
+pub(crate) const CODEX_CDP_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodexCdpLaunchHooks {
-    pub(crate) plugin_unlock: bool,
     pub(crate) codex_mobile_no_replace: bool,
 }
 
@@ -25,8 +24,6 @@ struct CdpScript {
 struct CdpScriptBundle {
     scripts: Vec<CdpScript>,
 }
-
-const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = include_str!("plugin_unlock.js");
 
 const CODEX_MOBILE_NO_REPLACE_SCRIPT: &str = r###"
 (() => {
@@ -106,7 +103,6 @@ pub(crate) fn inject_codex_mobile_no_replace_hook(
     inject_codex_cdp_hooks(
         processes,
         CodexCdpLaunchHooks {
-            plugin_unlock: false,
             codex_mobile_no_replace: true,
         },
     )
@@ -176,49 +172,11 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
     args: &[String],
     envs: &[(String, String)],
 ) -> Result<(), String> {
-    launch_codex_with_cdp_hooks_with_options_and_failure_action(
-        executable_path,
-        hooks,
-        args,
-        envs,
-        CdpHookFailureAction::KillProcess,
-    )
-    .map(|_| ())
-}
-
-pub(crate) fn launch_codex_with_optional_cdp_hooks_with_options(
-    executable_path: &Path,
-    hooks: CodexCdpLaunchHooks,
-    args: &[String],
-    envs: &[(String, String)],
-) -> Result<Option<String>, String> {
-    launch_codex_with_cdp_hooks_with_options_and_failure_action(
-        executable_path,
-        hooks,
-        args,
-        envs,
-        CdpHookFailureAction::KeepProcess,
-    )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CdpHookFailureAction {
-    KillProcess,
-    KeepProcess,
-}
-
-fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
-    executable_path: &Path,
-    hooks: CodexCdpLaunchHooks,
-    args: &[String],
-    envs: &[(String, String)],
-    failure_action: CdpHookFailureAction,
-) -> Result<Option<String>, String> {
     if !executable_path.exists() {
         return Err(format!("Codex 路径不存在: {}", executable_path.display()));
     }
 
-    let debug_port = select_loopback_port(CODEX_PLUGIN_DEBUG_PORT)?;
+    let debug_port = select_loopback_port(CODEX_CDP_DEBUG_PORT)?;
     let scripts = cdp_scripts_for_hooks(hooks);
     let mut command = Command::new(executable_path);
     command
@@ -245,23 +203,14 @@ fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
         .spawn()
         .map_err(|err| format!("启动 Codex hook 模式失败: {err}"))?;
     if let Err(err) = wait_and_inject_cdp_scripts(debug_port, &scripts) {
-        if failure_action == CdpHookFailureAction::KillProcess {
-            let _ = child.kill();
-            return Err(err);
-        }
-        return Ok(Some(err));
+        let cleanup = child.kill();
+        return Err(format!("{err}; child cleanup={cleanup:?}"));
     }
-    Ok(None)
+    Ok(())
 }
 
 fn cdp_scripts_for_hooks(hooks: CodexCdpLaunchHooks) -> CdpScriptBundle {
     let mut scripts = Vec::new();
-    if hooks.plugin_unlock {
-        scripts.push(CdpScript {
-            name: "plugin_unlock",
-            source: CODEX_PLUGIN_UNLOCK_SCRIPT.to_string(),
-        });
-    }
     if hooks.codex_mobile_no_replace {
         scripts.push(CdpScript {
             name: "codex_mobile_no_replace",
@@ -340,9 +289,6 @@ fn validate_cdp_script_result(name: &str, response: &Value) -> Result<(), String
     let result = &response["result"];
     if let Some(exception) = result.get("exceptionDetails") {
         return Err(format!("执行 {name} 脚本异常: {exception}"));
-    }
-    if name == "plugin_unlock" && result["result"]["value"]["patched"] != true {
-        return Err(format!("Plugin hook 未生效: {}", result["result"]));
     }
     Ok(())
 }
@@ -633,44 +579,6 @@ mod tests {
     }
 
     #[test]
-    fn plugin_unlock_script_uses_minimal_current_catalog_hook() {
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("app-initial-"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/list"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("marketplaceKinds"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("dispatchMessage"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("app-server-manager-signals-"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/installed"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/install"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/uninstall"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("install-plugin"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("uninstall-plugin"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("codex-switch-openai-curated-remote"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("MutationObserver"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("setInterval"));
-    }
-    #[test]
-    fn cdp_hook_result_requires_actual_patch_and_no_exception() {
-        assert!(validate_cdp_script_result(
-            "plugin_unlock",
-            &json!({"result":{"result":{"value":{"patched":true}}}})
-        )
-        .is_ok());
-        assert!(validate_cdp_script_result(
-            "plugin_unlock",
-            &json!({"result":{"result":{"value":{"patched":false,"error":"not ready"}}}})
-        )
-        .unwrap_err()
-        .contains("not ready"));
-        assert!(validate_cdp_script_result(
-            "plugin_unlock",
-            &json!({"result":{"exceptionDetails":{"text":"boom"}}})
-        )
-        .unwrap_err()
-        .contains("boom"));
-        assert!(validate_cdp_script_result("plugin_unlock", &json!({"result":{}})).is_err());
-    }
-
-    #[test]
     fn cdp_target_excludes_avatar_overlay() {
         assert!(!is_codex_desktop_page_target(
             &json!({"type":"page","title":"Codex","url":"app://-/index.html?initialRoute=%2Favatar-overlay","webSocketDebuggerUrl":"ws://127.0.0.1:1/avatar"})
@@ -681,22 +589,31 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an explicitly selected running Codex CDP port"]
-    fn live_plugin_hook_injection() {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .expect("install test crypto provider");
-        let port: u16 = std::env::var("CODEX_SWITCH_TEST_CDP_PORT")
-            .expect("set CODEX_SWITCH_TEST_CDP_PORT")
-            .parse()
-            .unwrap();
-        inject_cdp_scripts(
-            port,
-            &cdp_scripts_for_hooks(CodexCdpLaunchHooks {
-                plugin_unlock: true,
-                codex_mobile_no_replace: false,
-            }),
+    fn bundle_contains_only_requested_mobile_hook() {
+        assert!(cdp_scripts_for_hooks(CodexCdpLaunchHooks {
+            codex_mobile_no_replace: false
+        })
+        .scripts
+        .is_empty());
+        let bundle = cdp_scripts_for_hooks(CodexCdpLaunchHooks {
+            codex_mobile_no_replace: true,
+        });
+        assert_eq!(bundle.scripts.len(), 1);
+        assert_eq!(bundle.scripts[0].name, "codex_mobile_no_replace");
+        assert!(!bundle.scripts[0].source.contains("plugin/list"));
+    }
+    #[test]
+    fn cdp_script_exception_is_returned() {
+        assert!(validate_cdp_script_result(
+            "codex_mobile_no_replace",
+            &json!({"result":{"exceptionDetails":{"text":"boom"}}})
         )
-        .expect("live Plugin hook must report patched=true");
+        .unwrap_err()
+        .contains("boom"));
+        assert!(validate_cdp_script_result(
+            "codex_mobile_no_replace",
+            &json!({"result":{"result":{"type":"undefined"}}})
+        )
+        .is_ok());
     }
 }

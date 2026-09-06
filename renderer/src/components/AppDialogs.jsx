@@ -24,7 +24,7 @@ export default function AppDialogs({
   deleteAccount,
   ideReopen,
   message,
-  pluginRestartNotice = { visible: false },
+  codexRestartNotice = { visible: false },
   refreshAll,
   refreshToken,
   remoteControlNotice = { visible: false },
@@ -35,16 +35,16 @@ export default function AppDialogs({
     <>
       {message && <div className="toast">{message}</div>}
 
-      {pluginRestartNotice.visible && (
+      {codexRestartNotice.visible && (
         <ConfirmDialog
           title={t('重启后生效')}
-          message={translateRuntimeText(pluginRestartNotice.message) || t('Codex 设置已保存，重启后生效。')}
-          isLoading={pluginRestartNotice.loading}
+          message={translateRuntimeText(codexRestartNotice.message) || t('Codex 设置已保存，重启后生效。')}
+          isLoading={codexRestartNotice.loading}
           confirmText={t('重启')}
           loadingText={t('重启中...')}
           cancelText={t('稍后')}
-          onConfirm={pluginRestartNotice.onRestart}
-          onCancel={pluginRestartNotice.onClose}
+          onConfirm={codexRestartNotice.onRestart}
+          onCancel={codexRestartNotice.onClose}
         />
       )}
 

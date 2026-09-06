@@ -411,7 +411,7 @@ function MainApp() {
     openCodexConfigToml,
     openDataDir,
     openRepository,
-    pluginRestartNotice,
+    codexRestartNotice,
     openSettingsPage,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
@@ -425,8 +425,8 @@ function MainApp() {
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
     setCodexRemoteControlEnabled,
-    setPluginRestartNoticeMessage,
-    setPluginRestartNoticeVisible,
+    setCodexRestartNoticeMessage,
+    setCodexRestartNoticeVisible,
     updateCodexProxySettings,
     updateSettingsDraftAndSave
   } = useSettingsActions({
@@ -453,8 +453,8 @@ function MainApp() {
     applySettings,
     handleRes,
     maskAccountName,
-    setPluginRestartNoticeMessage,
-    setPluginRestartNoticeVisible,
+    setCodexRestartNoticeMessage,
+    setCodexRestartNoticeVisible,
     setStore,
     toast,
     toastError
@@ -751,7 +751,7 @@ function MainApp() {
             onCancel: closeDeleteAccountModal,
             onConfirm: confirmDeleteAccount
           }}
-          pluginRestartNotice={pluginRestartNotice}
+          codexRestartNotice={codexRestartNotice}
           refreshAll={{
             visible: refreshModal,
             isLoading: refreshAllStarting,

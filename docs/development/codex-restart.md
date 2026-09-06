@@ -2,7 +2,7 @@
 
 ## 流程
 
-- 两个 Tauri command 使用 async + spawn_blocking，进程等待不占用调用线程。
+- 统一的 Tauri command 使用 async + spawn_blocking，进程等待不占用调用线程。
 - 结束前校验可执行路径。taskkill 最长执行 10000ms，超时结束命令；清理最多 1000ms，stdout/stderr 各最多等 500ms。后续目标退出等待上限 12000ms。
 - stdout/stderr 并发读取，避免管道写满。失败返回 PID、退出状态、elapsedMs、两路输出和清理结果；非 UTF-8 输出用 rawBase64 保留原字节。所有结束进程调用方传递 Result，不再忽略错误。
 - 普通 Codex 启动检查同一个新建 Child 句柄持续存活 1500ms；提前退出（包括 exitCode=0）返回 PID、退出码和耗时，不重试伪装成功。CDP 模式仍使用实际 CDP 注入验证。
