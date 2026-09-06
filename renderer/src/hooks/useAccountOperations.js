@@ -13,8 +13,8 @@ export function useAccountOperations({
   applySettings,
   handleRes,
   maskAccountName,
-  setPluginRestartNoticeMessage,
-  setPluginRestartNoticeVisible,
+  setCodexRestartNoticeMessage,
+  setCodexRestartNoticeVisible,
   setStore,
   toast,
   toastError
@@ -68,8 +68,8 @@ export function useAccountOperations({
       }
       handleRes(res);
       if (res && res.restartRequired) {
-        setPluginRestartNoticeMessage('控制账号已删除，远程控制已关闭；重启 Codex 后生效。');
-        setPluginRestartNoticeVisible(true);
+        setCodexRestartNoticeMessage('控制账号已删除，远程控制已关闭；重启 Codex 后生效。');
+        setCodexRestartNoticeVisible(true);
       }
       setDeleteAccountModal(EMPTY_DELETE_ACCOUNT_MODAL);
     } catch (err) {

@@ -46,7 +46,6 @@ const COMMAND_BINDINGS = {
   switchApiMode: ['switch_api_mode', profileId => ({ profileId: profileId || null })],
   getUsageStats: ['usage_stats_get'],
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
-  restartCurrentCodexAppForPluginSetting: ['restart_current_codex_app_for_plugin_setting'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
   openCodexAppInstance: ['open_codex_app_instance', payload => ({ payload })],
   showCodexAppInstance: ['show_codex_app_instance', payload => ({ payload })],

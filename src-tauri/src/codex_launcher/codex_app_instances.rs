@@ -115,35 +115,24 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
     ) {
         Ok(launch) if launch.launched => {
             trigger_instance_legacy_migration(paths.codex_home.clone());
-            let hook_warning = launch.hook_warning.clone();
-            let message = if hook_warning.is_some() {
-                format!(
-                    "已用{}打开 Codex；hook 注入失败，增强功能可能未生效",
-                    channel.label
-                )
-            } else {
-                format!("已用{}打开 Codex", channel.label)
-            };
             log_session_sync_event(
                 "codex_app_multi_open_finish",
                 json!({
                     "kind": channel.kind,
                     "channel": channel.label,
-                    "instanceRoot": paths.root.to_string_lossy(),
-                    "hookWarning": hook_warning.clone()
+                    "instanceRoot": paths.root.to_string_lossy()
                 }),
             );
             Ok(json!({
                 "ok": true,
-                "message": message,
+                "message": format!("已用{}打开 Codex", channel.label),
                 "kind": channel.kind,
                 "targetId": channel.target_id,
                 "instanceKey": channel.key,
                 "channel": channel.label,
                 "instanceRoot": paths.root.to_string_lossy().to_string(),
                 "codexHome": paths.codex_home.to_string_lossy().to_string(),
-                "userDataDir": paths.user_data_dir.to_string_lossy().to_string(),
-                "hookWarning": hook_warning
+                "userDataDir": paths.user_data_dir.to_string_lossy().to_string()
             }))
         }
         Ok(_) => {

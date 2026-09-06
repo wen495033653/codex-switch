@@ -31,21 +31,21 @@ pub(crate) struct IdeRuntime {
     snapshots: Mutex<HashMap<String, IdePending>>,
 }
 
+mod cdp;
 mod codex_app;
 mod codex_app_instances;
 mod codex_app_open;
 mod codex_app_watcher;
 mod ide_snapshot;
-mod plugins;
 mod process_control;
 mod remote_control;
 mod shell;
 
+pub(crate) use cdp::*;
 pub(crate) use codex_app::*;
 pub(crate) use codex_app_instances::{codex_desktop_cli_source_path, codex_desktop_support_status};
 pub(crate) use codex_app_watcher::{CodexAppOpenOutcome, CodexProcess};
 pub(crate) use ide_snapshot::*;
-pub(crate) use plugins::*;
 pub(crate) use process_control::*;
 pub(crate) use remote_control::*;
 pub(crate) use shell::*;
@@ -59,11 +59,6 @@ pub(crate) async fn get_current_codex_app_processes() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codex_app_watcher::current_codex_app_processes_value)
         .await
         .map_err(|err| format!("后台检测 Codex 进程失败: {err}"))?
-}
-
-#[tauri::command]
-pub(crate) fn restart_current_codex_app_for_plugin_setting() -> Result<Value, String> {
-    codex_app_open::restart_current_codex_app_for_plugin_setting()
 }
 
 #[tauri::command]

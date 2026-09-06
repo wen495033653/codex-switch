@@ -172,7 +172,6 @@ pub(crate) fn normalize_settings(data: &Value) -> Value {
         "background_refresh_interval_minutes": background_refresh_interval_minutes,
         "codex_proxy_url": codex_proxy_url,
         "codex_proxy_env_enabled": bool_field(data, "codex_proxy_env_enabled"),
-        "codex_plugins_enabled": bool_field(data, "codex_plugins_enabled"),
         "codex_model_instructions_enabled": data
             .get("codex_model_instructions_enabled")
             .and_then(Value::as_bool)
@@ -308,29 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn normalize_settings_disables_codex_plugins_by_default() {
-        let settings = normalize_settings(&json!({}));
-
-        assert_eq!(
-            settings
+    fn normalize_settings_discards_retired_plugin_flag() {
+        for input in [
+            json!({}),
+            json!({"codex_plugins_enabled": true}),
+            json!({"codex_plugins_enabled": false}),
+        ] {
+            assert!(normalize_settings(&input)
                 .get("codex_plugins_enabled")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn normalize_settings_preserves_codex_plugins_enabled() {
-        let settings = normalize_settings(&json!({
-            "codex_plugins_enabled": true
-        }));
-
-        assert_eq!(
-            settings
-                .get("codex_plugins_enabled")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
+                .is_none());
+        }
     }
 
     #[test]
