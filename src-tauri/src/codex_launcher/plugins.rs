@@ -665,6 +665,7 @@ mod tests {
     #[test]
     #[ignore = "requires an explicitly selected running Codex CDP port"]
     fn live_plugin_hook_injection() {
+        rustls::crypto::ring::default_provider().install_default().expect("install test crypto provider");
         let port: u16 = std::env::var("CODEX_SWITCH_TEST_CDP_PORT")
             .expect("set CODEX_SWITCH_TEST_CDP_PORT")
             .parse().unwrap();
