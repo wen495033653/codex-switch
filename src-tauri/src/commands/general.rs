@@ -521,6 +521,9 @@ mod api_test_model_tests {
     fn defaults_to_gpt6_without_overriding_explicit_models() {
         assert_eq!(normalize_api_test_model(None), "gpt-6-astra");
         assert_eq!(normalize_api_test_model(Some("  ".into())), "gpt-6-astra");
-        assert_eq!(normalize_api_test_model(Some(" custom-model ".into())), "custom-model");
+        assert_eq!(
+            normalize_api_test_model(Some(" custom-model ".into())),
+            "custom-model"
+        );
     }
 }
