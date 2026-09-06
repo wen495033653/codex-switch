@@ -76,6 +76,24 @@
   font-weight: 600;
 }
 
+.model-instructions-file-path {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--border-app);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+.model-instructions-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+
 .confirm-dialog {
   padding: 32px;
   text-align: center;
