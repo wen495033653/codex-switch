@@ -7,7 +7,6 @@ const SUPPORTED_LANGUAGE_PREFERENCES = new Set(['zh-CN', 'en']);
 
 const EN_TRANSLATIONS = {
   '已选控制账号不存在，请重新选择': 'The selected control account no longer exists. Select another account.',
-  '保存代理配置后需重启 Codex，开关不代表当前连接状态。': 'Restart Codex after saving proxy settings. The toggle does not indicate connection status.',
   '已配置': 'Configured',
   '未配置': 'Not configured',
   'Codex 代理配置已保存，重启 Codex 后生效。': 'Proxy settings saved. Restart Codex to apply.',

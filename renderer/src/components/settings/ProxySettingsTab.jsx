@@ -338,7 +338,7 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-proxy-section">
                 <div className="settings-proxy-copy">
                     <div className="settings-section-title">{t('Codex 代理')}</div>
-                    <div className="settings-section-desc">{t('保存代理配置后需重启 Codex，开关不代表当前连接状态。')}</div>
+                    <div className="settings-section-desc">{t('设置 Codex 使用的代理地址')}</div>
                 </div>
 
                 <label className="settings-field settings-proxy-field">
