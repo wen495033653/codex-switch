@@ -166,10 +166,11 @@ pub(crate) fn set_codex_proxy_env_enabled(
     Ok(json!({
         "ok": true,
         "message": if enabled {
-            "Codex 代理已启用"
+            "Codex 代理配置已启用，重启 Codex 后生效。"
         } else {
-            "Codex 代理已关闭"
+            "Codex 代理配置已关闭，重启 Codex 后生效。"
         },
+        "restartRequired": true,
         "settings": settings,
         "env_path": codex_env_path()?.to_string_lossy().to_string(),
         "proxy_url": proxy_url,
@@ -195,5 +196,32 @@ fn sync_remote_control_runtime_after_proxy_change(settings: &Value) -> Value {
             );
             json!({ "changed": false, "error": err })
         }
+    }
+}
+
+#[cfg(test)]
+mod proxy_settings_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires isolated USERPROFILE and APPDATA"]
+    fn proxy_save_reports_restart_and_preserves_other_env_values() {
+        let test_home = PathBuf::from(std::env::var("CODEX_SWITCH_TEST_HOME").expect("explicit fixture home required"));
+        assert_eq!(crate::paths::home_dir().unwrap(), test_home);
+        assert!(crate::paths::app_data_dir().unwrap().starts_with(&test_home));
+        let path = codex_env_path().unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "FIXTURE_VALUE=preserved\n").unwrap();
+        update_settings_value(&json!({"codex_remote_control_enabled": false})).unwrap();
+        let enabled = set_codex_proxy_env_enabled(true, "127.0.0.1:10808".into()).unwrap();
+        assert_eq!(enabled["restartRequired"], true);
+        assert!(enabled["message"].as_str().unwrap().contains("重启 Codex"));
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("FIXTURE_VALUE=preserved"));
+        assert!(content.contains("HTTP_PROXY=http://127.0.0.1:10808"));
+        let disabled = set_codex_proxy_env_enabled(false, String::new()).unwrap();
+        assert_eq!(disabled["restartRequired"], true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "FIXTURE_VALUE=preserved\n");
+        assert!(set_codex_proxy_env_enabled(true, String::new()).unwrap_err().contains("代理地址不能为空"));
     }
 }

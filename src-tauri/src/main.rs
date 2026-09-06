@@ -42,6 +42,8 @@ use quota::{
 use updater::UpdateRuntime;
 
 fn main() {
+    let dev_preview = cfg!(debug_assertions)
+        && std::env::var("CODEX_SWITCH_DEV_PREVIEW").as_deref() == Ok("1");
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     tauri::Builder::default()
@@ -56,19 +58,27 @@ fn main() {
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg(AUTO_START_LAUNCH_ARG)
-                .app_name("Codex Switch")
+                .app_name(if dev_preview { "Codex Switch Dev" } else { "Codex Switch" })
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
             session_sync_diagnostics::init_session_sync_diagnostics(app.handle().clone());
             session_sync_diagnostics::log_session_sync_event("app_start", json!({}));
             restore_main_window_state(app.handle()).map_err(setup_error)?;
             setup_tray(app.handle()).map_err(setup_error)?;
             let launch_args: Vec<String> = std::env::args().collect();
             apply_main_window_startup_behavior(app.handle(), &launch_args).map_err(setup_error)?;
+            // 独立 Dev 预览只执行用户手动操作，不在启动时同步正式版状态。
+            if dev_preview {
+                session_sync_diagnostics::log_session_sync_event(
+                    "app_dev_preview",
+                    json!({ "automaticSync": false, "dataDir": paths::app_data_dir().map_err(setup_error)?, "codexHome": paths::codex_dir().map_err(setup_error)? }),
+                );
+                return Ok(());
+            }
             if let Err(err) = sync_system_auto_start_from_settings(app.handle()) {
                 eprintln!("同步开机自启状态失败: {err}");
             }

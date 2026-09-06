@@ -658,6 +658,11 @@ fn relaunch_running_codex_processes(
     if executables.is_empty() {
         return Err("未检测到 Codex 可执行路径".to_string());
     }
+    for executable in &executables {
+        if !Path::new(executable).is_file() {
+            return Err(format!("Codex 可执行文件不存在，未结束现有进程: {executable}"));
+        }
+    }
     log_session_sync_event(
         "codex_app_relaunch_processes_start",
         json!({
@@ -673,7 +678,7 @@ fn relaunch_running_codex_processes(
     }
     let alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
-        return Err("Codex 进程未能退出".to_string());
+        return Err(format!("Codex 进程未能在 12000ms 内退出，存活 PID: {alive:?}"));
     }
 
     apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;
@@ -720,6 +725,12 @@ fn relaunch_running_codex_processes(
         thread::sleep(StdDuration::from_millis(120));
     }
 
+    if restarted == 0 {
+        if origin == CodexRelaunchOrigin::AppCommand {
+            super::codex_app_watcher::clear_expected_codex_app_open_for_executables(&executables);
+        }
+        return Err(format!("未能重新打开 Codex，可执行路径: {executables:?}"));
+    }
     log_session_sync_event(
         "codex_app_relaunch_processes_finish",
         json!({
