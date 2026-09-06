@@ -660,7 +660,9 @@ fn relaunch_running_codex_processes(
     }
     for executable in &executables {
         if !Path::new(executable).is_file() {
-            return Err(format!("Codex 可执行文件不存在，未结束现有进程: {executable}"));
+            return Err(format!(
+                "Codex 可执行文件不存在，未结束现有进程: {executable}"
+            ));
         }
     }
     log_session_sync_event(
@@ -678,7 +680,9 @@ fn relaunch_running_codex_processes(
     }
     let alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
-        return Err(format!("Codex 进程未能在 12000ms 内退出，存活 PID: {alive:?}"));
+        return Err(format!(
+            "Codex 进程未能在 12000ms 内退出，存活 PID: {alive:?}"
+        ));
     }
 
     apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;

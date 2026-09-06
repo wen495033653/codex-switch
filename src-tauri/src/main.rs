@@ -42,8 +42,8 @@ use quota::{
 use updater::UpdateRuntime;
 
 fn main() {
-    let dev_preview = cfg!(debug_assertions)
-        && std::env::var("CODEX_SWITCH_DEV_PREVIEW").as_deref() == Ok("1");
+    let dev_preview =
+        cfg!(debug_assertions) && std::env::var("CODEX_SWITCH_DEV_PREVIEW").as_deref() == Ok("1");
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     tauri::Builder::default()

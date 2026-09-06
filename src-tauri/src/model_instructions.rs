@@ -59,20 +59,35 @@ fn initialize_model_instructions_file(
         Ok(metadata) if metadata.is_file() => return Ok(()),
         Ok(_) => return Err(format!("模型指令路径不是文件: {}", target.display())),
         Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(err) => return Err(format!("读取模型指令文件状态失败 {}: {err}", target.display())),
+        Err(err) => {
+            return Err(format!(
+                "读取模型指令文件状态失败 {}: {err}",
+                target.display()
+            ))
+        }
     }
     let source = source()?;
     let mut input = fs::File::open(&source)
         .map_err(|err| format!("读取模型指令资源失败 {}: {err}", source.display()))?;
     ensure_parent_dir(target)?;
-    let mut output = match fs::OpenOptions::new().write(true).create_new(true).open(target) {
+    let mut output = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+    {
         Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::AlreadyExists && target.is_file() => return Ok(()),
         Err(err) => return Err(format!("创建模型指令文件失败 {}: {err}", target.display())),
     };
-    io::copy(&mut input, &mut output).map(|_| ()).map_err(|err| {
-        format!("初始化模型指令文件失败 {} -> {}: {err}", source.display(), target.display())
-    })
+    io::copy(&mut input, &mut output)
+        .map(|_| ())
+        .map_err(|err| {
+            format!(
+                "初始化模型指令文件失败 {} -> {}: {err}",
+                source.display(),
+                target.display()
+            )
+        })
 }
 
 fn path_for_config(path: &Path) -> String {
@@ -121,7 +136,10 @@ mod tests {
         assert_eq!(target, codex_home.join("gpt-unrestricted.md"));
     }
     fn fixture() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("codex-switch-instructions-{}", crate::accounts::random_urlsafe(12)));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-instructions-{}",
+            crate::accounts::random_urlsafe(12)
+        ));
         fs::create_dir_all(&path).unwrap();
         path
     }
@@ -151,10 +169,15 @@ mod tests {
     #[test]
     fn rejects_directory_and_missing_resource() {
         let dir = fixture();
-        assert!(initialize_model_instructions_file(&dir, || unreachable!()).unwrap_err().contains("不是文件"));
+        assert!(initialize_model_instructions_file(&dir, || unreachable!())
+            .unwrap_err()
+            .contains("不是文件"));
         let target = dir.join(FILE_NAME);
-        assert!(initialize_model_instructions_file(&target, || Ok(dir.join("missing.md"))).unwrap_err().contains("读取模型指令资源失败"));
+        assert!(
+            initialize_model_instructions_file(&target, || Ok(dir.join("missing.md")))
+                .unwrap_err()
+                .contains("读取模型指令资源失败")
+        );
         assert!(!target.exists());
     }
-
 }

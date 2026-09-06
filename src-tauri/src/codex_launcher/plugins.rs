@@ -650,29 +650,53 @@ mod tests {
     }
     #[test]
     fn cdp_hook_result_requires_actual_patch_and_no_exception() {
-        assert!(validate_cdp_script_result("plugin_unlock", &json!({"result":{"result":{"value":{"patched":true}}}})).is_ok());
-        assert!(validate_cdp_script_result("plugin_unlock", &json!({"result":{"result":{"value":{"patched":false,"error":"not ready"}}}})).unwrap_err().contains("not ready"));
-        assert!(validate_cdp_script_result("plugin_unlock", &json!({"result":{"exceptionDetails":{"text":"boom"}}})).unwrap_err().contains("boom"));
+        assert!(validate_cdp_script_result(
+            "plugin_unlock",
+            &json!({"result":{"result":{"value":{"patched":true}}}})
+        )
+        .is_ok());
+        assert!(validate_cdp_script_result(
+            "plugin_unlock",
+            &json!({"result":{"result":{"value":{"patched":false,"error":"not ready"}}}})
+        )
+        .unwrap_err()
+        .contains("not ready"));
+        assert!(validate_cdp_script_result(
+            "plugin_unlock",
+            &json!({"result":{"exceptionDetails":{"text":"boom"}}})
+        )
+        .unwrap_err()
+        .contains("boom"));
         assert!(validate_cdp_script_result("plugin_unlock", &json!({"result":{}})).is_err());
     }
 
     #[test]
     fn cdp_target_excludes_avatar_overlay() {
-        assert!(!is_codex_desktop_page_target(&json!({"type":"page","title":"Codex","url":"app://-/index.html?initialRoute=%2Favatar-overlay","webSocketDebuggerUrl":"ws://127.0.0.1:1/avatar"})));
-        assert!(is_codex_desktop_page_target(&json!({"type":"page","title":"Codex","url":"app://-/index.html","webSocketDebuggerUrl":"ws://127.0.0.1:1/main"})));
+        assert!(!is_codex_desktop_page_target(
+            &json!({"type":"page","title":"Codex","url":"app://-/index.html?initialRoute=%2Favatar-overlay","webSocketDebuggerUrl":"ws://127.0.0.1:1/avatar"})
+        ));
+        assert!(is_codex_desktop_page_target(
+            &json!({"type":"page","title":"Codex","url":"app://-/index.html","webSocketDebuggerUrl":"ws://127.0.0.1:1/main"})
+        ));
     }
 
     #[test]
     #[ignore = "requires an explicitly selected running Codex CDP port"]
     fn live_plugin_hook_injection() {
-        rustls::crypto::ring::default_provider().install_default().expect("install test crypto provider");
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("install test crypto provider");
         let port: u16 = std::env::var("CODEX_SWITCH_TEST_CDP_PORT")
             .expect("set CODEX_SWITCH_TEST_CDP_PORT")
-            .parse().unwrap();
-        inject_cdp_scripts(port, &cdp_scripts_for_hooks(CodexCdpLaunchHooks {
-            plugin_unlock: true,
-            codex_mobile_no_replace: false,
-        })).expect("live Plugin hook must report patched=true");
+            .parse()
+            .unwrap();
+        inject_cdp_scripts(
+            port,
+            &cdp_scripts_for_hooks(CodexCdpLaunchHooks {
+                plugin_unlock: true,
+                codex_mobile_no_replace: false,
+            }),
+        )
+        .expect("live Plugin hook must report patched=true");
     }
-
 }

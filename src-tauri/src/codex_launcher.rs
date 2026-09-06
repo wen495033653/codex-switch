@@ -63,12 +63,20 @@ pub(crate) async fn get_current_codex_app_processes() -> Result<Value, String> {
 
 #[tauri::command]
 pub(crate) async fn restart_current_codex_app_for_plugin_setting() -> Result<Value, String> {
-    run_codex_restart("restart_current_codex_app_for_plugin_setting", codex_app_open::restart_current_codex_app_for_plugin_setting).await
+    run_codex_restart(
+        "restart_current_codex_app_for_plugin_setting",
+        codex_app_open::restart_current_codex_app_for_plugin_setting,
+    )
+    .await
 }
 
 #[tauri::command]
 pub(crate) async fn restart_current_codex_app_normal() -> Result<Value, String> {
-    run_codex_restart("restart_current_codex_app_normal", codex_app_open::restart_current_codex_app_normal).await
+    run_codex_restart(
+        "restart_current_codex_app_normal",
+        codex_app_open::restart_current_codex_app_normal,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -114,15 +122,17 @@ mod restart_tests {
         let result = tauri::async_runtime::block_on(run_codex_restart("test_restart", move || {
             assert_ne!(caller, thread::current().id());
             Ok(json!({ "ok": true, "restartedCount": 1 }))
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(result["restartedCount"], 1);
     }
 
     #[test]
     fn restart_returns_worker_failure() {
-        let result = tauri::async_runtime::block_on(run_codex_restart("test_restart_failure", || {
-            Err("fixture: process did not exit".to_string())
-        }));
+        let result =
+            tauri::async_runtime::block_on(run_codex_restart("test_restart_failure", || {
+                Err("fixture: process did not exit".to_string())
+            }));
         assert_eq!(result.unwrap_err(), "fixture: process did not exit");
     }
 }
