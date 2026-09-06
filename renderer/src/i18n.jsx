@@ -6,6 +6,12 @@ const LANGUAGE_STORAGE_KEY = 'codex-switch.ui-language';
 const SUPPORTED_LANGUAGE_PREFERENCES = new Set(['zh-CN', 'en']);
 
 const EN_TRANSLATIONS = {
+  '检测到本地提示词文件': 'Local instructions file found',
+  '本地已有 gpt-unrestricted.md，是否用应用内置版本覆盖？': 'A local gpt-unrestricted.md already exists. Replace it with the bundled version?',
+  '保留本地会使用你修改过的内容；覆盖前会在同目录备份原文件。': 'Keep local to use your edits. Replacing creates a backup in the same folder first.',
+  '覆盖并启用': 'Replace and enable',
+  '保留本地并启用': 'Keep local and enable',
+  '开启时检测本地 MD，已有文件会询问是否覆盖。': 'Enabling checks the local MD and asks before replacing an existing file.',
   '账号': 'Accounts',
   '会话': 'Sessions',
   '设置': 'Settings',

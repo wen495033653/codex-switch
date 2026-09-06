@@ -24,6 +24,7 @@ export function useSettingsActions({
   const [savingCodexProxyEnv, setSavingCodexProxyEnv] = useState(false);
   const [savingCodexRemoteControl, setSavingCodexRemoteControl] = useState(false);
   const [savingCodexModelInstructions, setSavingCodexModelInstructions] = useState(false);
+  const [modelInstructionsConfirmation, setModelInstructionsConfirmation] = useState(null);
   const [codexRemoteControlPendingEnabled, setCodexRemoteControlPendingEnabled] = useState(null);
   const [pluginRestartNoticeVisible, setPluginRestartNoticeVisible] = useState(false);
   const [pluginRestartNoticeMessage, setPluginRestartNoticeMessage] = useState(
@@ -182,15 +183,21 @@ export function useSettingsActions({
     }
   };
 
-  const setCodexModelInstructionsEnabled = async (enabled) => {
+  const setCodexModelInstructionsEnabled = async (enabled, overwriteLocal = null) => {
     if (savingCodexModelInstructions) return;
-    setSettingsDraft(prev => ({ ...prev, codex_model_instructions_enabled: enabled }));
 
     setSavingCodexModelInstructions(true);
     try {
-      const res = await window.api.setCodexModelInstructionsEnabled({ enabled });
+      const res = await window.api.setCodexModelInstructionsEnabled({ enabled, overwriteLocal });
+      if (res && res.confirmationRequired) {
+        setModelInstructionsConfirmation({ path: res.path });
+        return;
+      }
+      if (!res || res.ok !== true) throw new Error(res?.message || '模型指令设置失败');
       applySettings(res);
-      toast((res && res.message) || (enabled ? 'gpt破限已启用' : 'gpt破限已关闭'));
+      setModelInstructionsConfirmation(null);
+      const message = res.message || (enabled ? 'gpt破限已启用' : 'gpt破限已关闭');
+      toast(res.backupPath ? `${message}\n本地文件已备份：${res.backupPath}` : message, res.backupPath ? 7000 : undefined);
       if (res && res.restartRequired) {
         let processStatus;
         try {
@@ -280,6 +287,13 @@ export function useSettingsActions({
     codexRemoteControlPendingEnabled,
     savingCodexProxyEnv,
     savingCodexModelInstructions,
+    modelInstructionsConfirmation: modelInstructionsConfirmation && {
+      path: modelInstructionsConfirmation.path,
+      loading: savingCodexModelInstructions,
+      onKeep: () => setCodexModelInstructionsEnabled(true, false),
+      onOverwrite: () => setCodexModelInstructionsEnabled(true, true),
+      onCancel: () => !savingCodexModelInstructions && setModelInstructionsConfirmation(null)
+    },
     savingCodexRemoteControl,
     savingProxySettings,
     setCodexModelInstructionsEnabled,

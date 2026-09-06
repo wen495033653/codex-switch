@@ -2,7 +2,8 @@ use super::*;
 use crate::{
     codex_config::{remove_config_values, set_config_values},
     model_instructions::{
-        resolve_model_instructions_file, CONFIG_KEY as MODEL_INSTRUCTIONS_CONFIG_KEY,
+        prepare_model_instructions_for_enable, resolve_model_instructions_file,
+        ModelInstructionsPreparation, CONFIG_KEY as MODEL_INSTRUCTIONS_CONFIG_KEY,
         SETTING_KEY as MODEL_INSTRUCTIONS_SETTING_KEY,
     },
 };
@@ -88,8 +89,36 @@ pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, Str
 pub(crate) fn set_codex_model_instructions_enabled(
     app: AppHandle,
     enabled: bool,
+    overwrite_local: Option<bool>,
 ) -> Result<Value, String> {
-    sync_codex_model_instructions_config(&app, enabled)?;
+    let backup_path = if enabled {
+        let preparation =
+            prepare_model_instructions_for_enable(&app, overwrite_local).map_err(|err| {
+                crate::session_sync_diagnostics::log_session_sync_event(
+                    "model_instructions_prepare_error",
+                    json!({ "enabled": enabled, "overwriteLocal": overwrite_local, "error": err }),
+                );
+                err
+            })?;
+        match preparation {
+            ModelInstructionsPreparation::Confirmation { path } => {
+                return Ok(json!({
+                    "ok": false,
+                    "confirmationRequired": true,
+                    "path": path
+                }));
+            }
+            ModelInstructionsPreparation::Ready { path, backup_path } => {
+                set_config_values(vec![(MODEL_INSTRUCTIONS_CONFIG_KEY, path)]).map_err(|err| {
+                    format!("保存模型指令配置失败: {err}；本地文件备份: {backup_path:?}")
+                })?;
+                backup_path
+            }
+        }
+    } else {
+        sync_codex_model_instructions_config(&app, false)?;
+        None
+    };
 
     let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&json!({
         "codex_model_instructions_enabled": enabled
@@ -104,6 +133,7 @@ pub(crate) fn set_codex_model_instructions_enabled(
         "ok": true,
         "message": message,
         "restartRequired": true,
+        "backupPath": backup_path,
         "settings": settings
     }))
 }

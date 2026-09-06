@@ -37,7 +37,8 @@ const COMMAND_BINDINGS = {
   getSettings: ['get_settings'],
   updateSettings: ['update_settings', patch => ({ patch })],
   setCodexModelInstructionsEnabled: ['set_codex_model_instructions_enabled', payload => ({
-    enabled: Boolean(payload && payload.enabled)
+    enabled: Boolean(payload && payload.enabled),
+    overwriteLocal: typeof payload?.overwriteLocal === 'boolean' ? payload.overwriteLocal : null
   })],
   captureCurrent: ['capture_current'],
   importRefreshToken: ['import_refresh_token', token => ({ token })],
