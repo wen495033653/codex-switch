@@ -117,7 +117,10 @@ fn run_bounded_command(command: &mut Command, timeout: StdDuration) -> Result<()
         .and_then(|result| result);
     match (status, stdout, stderr) {
         (Ok(status), Ok(_), Ok(_)) if status.success() => Ok(()),
-        (status, stdout, stderr) => Err(format!("status={status:?}; elapsedMs={}; stdout={stdout:?}; stderr={stderr:?}; cleanup={cleanup}", started.elapsed().as_millis())),
+        (status, stdout, stderr) => {
+            let exit_code = status.as_ref().ok().and_then(|status| status.code());
+            Err(format!("status={status:?}; exitCode={exit_code:?}; elapsedMs={}; stdout={stdout:?}; stderr={stderr:?}; cleanup={cleanup}", started.elapsed().as_millis()))
+        }
     }
 }
 
@@ -345,6 +348,7 @@ mod tests {
             run_bounded_command(&mut fixture_command("sleep"), StdDuration::from_millis(150))
                 .unwrap_err();
         assert!(error.contains("命令超时 150ms"), "{error}");
+        assert!(error.contains("exitCode=None"), "{error}");
         assert!(error.contains("kill=Ok(())"), "{error}");
         assert!(started.elapsed() < StdDuration::from_secs(4));
     }
@@ -353,7 +357,7 @@ mod tests {
     fn command_error_preserves_exit_status_and_both_streams() {
         let error = run_bounded_command(&mut fixture_command("error"), StdDuration::from_secs(5))
             .unwrap_err();
-        assert!(error.contains("23"), "{error}");
+        assert!(error.contains("exitCode=Some(23)"), "{error}");
         assert!(error.contains("fixture stdout"), "{error}");
         assert!(error.contains("fixture stderr"), "{error}");
     }
