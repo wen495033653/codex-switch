@@ -6,10 +6,7 @@ const LANGUAGE_STORAGE_KEY = 'codex-switch.ui-language';
 const SUPPORTED_LANGUAGE_PREFERENCES = new Set(['zh-CN', 'en']);
 
 const EN_TRANSLATIONS = {
-  '请先切换到 API 模式': 'Switch to API mode first',
   '已选控制账号不存在，请重新选择': 'The selected control account no longer exists. Select another account.',
-  '控制账号已移除': 'Control account removed',
-  '未选择控制账号': 'No control account selected',
   '保存代理配置后需重启 Codex，开关不代表当前连接状态。': 'Restart Codex after saving proxy settings. The toggle does not indicate connection status.',
   '已配置': 'Configured',
   '未配置': 'Not configured',
@@ -209,7 +206,6 @@ const EN_TRANSLATIONS = {
   '关闭远程控制': 'Disable remote control',
   '开启远程控制': 'Enable remote control',
   '请先选择远程控制账号': 'Select a remote control account first',
-  '仅 API 模式下使用': 'Available only in API mode',
   '请求流量走 API，控制操作使用选定的 Codex 登录账号。': 'Requests use the API, while control actions use the selected Codex sign-in account.',
   '控制账号（Codex 登录账号）': 'Control account (Codex sign-in account)',
   '账号不存在': 'Account not found',

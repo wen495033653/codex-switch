@@ -3,7 +3,6 @@ import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
 import { getAccountName, isAuthSessionInvalid, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 import { useI18n } from '../../i18n';
-import { remoteControlPrerequisites } from '../../utils/codexSettingsStatus';
 
 const CODEX_DESKTOP_UPDATE_URL = 'https://learn.chatgpt.com/docs/whats-new#use-codex-in-the-chatgpt-desktop-app';
 
@@ -192,12 +191,6 @@ export default function ProxySettingsTab({
         ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName, t)
         : t('未选择');
     const remoteControlMissingAccount = !remoteControlAccount;
-    const remoteControlBlockReasons = remoteControlPrerequisites({
-        subscriptionMode: remoteControlBlockedBySubscription,
-        accountId: remoteControlAccountId,
-        accountPresent: Boolean(remoteControlAccount),
-        authInvalid: remoteControlAccountInvalid
-    });
     const remoteControlStatusPollingEnabled = codexRemoteControlEnabled;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = t('切换订阅/API 模式后，重新打开 Codex 或 VS Code 前同步会话列表。');
@@ -304,22 +297,14 @@ export default function ProxySettingsTab({
         : remoteControlConnectionStatus && remoteControlConnectionStatus.status === 'mfa_required'
         ? t('需要 MFA')
         : (translateRuntimeText(remoteControlStatusMessage) || t('需要重新登录')).replace(/[。.]$/, '');
-    const remoteControlDisplayStatus = remoteControlAccountInvalid
-        ? t('登录已失效')
-        : remoteControlBlockedBySubscription
-        ? t('订阅模式不可用')
-        : remoteControlMissingAccount
-        ? (remoteControlAccountId ? t('控制账号已移除') : t('未选择控制账号'))
-        : remoteControlPendingStatus || (!remoteControlEnabledInCurrentMode
+    const remoteControlDisplayStatus = remoteControlPendingStatus || (!remoteControlEnabledInCurrentMode
             ? t('未启用')
             : remoteControlStatus.loading && !remoteControlStatusMessage
                 ? t('检测中')
                 : remoteControlStatusState === 'warning'
                     ? remoteControlWarningStatus
                     : (translateRuntimeText(remoteControlStatusMessage) || t('等待连接')).replace(/[。.]$/, ''));
-    const remoteControlStatusTitle = remoteControlAccountInvalid
-        ? (translateRuntimeText(remoteControlAccountInfo.authStatusMessage) || t('控制账号登录已过期，请重新登录'))
-        : (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
+    const remoteControlStatusTitle = (remoteControlConnectionStatus && remoteControlConnectionStatus.title)
         || remoteControlRawStatusMessage
         || (remoteControlStatusState === 'warning' ? remoteControlDisplayStatus : '');
     const remoteControlEnableBlocked = !codexRemoteControlEnabled
@@ -345,6 +330,8 @@ export default function ProxySettingsTab({
         ? t('订阅模式下不可开启远程控制')
         : remoteControlEnabledInCurrentMode
         ? t('关闭远程控制后可切换控制账号')
+        : remoteControlAccountInvalid
+        ? (translateRuntimeText(remoteControlAccountInfo.authStatusMessage) || t('控制账号登录已过期，请重新登录'))
         : remoteControlAccountLabel;
     return (
         <>
@@ -388,13 +375,15 @@ export default function ProxySettingsTab({
                     <div className="settings-remote-control-title-group">
                         <div className="settings-section-title">{t('远程控制')}</div>
                         <span className="settings-remote-control-mode-badge">{t('仅 API 模式')}</span>
-                        <div
-                            className={`settings-remote-control-status-badge ${remoteControlStatusState}`}
-                            title={remoteControlStatusTitle || undefined}
-                        >
-                            <span className="settings-remote-control-status-dot" aria-hidden="true" />
-                            <span className="settings-remote-control-status-text">{remoteControlDisplayStatus}</span>
-                        </div>
+                        {!remoteControlBlockedBySubscription && !remoteControlMissingAccount && !remoteControlAccountInvalid && (
+                            <div
+                                className={`settings-remote-control-status-badge ${remoteControlStatusState}`}
+                                title={remoteControlStatusTitle || undefined}
+                            >
+                                <span className="settings-remote-control-status-dot" aria-hidden="true" />
+                                <span className="settings-remote-control-status-text">{remoteControlDisplayStatus}</span>
+                            </div>
+                        )}
                     </div>
                     <button
                         type="button"
@@ -419,43 +408,41 @@ export default function ProxySettingsTab({
                         </span>
                     </button>
                 </div>
-                <div className="settings-section-desc settings-remote-control-note">
-                    <span className="settings-remote-control-note-title">{t('仅 API 模式下使用')}</span>
-                    <span className="settings-remote-control-note-text">{t('请求流量走 API，控制操作使用选定的 Codex 登录账号。')}</span>
-                </div>
-                {remoteControlBlockReasons.length > 0 && (
-                    <div className="settings-section-desc settings-remote-control-note" role="status">
-                        {remoteControlBlockReasons.map(reason => <span key={reason}>{t(reason)}</span>)}
-                    </div>
-                )}
-                <div className="settings-remote-control-account-grid">
-                    <label className="settings-remote-control-account-field">
-                        <span className="settings-inline-field-label">{t('控制账号（Codex 登录账号）')}</span>
-                        <div className="settings-remote-control-account-select-wrap">
-                            <select
-                                className="settings-input settings-select settings-remote-control-account-select"
-                                value={remoteControlSelectedAccountId}
-                                disabled={remoteControlAccountSelectDisabled}
-                                title={remoteControlAccountSelectTitle}
-                                onChange={e => setCodexRemoteControlAccountId(e.target.value)}
-                            >
-                                <option value="">{remoteControlAccountId && remoteControlMissingAccount ? t('已选控制账号不存在，请重新选择') : t('未选择')}</option>
-                                {remoteControlAccounts.map(account => {
-                                    const accountId = getAccountId(account);
-                                    return (
-                                        <option key={accountId} value={accountId}>
-                                            {formatRemoteControlAccountLabel(account, maskAccountName, t)}
-                                        </option>
-                                    );
-                                })}
-                            </select>
-                            <span
-                                className="settings-remote-control-account-select-arrow"
-                                aria-hidden="true"
-                            />
+                {!remoteControlBlockedBySubscription && (
+                    <>
+                        <div className="settings-section-desc settings-remote-control-note">
+                            <span className="settings-remote-control-note-text">{t('请求流量走 API，控制操作使用选定的 Codex 登录账号。')}</span>
                         </div>
-                    </label>
-                </div>
+                        <div className="settings-remote-control-account-grid">
+                            <label className="settings-remote-control-account-field">
+                                <span className="settings-inline-field-label">{t('控制账号（Codex 登录账号）')}</span>
+                                <div className="settings-remote-control-account-select-wrap">
+                                    <select
+                                        className="settings-input settings-select settings-remote-control-account-select"
+                                        value={remoteControlSelectedAccountId}
+                                        disabled={remoteControlAccountSelectDisabled}
+                                        title={remoteControlAccountSelectTitle}
+                                        onChange={e => setCodexRemoteControlAccountId(e.target.value)}
+                                    >
+                                        <option value="">{remoteControlAccountId && remoteControlMissingAccount ? t('已选控制账号不存在，请重新选择') : t('未选择')}</option>
+                                        {remoteControlAccounts.map(account => {
+                                            const accountId = getAccountId(account);
+                                            return (
+                                                <option key={accountId} value={accountId}>
+                                                    {formatRemoteControlAccountLabel(account, maskAccountName, t)}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                    <span
+                                        className="settings-remote-control-account-select-arrow"
+                                        aria-hidden="true"
+                                    />
+                                </div>
+                            </label>
+                        </div>
+                    </>
+                )}
             </section>
 
             <section className="settings-section settings-app-card-section settings-session-sync-section">
