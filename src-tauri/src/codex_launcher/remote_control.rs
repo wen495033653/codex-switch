@@ -336,15 +336,18 @@ fn legacy_remote_control_helper_pids() -> Vec<u64> {
     Vec::new()
 }
 
-fn stop_legacy_remote_control_helpers() -> usize {
-    legacy_remote_control_helper_pids()
-        .into_iter()
-        .filter(|pid| kill_process_tree(*pid))
-        .count()
+fn stop_legacy_remote_control_helpers() -> Result<usize, String> {
+    let mut stopped = 0;
+    for pid in legacy_remote_control_helper_pids() {
+        if kill_process_tree(pid)? {
+            stopped += 1;
+        }
+    }
+    Ok(stopped)
 }
 
 fn cleanup_legacy_remote_control_runtime() -> Result<bool, String> {
-    let stopped = stop_legacy_remote_control_helpers();
+    let stopped = stop_legacy_remote_control_helpers()?;
     let home_removed = legacy_remote_control_home_removed()?;
     Ok(stopped > 0 || home_removed)
 }

@@ -42,12 +42,12 @@ where
     executables.dedup_by_key(|path| normalize_executable_path(path));
 
     for pid in &pids {
-        let _ = kill_process_tree(*pid);
+        kill_process_tree(*pid)?;
     }
     let mut alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
         for pid in &alive {
-            let _ = kill_process_tree(*pid);
+            kill_process_tree(*pid)?;
         }
         alive = wait_for_pids_exit(&alive, 6_000);
     }
