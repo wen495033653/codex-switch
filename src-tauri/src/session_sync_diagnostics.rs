@@ -481,6 +481,10 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
             details,
             &[("codexHome", "Codex home"), ("error", "错误")],
         )),
+        "codex_app_process_kill_error"
+        | "codex_app_process_kill_finish"
+        | "codex_app_launch_confirmation_error"
+        | "codex_app_launch_confirmation_finish" => Some(details.clone()),
         _ => None,
     }
 }
@@ -493,6 +497,8 @@ fn dev_log_event_visible(event: &str) -> bool {
     matches!(
         event,
         "app_start"
+            | "codex_app_process_kill_finish"
+            | "codex_app_launch_confirmation_finish"
             | "codex_remote_control_runtime_updated"
             | "codex_remote_control_runtime_applied"
             | "codex_remote_control_helper_spawn"
