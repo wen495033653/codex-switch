@@ -3,6 +3,7 @@ import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
 import { getAccountName, isAuthSessionInvalid, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 import { useI18n } from '../../i18n';
+import { remoteControlPrerequisites } from '../../utils/codexSettingsStatus';
 
 const CODEX_DESKTOP_UPDATE_URL = 'https://learn.chatgpt.com/docs/whats-new#use-codex-in-the-chatgpt-desktop-app';
 
@@ -192,6 +193,12 @@ export default function ProxySettingsTab({
         ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName, t)
         : t('未选择');
     const remoteControlMissingAccount = !remoteControlAccount;
+    const remoteControlBlockReasons = remoteControlPrerequisites({
+        subscriptionMode: remoteControlBlockedBySubscription,
+        accountId: remoteControlAccountId,
+        accountPresent: Boolean(remoteControlAccount),
+        authInvalid: remoteControlAccountInvalid
+    });
     const remoteControlStatusPollingEnabled = codexRemoteControlEnabled;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = t('切换订阅/API 模式后，重新打开 Codex 或 VS Code 前同步会话列表。');
@@ -302,6 +309,8 @@ export default function ProxySettingsTab({
         ? t('登录已失效')
         : remoteControlBlockedBySubscription
         ? t('订阅模式不可用')
+        : remoteControlMissingAccount
+        ? (remoteControlAccountId ? t('控制账号已移除') : t('未选择控制账号'))
         : remoteControlPendingStatus || (!remoteControlEnabledInCurrentMode
             ? t('未启用')
             : remoteControlStatus.loading && !remoteControlStatusMessage
@@ -325,7 +334,7 @@ export default function ProxySettingsTab({
             ? t('关闭中')
             : codexRemoteControlEnabled
                 ? t('启动')
-                : remoteControlBlockedBySubscription || remoteControlAccountInvalid
+                : remoteControlBlockedBySubscription || remoteControlAccountInvalid || remoteControlMissingAccount
                     ? t('不可用')
                     : t('启用');
     const remoteControlAccountSelectDisabled = remoteControlBlockedBySubscription
@@ -343,13 +352,14 @@ export default function ProxySettingsTab({
             <section className="settings-section settings-app-card-section settings-proxy-section">
                 <div className="settings-proxy-copy">
                     <div className="settings-section-title">{t('Codex 代理')}</div>
-                    <div className="settings-section-desc">{t('设置 Codex 使用的代理地址')}</div>
+                    <div className="settings-section-desc">{t('保存代理配置后需重启 Codex，开关不代表当前连接状态。')}</div>
                 </div>
 
                 <label className="settings-field settings-proxy-field">
                     <span className="settings-inline-field-label">{t('代理地址')}</span>
                     <input
                         className="settings-input settings-proxy-input"
+                        disabled={saving}
                         value={settingsDraft.codex_proxy_url || ''}
                         placeholder="127.0.0.1:10808"
                         onChange={e => setSettingsDraft(prev => ({ ...prev, codex_proxy_url: e.target.value }))}
@@ -367,7 +377,7 @@ export default function ProxySettingsTab({
                     disabled={saving}
                     onClick={() => setCodexProxyEnvEnabled(!proxyEnvEnabled)}
                 >
-                    <span className="settings-feature-switch-label settings-proxy-switch-label">{t('启动')}</span>
+                    <span className="settings-feature-switch-label settings-proxy-switch-label">{proxyEnvEnabled ? t('已配置') : t('未配置')}</span>
                     <span className="settings-switch" aria-hidden="true">
                         <span className="settings-switch-thumb" />
                     </span>
@@ -378,7 +388,7 @@ export default function ProxySettingsTab({
                 <div className="settings-feature-head">
                     <div className="settings-section-head">
                         <div className="settings-section-title">{t('Plugin 增强')}</div>
-                        <div className="settings-section-desc">{t('API 模式支持安装 Plugin')}</div>
+                        <div className="settings-section-desc">{t('API 模式支持安装 Plugin；开关变更需重启 Codex。')}</div>
                     </div>
                     <button
                         type="button"
@@ -436,6 +446,11 @@ export default function ProxySettingsTab({
                     <span className="settings-remote-control-note-title">{t('仅 API 模式下使用')}</span>
                     <span className="settings-remote-control-note-text">{t('请求流量走 API，控制操作使用选定的 Codex 登录账号。')}</span>
                 </div>
+                {remoteControlBlockReasons.length > 0 && (
+                    <div className="settings-section-desc settings-remote-control-note" role="status">
+                        {remoteControlBlockReasons.map(reason => <span key={reason}>{t(reason)}</span>)}
+                    </div>
+                )}
                 <div className="settings-remote-control-account-grid">
                     <label className="settings-remote-control-account-field">
                         <span className="settings-inline-field-label">{t('控制账号（Codex 登录账号）')}</span>
@@ -447,7 +462,7 @@ export default function ProxySettingsTab({
                                 title={remoteControlAccountSelectTitle}
                                 onChange={e => setCodexRemoteControlAccountId(e.target.value)}
                             >
-                                <option value="">{t('未选择')}</option>
+                                <option value="">{remoteControlAccountId && remoteControlMissingAccount ? t('已选控制账号不存在，请重新选择') : t('未选择')}</option>
                                 {remoteControlAccounts.map(account => {
                                     const accountId = getAccountId(account);
                                     return (
