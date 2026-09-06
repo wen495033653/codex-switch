@@ -56,7 +56,7 @@ export default function CodexPage({
                         <div className="settings-feature-head codex-model-instructions-head">
                             <div className="settings-section-head">
                                 <div className="settings-section-title">{t('gpt破限')}</div>
-                                <div className="settings-section-desc">{t('开启时检测本地 MD，已有文件会询问是否覆盖。')}</div>
+                                <div className="settings-section-desc">{t('使用自定义提示词')}</div>
                             </div>
                             <button
                                 type="button"
