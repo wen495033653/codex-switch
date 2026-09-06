@@ -1,7 +1,7 @@
 use crate::paths::{codex_dir, ensure_parent_dir};
 use std::{
     fs,
-    io::{self, ErrorKind},
+    io::{self, ErrorKind, Write},
     path::{Path, PathBuf},
 };
 use tauri::{path::BaseDirectory, AppHandle, Manager};
@@ -9,6 +9,91 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 pub(crate) const FILE_NAME: &str = "gpt-unrestricted.md";
 pub(crate) const CONFIG_KEY: &str = "model_instructions_file";
 pub(crate) const SETTING_KEY: &str = "codex_model_instructions_enabled";
+
+#[derive(Debug)]
+pub(crate) enum ModelInstructionsPreparation {
+    Confirmation {
+        path: String,
+    },
+    Ready {
+        path: String,
+        backup_path: Option<String>,
+    },
+}
+
+pub(crate) fn prepare_model_instructions_for_enable(
+    app: &AppHandle,
+    overwrite_local: Option<bool>,
+) -> Result<ModelInstructionsPreparation, String> {
+    prepare_model_instructions_file(&user_model_instructions_file()?, overwrite_local, || {
+        bundled_model_instructions_file(app)
+    })
+}
+
+fn prepare_model_instructions_file(
+    target: &Path,
+    overwrite_local: Option<bool>,
+    source: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<ModelInstructionsPreparation, String> {
+    let exists = match fs::metadata(target) {
+        Ok(metadata) if metadata.is_file() => true,
+        Ok(_) => return Err(format!("模型指令路径不是文件: {}", target.display())),
+        Err(err) if err.kind() == ErrorKind::NotFound => false,
+        Err(err) => {
+            return Err(format!(
+                "读取模型指令文件状态失败 {}: {err}",
+                target.display()
+            ))
+        }
+    };
+    let path = path_for_config(target);
+    if exists && overwrite_local.is_none() {
+        return Ok(ModelInstructionsPreparation::Confirmation { path });
+    }
+    let backup_path = if exists && overwrite_local == Some(true) {
+        Some(path_for_config(&replace_model_instructions_file(
+            &source()?,
+            target,
+        )?))
+    } else {
+        initialize_model_instructions_file(target, source)?;
+        None
+    };
+    Ok(ModelInstructionsPreparation::Ready { path, backup_path })
+}
+
+fn replace_model_instructions_file(source: &Path, target: &Path) -> Result<PathBuf, String> {
+    let replacement = fs::read(source)
+        .map_err(|err| format!("读取模型指令资源失败 {}: {err}", source.display()))?;
+    let original = fs::read(target)
+        .map_err(|err| format!("读取本地模型指令失败 {}: {err}", target.display()))?;
+    let backup = target.with_file_name(format!(
+        "{FILE_NAME}.backup-{}",
+        crate::accounts::random_urlsafe(12)
+    ));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup)
+        .map_err(|err| format!("创建模型指令备份失败 {}: {err}", backup.display()))?;
+    file.write_all(&original)
+        .and_then(|_| file.sync_all())
+        .map_err(|err| {
+            format!(
+                "写入模型指令备份失败 {}: {err}；本地文件未覆盖",
+                backup.display()
+            )
+        })?;
+    if let Err(err) = fs::write(target, replacement) {
+        let restored = fs::write(target, original);
+        return Err(format!(
+            "覆盖模型指令失败 {}: {err}；备份: {}；还原结果: {restored:?}",
+            target.display(),
+            backup.display()
+        ));
+    }
+    Ok(backup)
+}
 
 pub(crate) fn resolve_model_instructions_file(app: &AppHandle) -> Result<String, String> {
     let target = user_model_instructions_file()?;
@@ -179,5 +264,87 @@ mod tests {
                 .contains("读取模型指令资源失败")
         );
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn existing_file_requires_confirmation_without_writing() {
+        let dir = fixture();
+        let target = dir.join(FILE_NAME);
+        fs::write(&target, "user updated\r\n").unwrap();
+        let result =
+            prepare_model_instructions_file(&target, None, || panic!("must not resolve bundle"))
+                .unwrap();
+        assert!(matches!(
+            result,
+            ModelInstructionsPreparation::Confirmation { .. }
+        ));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "user updated\r\n");
+        assert_eq!(fs::read_dir(dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn keep_local_does_not_read_bundle_or_create_backup() {
+        let target = fixture().join(FILE_NAME);
+        fs::write(&target, "user updated").unwrap();
+        let result =
+            prepare_model_instructions_file(&target, Some(false), || panic!("keep local")).unwrap();
+        assert!(matches!(
+            result,
+            ModelInstructionsPreparation::Ready {
+                backup_path: None,
+                ..
+            }
+        ));
+        assert_eq!(fs::read_to_string(target).unwrap(), "user updated");
+    }
+
+    #[test]
+    fn confirmed_overwrite_preserves_original_in_backup() {
+        let dir = fixture();
+        let target = dir.join(FILE_NAME);
+        let source = dir.join("bundle.md");
+        let original = "用户更新\r\noriginal bytes\r\n";
+        fs::write(&target, original).unwrap();
+        fs::write(&source, "bundled replacement").unwrap();
+        let result = prepare_model_instructions_file(&target, Some(true), || Ok(source)).unwrap();
+        let ModelInstructionsPreparation::Ready {
+            backup_path: Some(backup),
+            ..
+        } = result
+        else {
+            panic!("backup required")
+        };
+        assert_eq!(fs::read_to_string(backup).unwrap(), original);
+        assert_eq!(fs::read_to_string(target).unwrap(), "bundled replacement");
+    }
+
+    #[test]
+    fn missing_file_initializes_without_confirmation() {
+        let dir = fixture();
+        let target = dir.join(FILE_NAME);
+        let source = dir.join("bundle.md");
+        fs::write(&source, "bundled").unwrap();
+        let result = prepare_model_instructions_file(&target, None, || Ok(source)).unwrap();
+        assert!(matches!(
+            result,
+            ModelInstructionsPreparation::Ready {
+                backup_path: None,
+                ..
+            }
+        ));
+        assert_eq!(fs::read_to_string(target).unwrap(), "bundled");
+    }
+
+    #[test]
+    fn overwrite_resource_failure_does_not_touch_local_file() {
+        let dir = fixture();
+        let target = dir.join(FILE_NAME);
+        fs::write(&target, "keep on error").unwrap();
+        let error =
+            prepare_model_instructions_file(&target, Some(true), || Ok(dir.join("absent.md")))
+                .unwrap_err();
+        assert!(error.contains("读取模型指令资源失败"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep on error");
+        assert_eq!(fs::read_dir(dir).unwrap().count(), 1);
     }
 }

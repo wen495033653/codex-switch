@@ -1,5 +1,6 @@
 import ProxySettingsTab, { CodexProcessCard } from './settings/ProxySettingsTab';
 import { useI18n } from '../i18n';
+import ModelInstructionsConfirmModal from './ModelInstructionsConfirmModal';
 
 export default function CodexPage({
     accounts,
@@ -12,6 +13,7 @@ export default function CodexPage({
     restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
     savingCodexModelInstructions,
+    modelInstructionsConfirmation,
     savingCodexRemoteControl,
     savingCodexSessionSync,
     savingProxySettings,
@@ -32,6 +34,7 @@ export default function CodexPage({
 
     return (
         <div className="settings-page codex-page">
+            {modelInstructionsConfirmation && <ModelInstructionsConfirmModal {...modelInstructionsConfirmation} />}
             <div className="settings-page-panel codex-page-panel">
                 <div className="codex-page-actions">
                     <button
@@ -53,6 +56,7 @@ export default function CodexPage({
                         <div className="settings-feature-head codex-model-instructions-head">
                             <div className="settings-section-head">
                                 <div className="settings-section-title">{t('gpt破限')}</div>
+                                <div className="settings-section-desc">{t('开启时检测本地 MD，已有文件会询问是否覆盖。')}</div>
                             </div>
                             <button
                                 type="button"

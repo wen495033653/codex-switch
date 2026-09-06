@@ -1,6 +1,21 @@
 # 本地模型指令文件
 
-- 2026-09-06：优先使用 Codex home 下已有的 gpt-unrestricted.md，不再在启动/开关时覆盖。安装包文件只初始化缺失的文件，create_new 阻止并发覆盖。
-- 本机 config 已指向用户当前 MD，本次没有改动 config.toml 或 MD 内容。
-- 验证：cargo test model_instructions::tests，5 项通过；覆盖原始换行/中文保留、不读取安装包、首次初始化、重复初始化不覆盖、目录/资源缺失错误。
-- 验证层级：临时目录实际文件读写，非真实 Codex 重启。
+## 行为
+
+- 正常启动：已有本地 gpt-unrestricted.md 直接使用，不提示、不覆盖；缺失时从安装包初始化。
+- 手动开启：已有文件时，后端先返回 confirmationRequired 和路径，不写 MD、config 或开关状态；前端弹窗提供“保留本地并启用”“覆盖并启用”“取消”。
+- 保留：继续使用用户文件，不读取安装包，不创建备份。
+- 覆盖：用户明确确认后，先读取内置版本并完整备份原文件，再写入；备份名为 gpt-unrestricted.md.backup-<随机标识>，响应/提示提供备份路径。
+- 取消/点击遮罩：不提交第二次请求，开关状态不变。覆盖失败：显示实际错误，保留弹窗；写入失败时尝试用原始字节还原，错误包含备份位置和还原结果。
+- 默认焦点在“保留本地并启用”，不会默认选择覆盖。
+
+## 验证（2026-09-06）
+
+- cargo test model_instructions::tests：10 项通过，覆盖本地字节保留、首次初始化、目录/资源错误、确认前零写入、确认保留、确认覆盖和备份字节一致。
+- node --experimental-vm-modules --test scripts/test-model-instructions-confirm.mjs：4 项通过，覆盖弹窗前状态不变、取消不发送、两个明确选择、失败弹窗保留和首次启用/关闭。
+- npm run check、cargo clippy -- -D warnings：通过。
+- 验证层级：临时目录真实读写 + 前端 hook 行为回归；没有覆盖本机正在使用的 MD，也没有修改本机 Codex config.toml。
+
+## 还原
+
+需要恢复被用户确认覆盖的文件时，将响应中的 backupPath 复制回同目录的 gpt-unrestricted.md；备份始终保留。
