@@ -161,12 +161,6 @@ pub(super) fn apply_settings_patch(
             Value::Bool(bool_field(patch, "codex_proxy_env_enabled")),
         );
     }
-    if has_key(patch, "codex_plugins_enabled") {
-        object.insert(
-            "codex_plugins_enabled".to_string(),
-            Value::Bool(bool_field(patch, "codex_plugins_enabled")),
-        );
-    }
     if has_key(patch, "codex_model_instructions_enabled") {
         object.insert(
             "codex_model_instructions_enabled".to_string(),
@@ -476,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_settings_patch_updates_codex_plugins_enabled() {
+    fn apply_settings_patch_does_not_restore_retired_plugin_flag() {
         let mut object = Map::new();
 
         apply_settings_patch(
@@ -487,10 +481,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            object.get("codex_plugins_enabled").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert!(object.get("codex_plugins_enabled").is_none());
     }
 
     #[test]

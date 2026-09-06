@@ -8,12 +8,11 @@ use std::{
 };
 use url::Url;
 
-pub(crate) const CODEX_PLUGIN_DEBUG_PORT: u16 = 9229;
+pub(crate) const CODEX_CDP_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodexCdpLaunchHooks {
-    pub(crate) plugin_unlock: bool,
     pub(crate) codex_mobile_no_replace: bool,
 }
 
@@ -25,134 +24,6 @@ struct CdpScript {
 struct CdpScriptBundle {
     scripts: Vec<CdpScript>,
 }
-
-const CODEX_PLUGIN_UNLOCK_SCRIPT: &str = r###"
-(() => {
-  const version = "7";
-  if (window.__codexSwitchPluginUnlockController?.version === version) {
-    void window.__codexSwitchPluginUnlockPatch?.();
-    return;
-  }
-  window.__codexSwitchPluginUnlockController?.stop?.();
-
-  const currentFilter = Array.prototype.filter;
-  const legacyFilter = Array.prototype.__codexSwitchPluginMarketplaceOriginalFilter;
-  if (
-    typeof legacyFilter === "function"
-    && currentFilter?.__codexSwitchPluginMarketplacePatched
-  ) {
-    Array.prototype.filter = legacyFilter;
-    delete Array.prototype.__codexSwitchPluginMarketplaceOriginalFilter;
-  }
-  delete window.__codexSwitchPluginUnlockEvents;
-
-  const status = {
-    version,
-    patched: false,
-    attempts: 0,
-    error: "",
-  };
-  const controller = {
-    version,
-    timeout: null,
-    stopped: false,
-    client: null,
-    originalSendRequest: null,
-    patchedSendRequest: null,
-    stop() {
-      if (this.stopped) return;
-      this.stopped = true;
-      if (this.timeout) clearTimeout(this.timeout);
-      if (
-        this.client
-        && this.patchedSendRequest
-        && this.client.sendRequest === this.patchedSendRequest
-      ) {
-        this.client.sendRequest = this.originalSendRequest;
-      }
-    },
-  };
-  window.__codexSwitchPluginUnlockVersion = version;
-  window.__codexSwitchPluginUnlockStatus = status;
-  window.__codexSwitchPluginUnlockController = controller;
-
-  function assetUrl(namePart) {
-    const urls = [
-      ...Array.from(document.querySelectorAll("script[src]"), (node) => node.src),
-      ...Array.from(document.querySelectorAll("link[href]"), (node) => node.href),
-      ...performance.getEntriesByType("resource").map((entry) => entry.name),
-    ].filter(Boolean);
-    return urls.find(
-      (url) => url.includes("/assets/")
-        && url.includes(namePart)
-        && url.split("?")[0].endsWith(".js"),
-    ) || "";
-  }
-
-  function shouldExpandPluginCatalog(params) {
-    const kinds = params?.marketplaceKinds;
-    return Array.isArray(kinds)
-      && kinds.length === 2
-      && kinds.includes("local")
-      && kinds.includes("vertical");
-  }
-
-  function patchRequestClient(client) {
-    if (controller.stopped || !client || typeof client.sendRequest !== "function") return false;
-    const originalSendRequest = client.sendRequest;
-    const patchedSendRequest = async function codexSwitchPluginListRequest(method, params) {
-      if (method === "list-plugins" && shouldExpandPluginCatalog(params)) {
-        const nextParams = { ...params };
-        delete nextParams.marketplaceKinds;
-        return await originalSendRequest.call(this, method, nextParams);
-      }
-      return await originalSendRequest.call(this, method, params);
-    };
-    client.sendRequest = patchedSendRequest;
-    controller.client = client;
-    controller.originalSendRequest = originalSendRequest;
-    controller.patchedSendRequest = patchedSendRequest;
-    return true;
-  }
-
-  async function installPatch() {
-    const url = assetUrl("use-host-config-");
-    if (!url) return false;
-    const module = await import(url);
-    if (controller.stopped) return false;
-    const client = Object.values(module).find(
-      (value) => value
-        && typeof value === "object"
-        && typeof value.sendRequest === "function"
-        && typeof value.setMessageHandler === "function",
-    );
-    return patchRequestClient(client);
-  }
-
-  const maxAttempts = 40;
-  let patching = false;
-  async function patch() {
-    if (controller.stopped || status.patched || patching) return status.patched;
-    patching = true;
-    status.attempts += 1;
-    try {
-      status.patched = await installPatch();
-      status.error = status.patched ? "" : "Plugin request client not ready";
-    } catch (error) {
-      status.error = error?.message || String(error);
-    } finally {
-      patching = false;
-    }
-    if (!controller.stopped && !status.patched && status.attempts < maxAttempts) {
-      controller.timeout = setTimeout(patch, 250);
-    }
-    return status.patched;
-  }
-
-  window.__codexSwitchPluginUnlockPatch = patch;
-  void patch();
-})();
-"###;
 
 const CODEX_MOBILE_NO_REPLACE_SCRIPT: &str = r###"
 (() => {
@@ -232,7 +103,6 @@ pub(crate) fn inject_codex_mobile_no_replace_hook(
     inject_codex_cdp_hooks(
         processes,
         CodexCdpLaunchHooks {
-            plugin_unlock: false,
             codex_mobile_no_replace: true,
         },
     )
@@ -302,49 +172,11 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
     args: &[String],
     envs: &[(String, String)],
 ) -> Result<(), String> {
-    launch_codex_with_cdp_hooks_with_options_and_failure_action(
-        executable_path,
-        hooks,
-        args,
-        envs,
-        CdpHookFailureAction::KillProcess,
-    )
-    .map(|_| ())
-}
-
-pub(crate) fn launch_codex_with_optional_cdp_hooks_with_options(
-    executable_path: &Path,
-    hooks: CodexCdpLaunchHooks,
-    args: &[String],
-    envs: &[(String, String)],
-) -> Result<Option<String>, String> {
-    launch_codex_with_cdp_hooks_with_options_and_failure_action(
-        executable_path,
-        hooks,
-        args,
-        envs,
-        CdpHookFailureAction::KeepProcess,
-    )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CdpHookFailureAction {
-    KillProcess,
-    KeepProcess,
-}
-
-fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
-    executable_path: &Path,
-    hooks: CodexCdpLaunchHooks,
-    args: &[String],
-    envs: &[(String, String)],
-    failure_action: CdpHookFailureAction,
-) -> Result<Option<String>, String> {
     if !executable_path.exists() {
         return Err(format!("Codex 路径不存在: {}", executable_path.display()));
     }
 
-    let debug_port = select_loopback_port(CODEX_PLUGIN_DEBUG_PORT)?;
+    let debug_port = select_loopback_port(CODEX_CDP_DEBUG_PORT)?;
     let scripts = cdp_scripts_for_hooks(hooks);
     let mut command = Command::new(executable_path);
     command
@@ -371,23 +203,14 @@ fn launch_codex_with_cdp_hooks_with_options_and_failure_action(
         .spawn()
         .map_err(|err| format!("启动 Codex hook 模式失败: {err}"))?;
     if let Err(err) = wait_and_inject_cdp_scripts(debug_port, &scripts) {
-        if failure_action == CdpHookFailureAction::KillProcess {
-            let _ = child.kill();
-            return Err(err);
-        }
-        return Ok(Some(err));
+        let cleanup = child.kill();
+        return Err(format!("{err}; child cleanup={cleanup:?}"));
     }
-    Ok(None)
+    Ok(())
 }
 
 fn cdp_scripts_for_hooks(hooks: CodexCdpLaunchHooks) -> CdpScriptBundle {
     let mut scripts = Vec::new();
-    if hooks.plugin_unlock {
-        scripts.push(CdpScript {
-            name: "plugin_unlock",
-            source: CODEX_PLUGIN_UNLOCK_SCRIPT.to_string(),
-        });
-    }
     if hooks.codex_mobile_no_replace {
         scripts.push(CdpScript {
             name: "codex_mobile_no_replace",
@@ -444,18 +267,28 @@ fn inject_cdp_scripts(port: u16, bundle: &CdpScriptBundle) -> Result<(), String>
         command_id += 1;
     }
     for script in &bundle.scripts {
-        send_cdp_command(
+        let response = send_cdp_command(
             &mut ws,
             command_id,
             "Runtime.evaluate",
             json!({
                 "expression": &script.source,
-                "awaitPromise": false,
+                "awaitPromise": true,
+                "returnByValue": true,
                 "allowUnsafeEvalBlockedByCSP": true
             }),
         )
         .map_err(|err| format!("执行 {} 脚本失败: {err}", script.name))?;
+        validate_cdp_script_result(script.name, &response)?;
         command_id += 1;
+    }
+    Ok(())
+}
+
+fn validate_cdp_script_result(name: &str, response: &Value) -> Result<(), String> {
+    let result = &response["result"];
+    if let Some(exception) = result.get("exceptionDetails") {
+        return Err(format!("执行 {name} 脚本异常: {exception}"));
     }
     Ok(())
 }
@@ -476,19 +309,9 @@ fn page_websocket_url(port: u16) -> Result<String, String> {
         .as_array()
         .ok_or_else(|| "CDP target 列表格式无效".to_string())?;
 
-    let first_page = pages.iter().find(|target| {
-        target.get("type").and_then(Value::as_str) == Some("page")
-            && target
-                .get("webSocketDebuggerUrl")
-                .and_then(Value::as_str)
-                .is_some()
-    });
-    let codex_page = pages
+    pages
         .iter()
-        .find(|target| is_codex_desktop_page_target(target));
-
-    codex_page
-        .or(first_page)
+        .find(|target| is_codex_desktop_page_target(target))
         .and_then(|target| target.get("webSocketDebuggerUrl").and_then(Value::as_str))
         .map(str::to_string)
         .ok_or_else(|| "未找到可注入的 Codex 页面".to_string())
@@ -505,6 +328,12 @@ fn is_codex_desktop_page_target(target: &Value) -> bool {
     }
     let title = target.get("title").and_then(Value::as_str).unwrap_or("");
     let url = target.get("url").and_then(Value::as_str).unwrap_or("");
+    if url.contains("avatar-overlay") {
+        return false;
+    }
+    if url == "app://-/index.html" {
+        return true;
+    }
     let identity = format!(
         "{} {}",
         title.to_ascii_lowercase(),
@@ -750,20 +579,41 @@ mod tests {
     }
 
     #[test]
-    fn plugin_unlock_script_uses_minimal_current_catalog_hook() {
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("use-host-config-"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("list-plugins"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("marketplaceKinds"));
-        assert!(CODEX_PLUGIN_UNLOCK_SCRIPT.contains("setMessageHandler"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("app-server-manager-signals-"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/list"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/installed"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/install"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("plugin/uninstall"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("install-plugin"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("uninstall-plugin"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("codex-switch-openai-curated-remote"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("MutationObserver"));
-        assert!(!CODEX_PLUGIN_UNLOCK_SCRIPT.contains("setInterval"));
+    fn cdp_target_excludes_avatar_overlay() {
+        assert!(!is_codex_desktop_page_target(
+            &json!({"type":"page","title":"Codex","url":"app://-/index.html?initialRoute=%2Favatar-overlay","webSocketDebuggerUrl":"ws://127.0.0.1:1/avatar"})
+        ));
+        assert!(is_codex_desktop_page_target(
+            &json!({"type":"page","title":"Codex","url":"app://-/index.html","webSocketDebuggerUrl":"ws://127.0.0.1:1/main"})
+        ));
+    }
+
+    #[test]
+    fn bundle_contains_only_requested_mobile_hook() {
+        assert!(cdp_scripts_for_hooks(CodexCdpLaunchHooks {
+            codex_mobile_no_replace: false
+        })
+        .scripts
+        .is_empty());
+        let bundle = cdp_scripts_for_hooks(CodexCdpLaunchHooks {
+            codex_mobile_no_replace: true,
+        });
+        assert_eq!(bundle.scripts.len(), 1);
+        assert_eq!(bundle.scripts[0].name, "codex_mobile_no_replace");
+        assert!(!bundle.scripts[0].source.contains("plugin/list"));
+    }
+    #[test]
+    fn cdp_script_exception_is_returned() {
+        assert!(validate_cdp_script_result(
+            "codex_mobile_no_replace",
+            &json!({"result":{"exceptionDetails":{"text":"boom"}}})
+        )
+        .unwrap_err()
+        .contains("boom"));
+        assert!(validate_cdp_script_result(
+            "codex_mobile_no_replace",
+            &json!({"result":{"result":{"type":"undefined"}}})
+        )
+        .is_ok());
     }
 }
