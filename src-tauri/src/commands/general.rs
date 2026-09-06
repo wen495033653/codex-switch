@@ -151,7 +151,7 @@ pub(crate) fn open_external_url(url: String) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
-const DEFAULT_API_TEST_MODEL: &str = "gpt-5.6-sol";
+const DEFAULT_API_TEST_MODEL: &str = "gpt-6-astra";
 
 #[tauri::command]
 pub(crate) async fn test_api_base_url(
@@ -481,4 +481,16 @@ fn collect_mp3_files(dir: &Path) -> Vec<String> {
 
     files.sort();
     files
+}
+
+#[cfg(test)]
+mod api_test_model_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_gpt6_without_overriding_explicit_models() {
+        assert_eq!(normalize_api_test_model(None), "gpt-6-astra");
+        assert_eq!(normalize_api_test_model(Some("  ".into())), "gpt-6-astra");
+        assert_eq!(normalize_api_test_model(Some(" custom-model ".into())), "custom-model");
+    }
 }
