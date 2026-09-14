@@ -7,12 +7,12 @@
 
 use crate::{
     accounts::{
-        account_id_from_account, add_account_to_store, find_store_account, get_subscription,
-        set_subscription_state,
+        access_token_from_account, account_id_from_account, account_with_custom,
+        add_account_to_store, find_store_account, get_subscription, set_subscription_state,
     },
     json_util::{raw_string_field, string_field, value_u64_field},
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 
 fn account_log_label(profile_id: &str) -> String {
     profile_id.chars().take(8).collect()
@@ -27,16 +27,6 @@ fn log_subscription_error(profile_id: &str, error: &Value) {
         raw_string_field(error, "message"),
         raw_string_field(error, "raw_message")
     );
-}
-
-fn account_access_token(account: &Value) -> String {
-    account
-        .get("tokens")
-        .and_then(|tokens| tokens.get("access_token"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string()
 }
 
 /// Reads the subscription snapshot for one stored account and persists it. Credentials are
@@ -56,7 +46,7 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
         }
     };
     let account_id = account_id_from_account(&account).unwrap_or_default();
-    let access_token = account_access_token(&account);
+    let access_token = access_token_from_account(&account);
     if account_id.is_empty() || access_token.is_empty() {
         return None;
     }
@@ -79,9 +69,8 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
         return None;
     }
 
-    let tokens = latest.get("tokens").cloned().unwrap_or(Value::Null);
     let custom = set_subscription_state(latest.get("custom"), subscription.clone());
-    match add_account_to_store(json!({ "tokens": tokens, "custom": custom }), false) {
+    match add_account_to_store(account_with_custom(&latest, custom), false) {
         Ok(store) => {
             eprintln!(
                 "[subscription] account={} 订阅信息已更新 active_until={:?} will_renew={} is_delinquent={}",
@@ -105,7 +94,7 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounts::decode_jwt_payload;
+    use crate::accounts::{decode_jwt_payload, BACKGROUND_REQUEST_TIMEOUT_MS};
     use std::env;
 
     fn claim_active_until(account: &Value) -> String {
@@ -138,7 +127,7 @@ mod tests {
             before["custom"]["subscription"]
         );
 
-        refresh_account_subscription(&profile_id, 30_000);
+        refresh_account_subscription(&profile_id, BACKGROUND_REQUEST_TIMEOUT_MS);
 
         let after = find_store_account(&profile_id).expect("account still exists");
         let stored = after["custom"]["subscription"].clone();

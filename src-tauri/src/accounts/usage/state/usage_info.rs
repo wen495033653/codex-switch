@@ -1,6 +1,6 @@
 use super::number::to_number;
 use crate::{
-    json_util::{raw_string_field, string_field},
+    json_util::{non_empty_string_field, string_field},
     time_util::now_string,
 };
 use serde_json::{json, Value};
@@ -77,11 +77,7 @@ pub(crate) fn normalize_usage_info(value: Option<&Value>) -> Value {
         },
         "plan_type": string_field(raw, "plan_type"),
         "reset_credits": normalize_reset_credits(raw),
-        "fetched_at": raw_string_field(raw, "fetched_at")
-            .chars()
-            .next()
-            .map(|_| raw_string_field(raw, "fetched_at"))
-            .unwrap_or_else(now_string)
+        "fetched_at": non_empty_string_field(raw, "fetched_at").unwrap_or_else(now_string)
     })
 }
 

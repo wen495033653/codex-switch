@@ -1,56 +1,23 @@
 use super::*;
-use crate::json_util::value_u64_field;
+use crate::json_util::non_empty_string_field;
 
-const MANUAL_QUOTA_TIMEOUT_MS: u64 = 10_000;
-
-fn is_auth_retryable_usage_error(error: &Value) -> bool {
-    matches!(value_u64_field(error, "status"), Some(401 | 403))
-}
-
-fn usage_error_message(error: &Value, fallback: &str) -> String {
-    raw_string_field(error, "message")
-        .chars()
-        .next()
-        .map(|_| raw_string_field(error, "message"))
-        .unwrap_or_else(|| fallback.to_string())
-}
-
-fn account_with_usage_result(account: &Value, usage_result: Result<Value, Value>) -> Value {
-    let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
-    let custom = match usage_result {
-        Ok(usage_info) => set_usage_state(
-            account.get("custom"),
-            "ok",
-            "",
-            Some(usage_info),
-            Value::Null,
-        ),
-        Err(error) => set_usage_state(
-            account.get("custom"),
-            "error",
-            &usage_error_message(&error, "Usage refresh failed, please refresh manually"),
-            None,
-            error,
-        ),
-    };
-    json!({
-        "tokens": tokens,
-        "custom": custom
-    })
+fn usage_error_message(error: &Value) -> String {
+    non_empty_string_field(error, "message").unwrap_or_else(|| "Usage refresh failed".to_string())
 }
 
 fn update_account_usage_preserve_tokens(
     account: &Value,
     usage_result: Result<Value, Value>,
 ) -> Result<Value, String> {
-    add_account_to_store(account_with_usage_result(account, usage_result), false)
+    let custom = set_usage_result(account.get("custom"), usage_result);
+    add_account_to_store(account_with_custom(account, custom), false)
 }
 
 /// Subscription renewal data lives behind a second endpoint, so every successful quota
 /// refresh also re-reads it. A failed subscription read keeps the stored snapshot and the
 /// quota result, which is why the previous store value is the fallback here.
 fn store_with_refreshed_subscription(profile_id: &str, store: Value) -> Value {
-    refresh_account_subscription(profile_id, MANUAL_QUOTA_TIMEOUT_MS).unwrap_or(store)
+    refresh_account_subscription(profile_id, INTERACTIVE_REQUEST_TIMEOUT_MS).unwrap_or(store)
 }
 
 pub(super) struct AccountRefreshContext {
@@ -73,12 +40,7 @@ fn prepare_account_refresh(id: String) -> Result<AccountRefreshStart, String> {
     }
     let account = find_store_account(target_profile_id)?;
     let expected_account_id = account_id_from_account(&account)?;
-    let previous_refresh_token = account
-        .get("tokens")
-        .and_then(|tokens| tokens.get("refresh_token"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let previous_refresh_token = refresh_token_from_account(&account);
     let exchange = match exchange_refresh_token(&previous_refresh_token) {
         Ok(value) => value,
         Err(err) => {
@@ -124,16 +86,10 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
 
     let account = find_store_account(target_profile_id)?;
     let account_id = account_id_from_account(&account)?;
-    let access_token = account
-        .get("tokens")
-        .and_then(|tokens| tokens.get("access_token"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let access_token = access_token_from_account(&account);
 
     if !access_token.is_empty() {
-        match get_usage(&access_token, &account_id, MANUAL_QUOTA_TIMEOUT_MS) {
+        match get_usage(&access_token, &account_id, INTERACTIVE_REQUEST_TIMEOUT_MS) {
             Ok(usage_info) => {
                 let store = update_account_usage_preserve_tokens(&account, Ok(usage_info))?;
                 let store = store_with_refreshed_subscription(target_profile_id, store);
@@ -143,8 +99,8 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
                     "store": store
                 }));
             }
-            Err(error) if !is_auth_retryable_usage_error(&error) => {
-                let message = usage_error_message(&error, "Usage refresh failed");
+            Err(error) if !error_state_is_auth_rejected(&error) => {
+                let message = usage_error_message(&error);
                 let code = raw_string_field(&error, "code");
                 let store = update_account_usage_preserve_tokens(&account, Err(error))?;
                 return Ok(json!({
@@ -176,7 +132,7 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
     let usage_result = get_usage(
         &string_field(&context.exchange, "access_token"),
         &context.account_id,
-        MANUAL_QUOTA_TIMEOUT_MS,
+        INTERACTIVE_REQUEST_TIMEOUT_MS,
     );
     let usage_error = usage_result.as_ref().err().cloned();
     let next_account = account_from_exchange(
@@ -188,7 +144,7 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
     sync_auth_file_if_active(&context.profile_id)?;
 
     if let Some(error) = usage_error {
-        let message = usage_error_message(&error, "Usage refresh failed");
+        let message = usage_error_message(&error);
         return Ok(json!({
             "ok": false,
             "message": format!("Subscription refreshed, but quota refresh failed\n{message}"),

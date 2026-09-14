@@ -1,4 +1,5 @@
 import QuotaItem from './QuotaItem';
+import SubscriptionBadges from './SubscriptionBadges';
 import UsageStatsSummary from './UsageStatsSummary';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, isAuthSessionInvalid, maskAccountDisplayName } from '../utils/auth';
@@ -56,11 +57,11 @@ function getAuthBadge(info, t, translateRuntimeText) {
 }
 
 export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail }) {
-    const { language, t, translateRuntimeText } = useI18n();
+    const { t, translateRuntimeText } = useI18n();
     const info = parseAuthInfo(acc);
-    const plan = info.planType;
     const authBadge = getAuthBadge(info, t, translateRuntimeText);
-    const normalizedPlan = typeof plan === 'string' ? plan.toLowerCase() : '';
+    const normalizedPlan = info.planType.toLowerCase();
+    const planLabel = info.planType.toUpperCase();
     const isPersonalPlan = normalizedPlan === 'personal';
     const showAccountTag = accountId => {
         if (info.isApiMode) return false;
@@ -93,12 +94,6 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
         ? (accountNotice.detail || accountNotice.message)
         : '';
     const localizedAccountNoticeTitle = translateRuntimeText(accountNoticeTitle);
-    const subscription = info.subscription;
-    const expireTitle = subscription && subscription.willRenew === true
-        ? t('订阅到期日期，到期后自动续费')
-        : subscription && subscription.willRenew === false
-            ? t('订阅到期日期，到期后不再续费')
-            : t('订阅到期日期');
 
     return (
         <div className={`account-card ${isCurrent ? 'active' : ''}`}>
@@ -113,9 +108,9 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     )}
                 </div>
                 <div className="account-badges account-card-badges">
-                    {plan && !isPersonalPlan && (
+                    {planLabel && !isPersonalPlan && (
                         <span className={`plan-badge plan-${normalizedPlan}`}>
-                            {plan.toUpperCase()}
+                            {planLabel}
                         </span>
                     )}
                     {authBadge && (
@@ -128,36 +123,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                             {accountTag}
                         </span>
                     )}
-                    {info.showExpiresAt && info.expiresAt && (
-                        info.expiresAtStale ? (
-                            <span
-                                className="expire-date expire-date-stale"
-                                title={t('登录信息中的订阅到期时间 {date} 已过，但账号仍是 {plan}；OpenAI 最后核对于 {checked}，尚未更新到期信息', {
-                                    date: new Date(info.expiresAt).toLocaleDateString(language),
-                                    plan: plan.toUpperCase(),
-                                    checked: info.subscriptionLastCheckedAt
-                                        ? new Date(info.subscriptionLastCheckedAt).toLocaleString(language)
-                                        : t('未知')
-                                })}
-                            >
-                                {t('到期时间未同步')}
-                            </span>
-                        ) : (
-                            <span className="expire-date" title={expireTitle}>
-                                {t('到期 {date}', { date: new Date(info.expiresAt).toLocaleDateString(language) })}
-                            </span>
-                        )
-                    )}
-                    {subscription && subscription.isDelinquent === true && (
-                        <span className="delinquent-badge" title={t('订阅扣款失败，请在 ChatGPT 更新支付方式')}>
-                            {t('欠费')}
-                        </span>
-                    )}
-                    {info.resetCredits && info.resetCredits.availableCount > 0 && (
-                        <span className="reset-credits-badge" title={t('可用的 Codex 用量重置次数，请在 Codex 中使用')}>
-                            {t('可重置 {count} 次', { count: info.resetCredits.availableCount })}
-                        </span>
-                    )}
+                    <SubscriptionBadges info={info} planLabel={planLabel} />
                 </div>
             </div>
 

@@ -3,7 +3,7 @@ mod scanner;
 
 use serde_json::Value;
 
-pub(crate) use parser::usage_info_fetched_at_seconds;
+pub(crate) use parser::{inherit_stored_usage_fields, usage_info_fetched_at_seconds};
 
 pub(crate) fn latest_usage_info() -> Result<Option<Value>, String> {
     let sessions_dir = scanner::codex_home_dir().join("sessions");

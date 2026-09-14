@@ -1,5 +1,5 @@
 use crate::{
-    accounts::{account_id_from_account, profile_id_from_account},
+    accounts::{access_token_from_account, account_id_from_account, profile_id_from_account},
     time_util::parse_rfc3339_seconds,
 };
 use serde_json::Value;
@@ -22,12 +22,7 @@ pub(super) fn refresh_targets_from_store(store: &Value) -> Vec<RefreshTarget> {
                 .filter_map(|account| {
                     let profile_id = profile_id_from_account(account).ok()?;
                     let account_id = account_id_from_account(account).ok()?;
-                    let access_token = account
-                        .get("tokens")
-                        .and_then(|tokens| tokens.get("access_token"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
+                    let access_token = access_token_from_account(account);
                     if profile_id.is_empty() || account_id.is_empty() || access_token.is_empty() {
                         return None;
                     }
@@ -45,13 +40,9 @@ pub(super) fn refresh_targets_from_store(store: &Value) -> Vec<RefreshTarget> {
 fn quota_refresh_target(account: &Value) -> bool {
     let profile_id = profile_id_from_account(account).unwrap_or_default();
     let account_id = account_id_from_account(account).unwrap_or_default();
-    let access_token = account
-        .get("tokens")
-        .and_then(|tokens| tokens.get("access_token"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    !profile_id.is_empty() && !account_id.is_empty() && !access_token.is_empty()
+    !profile_id.is_empty()
+        && !account_id.is_empty()
+        && !access_token_from_account(account).is_empty()
 }
 
 fn quota_refresh_timestamp_seconds(account: &Value) -> Option<i64> {

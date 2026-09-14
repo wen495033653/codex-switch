@@ -4,8 +4,9 @@ mod payload;
 mod persistence;
 
 pub(crate) use model::{
-    account_id_from_account, normalize_tokens, profile_id_from_account,
-    profile_id_from_tokens_value, sort_accounts_by_last_used,
+    access_token_from_account, account_id_from_account, account_with_custom, normalize_tokens,
+    profile_id_from_account, profile_id_from_tokens_value, refresh_token_from_account,
+    sort_accounts_by_last_used,
 };
 pub(crate) use operations::{
     add_account_to_store, auth_error_is_login_expired, find_store_account, import_store_accounts,

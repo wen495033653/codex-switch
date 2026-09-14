@@ -36,17 +36,7 @@ pub(crate) fn account_from_exchange(
         Some(&string_field(exchange, "last_refresh_at")),
         Some(&string_field(exchange, "expires_at")),
     );
-    custom = match usage_result {
-        Ok(usage_info) => set_usage_state(Some(&custom), "ok", "", Some(usage_info), Value::Null),
-        Err(error) => {
-            let message = raw_string_field(&error, "message")
-                .chars()
-                .next()
-                .map(|_| raw_string_field(&error, "message"))
-                .unwrap_or_else(|| "Usage refresh failed, please refresh manually".to_string());
-            set_usage_state(Some(&custom), "error", &message, None, error)
-        }
-    };
+    custom = set_usage_result(Some(&custom), usage_result);
 
     Ok(json!({
         "tokens": tokens,

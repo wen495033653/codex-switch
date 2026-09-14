@@ -34,6 +34,26 @@ pub(crate) fn account_id_from_account(account: &Value) -> Result<String, String>
     AccountTokens::from_account_value(account).map(|tokens| tokens.account_id().to_string())
 }
 
+fn token_field(account: &Value, field: &str) -> String {
+    string_field(account.get(TOKENS_FIELD).unwrap_or(&Value::Null), field)
+}
+
+pub(crate) fn access_token_from_account(account: &Value) -> String {
+    token_field(account, ACCESS_TOKEN_FIELD)
+}
+
+pub(crate) fn refresh_token_from_account(account: &Value) -> String {
+    token_field(account, REFRESH_TOKEN_FIELD)
+}
+
+/// The same account with its `custom` block replaced; tokens are carried over untouched.
+pub(crate) fn account_with_custom(account: &Value, custom: Value) -> Value {
+    json!({
+        TOKENS_FIELD: account.get(TOKENS_FIELD).cloned().unwrap_or(Value::Null),
+        CUSTOM_FIELD: custom
+    })
+}
+
 pub(crate) fn profile_id_from_account(account: &Value) -> Result<String, String> {
     let raw_profile_id = raw_string_field(account, PROFILE_ID_FIELD);
     if !raw_profile_id.is_empty() {

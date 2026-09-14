@@ -17,15 +17,15 @@ fn token_client() -> Result<reqwest::blocking::Client, String> {
 }
 
 fn token_endpoint_error(prefix: &str, status: u16, text: &str, include_message: bool) -> String {
-    let (message, code, raw_message) = parse_endpoint_error(status, text);
+    let error = parse_endpoint_error(status, text);
     let mut lines = vec![prefix.to_string(), format!("HTTP {status}")];
-    if !code.is_empty() {
-        lines.push(format!("error.code: {code}"));
+    if !error.code.is_empty() {
+        lines.push(format!("error.code: {}", error.code));
     }
-    if !raw_message.is_empty() {
-        lines.push(format!("error.message: {raw_message}"));
+    if !error.raw_message.is_empty() {
+        lines.push(format!("error.message: {}", error.raw_message));
     } else if include_message {
-        lines.push(message);
+        lines.push(error.message);
     }
     lines.join("\n")
 }

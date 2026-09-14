@@ -2,7 +2,7 @@ use super::{
     event::{FlexibleNumber, SessionEvent, SessionRateLimitWindow, SessionRateLimits},
     usage_info_fetched_at_seconds,
 };
-use crate::time_util::parse_rfc3339_seconds;
+use crate::{json_util::string_field, time_util::parse_rfc3339_seconds};
 use serde_json::{json, Value};
 
 const RESET_AT_SAME_WINDOW_TOLERANCE_RATIO: f64 = 0.02;
@@ -54,8 +54,6 @@ fn normalize_session_usage_info(rate_limits: &SessionRateLimits, fetched_at: &st
         return Value::Null;
     }
 
-    // token_count events carry plan_type but never usage-reset credits; the active
-    // account keeps its last API-reported reset_credits in usage_store::update.
     json!({
         "rate_limit": {
             "primary_window": primary_window,
@@ -66,9 +64,28 @@ fn normalize_session_usage_info(rate_limits: &SessionRateLimits, fetched_at: &st
             .as_deref()
             .map(str::trim)
             .unwrap_or_default(),
-        "reset_credits": Value::Null,
         "fetched_at": fetched_at.to_string()
     })
+}
+
+/// token_count events never report usage-reset credits and older events omit plan_type,
+/// so session-sourced usage keeps the last API-reported values from `previous`.
+pub(crate) fn inherit_stored_usage_fields(previous: &Value, mut usage_info: Value) -> Value {
+    if string_field(&usage_info, "plan_type").is_empty() {
+        let previous_plan_type = string_field(previous, "plan_type");
+        if !previous_plan_type.is_empty() {
+            usage_info["plan_type"] = Value::String(previous_plan_type);
+        }
+    }
+    if usage_info.get("reset_credits").is_none_or(Value::is_null) {
+        if let Some(previous_credits) = previous
+            .get("reset_credits")
+            .filter(|value| !value.is_null())
+        {
+            usage_info["reset_credits"] = previous_credits.clone();
+        }
+    }
+    usage_info
 }
 
 pub(super) fn usage_info_from_line(line: &str) -> Option<Value> {

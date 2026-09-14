@@ -1,7 +1,7 @@
 use crate::{
     accounts::{
         account_from_exchange, exchange_refresh_token, import_store_accounts,
-        store_payload_from_store, ImportTokenResult,
+        store_payload_from_store, ImportTokenResult, BACKGROUND_REQUEST_TIMEOUT_MS,
     },
     json_util::string_field,
 };
@@ -13,7 +13,11 @@ pub(crate) fn import_one_refresh_token(refresh_token: String) -> ImportTokenResu
         Ok(exchange) => {
             let account_id = string_field(&exchange, "account_id");
             let access_token = string_field(&exchange, "access_token");
-            let usage_result = crate::accounts::get_usage(&access_token, &account_id, 30_000);
+            let usage_result = crate::accounts::get_usage(
+                &access_token,
+                &account_id,
+                BACKGROUND_REQUEST_TIMEOUT_MS,
+            );
             let usage_ok = usage_result.is_ok();
             match account_from_exchange(&exchange, None, usage_result) {
                 Ok(account) => ImportTokenResult {

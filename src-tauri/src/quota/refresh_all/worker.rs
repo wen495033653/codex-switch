@@ -3,7 +3,7 @@ use super::{
     targets::RefreshTarget,
 };
 use crate::{
-    accounts::{read_store_value, read_store_with_active_sync},
+    accounts::{read_store_value, read_store_with_active_sync, BACKGROUND_REQUEST_TIMEOUT_MS},
     events::emit_store_updated,
     json_util::value_u64_field,
     quota::{
@@ -15,8 +15,6 @@ use crate::{
 use serde_json::{json, Value};
 use std::{sync::Arc, thread};
 use tauri::AppHandle;
-
-const SUBSCRIPTION_TIMEOUT_MS: u64 = 30_000;
 
 pub(super) fn start_refresh_all_quotas_in_background(
     app: AppHandle,
@@ -41,7 +39,7 @@ pub(super) fn start_refresh_all_quotas_in_background(
                 &target.profile_id,
                 &target.account_id,
                 &target.access_token,
-                30_000,
+                BACKGROUND_REQUEST_TIMEOUT_MS,
             );
             let usage_ok = usage_result.is_ok();
             let store_result = update_account_usage_result(&target.profile_id, usage_result);
@@ -49,10 +47,12 @@ pub(super) fn start_refresh_all_quotas_in_background(
             if let Ok(store) = store_result {
                 emit_store_updated(&app, store);
             }
-            if let Some(store) =
-                refresh_account_subscription(&target.profile_id, SUBSCRIPTION_TIMEOUT_MS)
-            {
-                emit_store_updated(&app, store);
+            if usage_ok && store_update_ok {
+                if let Some(store) =
+                    refresh_account_subscription(&target.profile_id, BACKGROUND_REQUEST_TIMEOUT_MS)
+                {
+                    emit_store_updated(&app, store);
+                }
             }
 
             let status = update_refresh_all_status_value(runtime.as_ref(), |mut current| {

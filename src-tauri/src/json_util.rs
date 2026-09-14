@@ -17,6 +17,12 @@ pub(crate) fn raw_string_field(value: &Value, key: &str) -> String {
         .to_string()
 }
 
+/// Untrimmed string field, present only when non-empty.
+pub(crate) fn non_empty_string_field(value: &Value, key: &str) -> Option<String> {
+    let text = raw_string_field(value, key);
+    (!text.is_empty()).then_some(text)
+}
+
 pub(crate) fn bool_field(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }

@@ -1,15 +1,14 @@
 use super::super::subscription::refresh_account_subscription;
 use super::retry::get_usage_with_auth_retry;
 use crate::{
-    accounts::{add_account_to_store, find_store_account, set_usage_state},
+    accounts::{
+        account_with_custom, add_account_to_store, find_store_account, set_usage_result,
+        INTERACTIVE_REQUEST_TIMEOUT_MS,
+    },
     events::emit_store_updated,
-    json_util::raw_string_field,
 };
-use serde_json::{json, Value};
 use std::thread;
 use tauri::AppHandle;
-
-const AUTO_QUOTA_TIMEOUT_MS: u64 = 10_000;
 
 pub(crate) fn sync_account_usage_in_background(
     app: AppHandle,
@@ -23,36 +22,22 @@ pub(crate) fn sync_account_usage_in_background(
             &profile_id,
             &account_id,
             &access_token,
-            AUTO_QUOTA_TIMEOUT_MS,
+            INTERACTIVE_REQUEST_TIMEOUT_MS,
         );
         let Ok(account) = find_store_account(&profile_id) else {
             return;
         };
-        let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
-        let custom = match usage_result {
-            Ok(usage_info) => set_usage_state(
-                account.get("custom"),
-                "ok",
-                "",
-                Some(usage_info),
-                Value::Null,
-            ),
-            Err(error) => {
-                let message = raw_string_field(&error, "message")
-                    .chars()
-                    .next()
-                    .map(|_| raw_string_field(&error, "message"))
-                    .unwrap_or_else(|| "Usage sync failed, please try again later".to_string());
-                set_usage_state(account.get("custom"), "error", &message, None, error)
-            }
-        };
-
-        if let Ok(store) =
-            add_account_to_store(json!({ "tokens": tokens, "custom": custom }), false)
-        {
+        let usage_ok = usage_result.is_ok();
+        let custom = set_usage_result(account.get("custom"), usage_result);
+        if let Ok(store) = add_account_to_store(account_with_custom(&account, custom), false) {
             emit_store_updated(&app, store);
         }
-        if let Some(store) = refresh_account_subscription(&profile_id, AUTO_QUOTA_TIMEOUT_MS) {
+        if !usage_ok {
+            return;
+        }
+        if let Some(store) =
+            refresh_account_subscription(&profile_id, INTERACTIVE_REQUEST_TIMEOUT_MS)
+        {
             emit_store_updated(&app, store);
         }
     });

@@ -1,9 +1,9 @@
 use crate::{
     accounts::{
-        account_from_exchange_preserve_usage, account_id_from_account, add_account_to_store,
-        exchange_refresh_token, find_store_account, mark_account_auth_error, normalize_custom,
-        normalize_tokens, profile_id_from_account, read_store_value, set_auth_state,
-        sync_auth_file_if_active,
+        account_from_exchange_preserve_usage, account_id_from_account, account_with_custom,
+        add_account_to_store, exchange_refresh_token, find_store_account, mark_account_auth_error,
+        normalize_custom, normalize_tokens, profile_id_from_account, read_store_value,
+        refresh_token_from_account, set_auth_state, sync_auth_file_if_active,
     },
     events::emit_store_updated,
     json_util::{raw_string_field, string_field},
@@ -44,7 +44,6 @@ fn should_auto_refresh_account(account: &Value) -> bool {
 
 fn mark_account_auth_refreshing(profile_id: &str, message: &str) -> Result<Value, String> {
     let account = find_store_account(profile_id)?;
-    let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
     let custom = set_auth_state(
         account.get("custom"),
         "refreshing",
@@ -53,19 +52,13 @@ fn mark_account_auth_refreshing(profile_id: &str, message: &str) -> Result<Value
         None,
         None,
     );
-    add_account_to_store(json!({ "tokens": tokens, "custom": custom }), false)
+    add_account_to_store(account_with_custom(&account, custom), false)
 }
 
 pub(crate) fn refresh_stored_account_tokens(profile_id: &str) -> Result<Value, String> {
     let account = find_store_account(profile_id)?;
     let expected_account_id = account_id_from_account(&account)?;
-    let previous_refresh_token = account
-        .get("tokens")
-        .and_then(|tokens| tokens.get("refresh_token"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let exchange = exchange_refresh_token(&previous_refresh_token)?;
+    let exchange = exchange_refresh_token(&refresh_token_from_account(&account))?;
     let refreshed_account_id = string_field(&exchange, "account_id");
     if refreshed_account_id.is_empty() {
         return Err("刷新结果缺少 account_id".to_string());

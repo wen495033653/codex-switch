@@ -37,27 +37,43 @@ export function isAuthSessionInvalid(info) {
     ].some(pattern => message.includes(pattern));
 }
 
-export function parseAuthInfo(account) {
+// Every field the card and settings pages read; the early returns below only override
+// what differs, so a new field is declared once.
+const EMPTY_AUTH_INFO = Object.freeze({
+    isApiMode: false,
+    email: '',
+    planType: '',
+    usage: null,
+    usageWindows: [],
+    resetCredits: null,
+    subscription: null,
+    expiresAt: '',
+    expiresAtStale: false,
+    subscriptionLastCheckedAt: '',
+    showExpiresAt: false,
+    authStatus: 'active',
+    authStatusMessage: '',
+    usageStatus: 'missing',
+    usageStatusMessage: '',
+    usageNotice: null,
+    workspace: ''
+});
+
+/**
+ * `now` is only a parameter so the stale-claim decision is testable; callers use the clock.
+ */
+export function parseAuthInfo(account, now = Date.now()) {
     if (isApiModeAccount(account)) {
         const api = account.api && typeof account.api === 'object' ? account.api : {};
         const baseUrl = typeof api.base_url === 'string' ? api.base_url : '';
         const configured = api.configured === true;
         return {
+            ...EMPTY_AUTH_INFO,
             isApiMode: true,
-            email: '',
             planType: 'API',
-            usage: null,
-            usageWindows: [],
-            resetCredits: null,
-            subscription: null,
-            expiresAt: '',
-            expiresAtStale: false,
-            subscriptionLastCheckedAt: '',
-            showExpiresAt: false,
             authStatus: configured ? 'active' : 'error',
             authStatusMessage: configured ? '' : '请先在设置中填写 API Key',
             usageStatus: 'ok',
-            usageStatusMessage: '',
             usageNotice: {
                 tone: configured ? 'info' : 'error',
                 message: baseUrl
@@ -72,20 +88,9 @@ export function parseAuthInfo(account) {
     const parsed = safeParseJwt(tokens.id_token);
     if (!parsed.claims) {
         return {
-            email: '',
-            planType: '',
-            usage: null,
-            usageWindows: [],
-            resetCredits: null,
-            subscription: null,
-            expiresAt: '',
-            expiresAtStale: false,
-            subscriptionLastCheckedAt: '',
-            showExpiresAt: false,
+            ...EMPTY_AUTH_INFO,
             authStatus: 'error',
             authStatusMessage: parsed.error,
-            usageStatus: 'missing',
-            usageStatusMessage: '',
             usageNotice: {
                 tone: 'error',
                 message: '账号数据异常，请重新导入或删除后添加'
@@ -117,7 +122,7 @@ export function parseAuthInfo(account) {
     // is stale, so the card must not present that past date as the renewal date.
     const claimExpiresAtTime = Date.parse(claimExpiresAt);
     const expiresAtStale = !subscription && Boolean(usagePlanType) && !isFreePlan
-        && Number.isFinite(claimExpiresAtTime) && claimExpiresAtTime <= Date.now();
+        && Number.isFinite(claimExpiresAtTime) && claimExpiresAtTime <= now;
 
     const orgs = Array.isArray(auth.organizations) ? auth.organizations : [];
     let workspace = '工作空间缺失';

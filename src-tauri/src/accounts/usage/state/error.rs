@@ -1,5 +1,8 @@
 use super::number::to_number;
-use crate::{json_util::raw_string_field, time_util::now_string};
+use crate::{
+    json_util::{raw_string_field, value_u64_field},
+    time_util::now_string,
+};
 use serde_json::{json, Map, Value};
 
 pub(crate) fn build_error_state(
@@ -26,6 +29,11 @@ pub(crate) fn build_error_state(
         out.insert("path".to_string(), Value::String(path.to_string()));
     }
     Value::Object(out)
+}
+
+/// The backend rejected the access token; the caller may retry after a token refresh.
+pub(crate) fn error_state_is_auth_rejected(error: &Value) -> bool {
+    matches!(value_u64_field(error, "status"), Some(401 | 403))
 }
 
 pub(super) fn normalize_error_state(value: Option<&Value>) -> Value {

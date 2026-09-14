@@ -167,6 +167,8 @@ test('an expired claim without endpoint data is reported as stale, not as the ex
   assert.equal(parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00', usagePlan: '' })).expiresAtStale, false);
   assert.equal(parseAuthInfo(account({ activeUntil: '', usagePlan: 'pro' })).expiresAtStale, false);
   assert.equal(parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00', subscription: SUBSCRIPTION })).expiresAtStale, false);
+  const beforeExpiry = Date.parse('2026-09-01T00:00:00Z');
+  assert.equal(parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00' }), beforeExpiry).expiresAtStale, false);
 
   const html = renderCard(account({ activeUntil: '2026-09-04T12:29:43+00:00', usagePlan: 'pro' }));
   assert.match(html, /<span class="expire-date expire-date-stale" title="[^"]*PRO[^"]*">到期时间未同步<\/span>/);

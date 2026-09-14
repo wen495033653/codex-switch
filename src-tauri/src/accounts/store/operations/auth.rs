@@ -1,6 +1,7 @@
 use super::{mutation::add_account_to_store, query::find_store_account};
 use crate::accounts::{
-    build_error_state, get_codex_state_value, set_auth_state, write_account_auth,
+    account_with_custom, build_error_state, get_codex_state_value, set_auth_state,
+    write_account_auth,
 };
 use crate::codex_launcher::remote_control_enabled_from_settings;
 use crate::json_util::raw_string_field;
@@ -37,7 +38,6 @@ fn auth_file_uses_profile(
 
 pub(crate) fn mark_account_auth_error(profile_id: &str, message: &str) -> Result<Value, String> {
     let account = find_store_account(profile_id)?;
-    let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
     let custom = set_auth_state(
         account.get("custom"),
         "error",
@@ -46,13 +46,7 @@ pub(crate) fn mark_account_auth_error(profile_id: &str, message: &str) -> Result
         None,
         None,
     );
-    let store = add_account_to_store(
-        json!({
-            "tokens": tokens,
-            "custom": custom
-        }),
-        false,
-    )?;
+    let store = add_account_to_store(account_with_custom(&account, custom), false)?;
     disable_selected_remote_control_after_login_expired(profile_id, message)?;
     Ok(store)
 }

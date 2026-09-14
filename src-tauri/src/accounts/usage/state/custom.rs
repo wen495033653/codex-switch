@@ -2,8 +2,10 @@ use super::{
     error::normalize_error_state, subscription::normalize_subscription,
     usage_info::normalize_usage_info,
 };
-use crate::json_util::raw_string_field;
+use crate::json_util::{non_empty_string_field, raw_string_field};
 use serde_json::{json, Value};
+
+const USAGE_REFRESH_FALLBACK_MESSAGE: &str = "Usage refresh failed, please refresh manually";
 
 pub(crate) fn set_auth_state(
     custom: Option<&Value>,
@@ -53,6 +55,22 @@ pub(crate) fn set_usage_state(
         Value::Null
     };
     normalize_custom(Some(&next))
+}
+
+/// Records the outcome of one `/wham/usage` read: the snapshot on success, the error state
+/// (with its message as the status text) on failure.
+pub(crate) fn set_usage_result(
+    custom: Option<&Value>,
+    usage_result: Result<Value, Value>,
+) -> Value {
+    match usage_result {
+        Ok(usage_info) => set_usage_state(custom, "ok", "", Some(usage_info), Value::Null),
+        Err(error) => {
+            let message = non_empty_string_field(&error, "message")
+                .unwrap_or_else(|| USAGE_REFRESH_FALLBACK_MESSAGE.to_string());
+            set_usage_state(custom, "error", &message, None, error)
+        }
+    }
 }
 
 pub(crate) fn set_subscription_state(custom: Option<&Value>, subscription: Value) -> Value {

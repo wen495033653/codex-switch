@@ -6,6 +6,7 @@ use crate::{json_util::string_field, time_util::parse_rfc3339_seconds};
 use serde_json::Value;
 
 pub(super) use file::usage_info_from_file;
+pub(crate) use normalize::inherit_stored_usage_fields;
 pub(super) use normalize::newer_usage_info;
 
 pub(crate) fn usage_info_fetched_at_seconds(usage_info: &Value) -> Option<i64> {
@@ -99,8 +100,50 @@ mod tests {
         let usage_info = normalize::usage_info_from_line(&line).unwrap();
 
         assert_eq!(string_field(&usage_info, "plan_type"), "pro");
-        assert_eq!(usage_info["reset_credits"], Value::Null);
+        assert!(usage_info.get("reset_credits").is_none());
         assert_eq!(primary_used_percent(&usage_info), 99.0);
+    }
+
+    fn session_usage_with_plan(plan_type: &str) -> Value {
+        json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 5.0,
+                    "limit_window_seconds": 604800.0,
+                    "reset_at": 1789889905.0
+                },
+                "secondary_window": null
+            },
+            "plan_type": plan_type,
+            "fetched_at": "2026-09-14T04:00:00Z"
+        })
+    }
+
+    #[test]
+    fn session_usage_inherits_reset_credits_and_missing_plan_type() {
+        let previous = json!({
+            "plan_type": "pro",
+            "reset_credits": { "available_count": 3, "applicable_available_count": 0 }
+        });
+
+        let merged = inherit_stored_usage_fields(&previous, session_usage_with_plan(""));
+
+        assert_eq!(merged["plan_type"], json!("pro"));
+        assert_eq!(
+            merged["reset_credits"],
+            json!({ "available_count": 3, "applicable_available_count": 0 })
+        );
+        assert_eq!(primary_used_percent(&merged), 5.0);
+    }
+
+    #[test]
+    fn session_plan_type_wins_over_stored_plan_type() {
+        let previous = json!({ "plan_type": "plus", "reset_credits": null });
+
+        let merged = inherit_stored_usage_fields(&previous, session_usage_with_plan("pro"));
+
+        assert_eq!(merged["plan_type"], json!("pro"));
+        assert!(merged.get("reset_credits").is_none());
     }
 
     #[test]
