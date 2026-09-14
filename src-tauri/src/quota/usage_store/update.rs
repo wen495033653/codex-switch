@@ -92,6 +92,41 @@ pub(crate) fn update_account_usage_result(
     update_account_usage_result_in_store(read_store_value()?, profile_id, usage_result)
 }
 
+fn stored_usage_info(store: &Value, profile_id: &str) -> Value {
+    store
+        .get("accounts")
+        .and_then(Value::as_array)
+        .and_then(|accounts| {
+            accounts
+                .iter()
+                .find(|account| profile_id_from_account(account).unwrap_or_default() == profile_id)
+        })
+        .and_then(|account| account.get("custom"))
+        .and_then(|custom| custom.get("usage_info"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// Codex session token_count events never report usage-reset credits and older
+/// events omit plan_type, so session-sourced usage keeps the last API-reported values.
+fn inherit_session_usage_fields(previous: &Value, mut usage_info: Value) -> Value {
+    if raw_string_field(&usage_info, "plan_type").is_empty() {
+        let previous_plan_type = raw_string_field(previous, "plan_type");
+        if !previous_plan_type.is_empty() {
+            usage_info["plan_type"] = Value::String(previous_plan_type);
+        }
+    }
+    if usage_info.get("reset_credits").is_none_or(Value::is_null) {
+        if let Some(previous_credits) = previous
+            .get("reset_credits")
+            .filter(|value| !value.is_null())
+        {
+            usage_info["reset_credits"] = previous_credits.clone();
+        }
+    }
+    usage_info
+}
+
 pub(crate) fn update_active_account_usage_result(
     profile_id: &str,
     usage_result: Result<Value, Value>,
@@ -100,5 +135,60 @@ pub(crate) fn update_active_account_usage_result(
     if raw_string_field(&store, "active_id") != profile_id {
         return Ok(None);
     }
+    let previous_usage = stored_usage_info(&store, profile_id);
+    let usage_result =
+        usage_result.map(|usage_info| inherit_session_usage_fields(&previous_usage, usage_info));
     update_account_usage_result_in_store(store, profile_id, usage_result).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn session_usage(plan_type: &str) -> Value {
+        json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 5.0,
+                    "limit_window_seconds": 604800.0,
+                    "reset_at": 1789889905.0
+                },
+                "secondary_window": null
+            },
+            "plan_type": plan_type,
+            "reset_credits": null,
+            "fetched_at": "2026-09-14T04:00:00Z"
+        })
+    }
+
+    #[test]
+    fn session_usage_inherits_reset_credits_and_missing_plan_type() {
+        let previous = json!({
+            "plan_type": "pro",
+            "reset_credits": { "available_count": 3, "applicable_available_count": 0 }
+        });
+
+        let merged = inherit_session_usage_fields(&previous, session_usage(""));
+
+        assert_eq!(merged["plan_type"], json!("pro"));
+        assert_eq!(
+            merged["reset_credits"],
+            json!({ "available_count": 3, "applicable_available_count": 0 })
+        );
+        assert_eq!(
+            merged["rate_limit"]["primary_window"]["used_percent"],
+            json!(5.0)
+        );
+    }
+
+    #[test]
+    fn session_plan_type_wins_over_stored_plan_type() {
+        let previous = json!({ "plan_type": "plus", "reset_credits": null });
+
+        let merged = inherit_session_usage_fields(&previous, session_usage("pro"));
+
+        assert_eq!(merged["plan_type"], json!("pro"));
+        assert_eq!(merged["reset_credits"], Value::Null);
+    }
 }

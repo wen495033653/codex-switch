@@ -19,6 +19,7 @@ pub(super) struct SessionPayload {
 pub(super) struct SessionRateLimits {
     pub(super) primary: Option<SessionRateLimitWindow>,
     pub(super) secondary: Option<SessionRateLimitWindow>,
+    pub(super) plan_type: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -15,6 +15,22 @@ export function getUsageWindows(usage) {
         .sort((a, b) => Number(a.limit_window_seconds) - Number(b.limit_window_seconds));
 }
 
+function toCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) && count >= 0 ? count : null;
+}
+
+export function getResetCredits(usage) {
+    const raw = usage && usage.reset_credits;
+    if (!raw || typeof raw !== 'object') return null;
+    const availableCount = toCount(raw.available_count);
+    if (availableCount === null) return null;
+    return {
+        availableCount,
+        applicableAvailableCount: toCount(raw.applicable_available_count)
+    };
+}
+
 export function normalizeErrorState(raw) {
     if (!raw || typeof raw !== 'object') return null;
 

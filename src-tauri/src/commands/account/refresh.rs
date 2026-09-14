@@ -1,11 +1,6 @@
 use super::*;
-use crate::json_util::value_u64_field;
 
 const MANUAL_QUOTA_TIMEOUT_MS: u64 = 10_000;
-
-fn is_auth_retryable_usage_error(error: &Value) -> bool {
-    matches!(value_u64_field(error, "status"), Some(401 | 403))
-}
 
 fn usage_error_message(error: &Value, fallback: &str) -> String {
     raw_string_field(error, "message")
@@ -13,37 +8,6 @@ fn usage_error_message(error: &Value, fallback: &str) -> String {
         .next()
         .map(|_| raw_string_field(error, "message"))
         .unwrap_or_else(|| fallback.to_string())
-}
-
-fn account_with_usage_result(account: &Value, usage_result: Result<Value, Value>) -> Value {
-    let tokens = account.get("tokens").cloned().unwrap_or(Value::Null);
-    let custom = match usage_result {
-        Ok(usage_info) => set_usage_state(
-            account.get("custom"),
-            "ok",
-            "",
-            Some(usage_info),
-            Value::Null,
-        ),
-        Err(error) => set_usage_state(
-            account.get("custom"),
-            "error",
-            &usage_error_message(&error, "Usage refresh failed, please refresh manually"),
-            None,
-            error,
-        ),
-    };
-    json!({
-        "tokens": tokens,
-        "custom": custom
-    })
-}
-
-fn update_account_usage_preserve_tokens(
-    account: &Value,
-    usage_result: Result<Value, Value>,
-) -> Result<Value, String> {
-    add_account_to_store(account_with_usage_result(account, usage_result), false)
 }
 
 pub(super) struct AccountRefreshContext {
@@ -109,47 +73,14 @@ fn auth_error_payload(profile_id: &str, message: &str) -> Result<Value, String> 
     }))
 }
 
+/// Manual refresh re-issues the tokens first: the plan badge and subscription expiry
+/// come from id_token claims that only change on a refresh_token grant, so refreshing
+/// quota with the old access_token would keep showing the pre-renewal subscription.
 pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
     let target_profile_id = id.trim();
     if target_profile_id.is_empty() {
         return Err("account_id 无效".to_string());
     }
-
-    let account = find_store_account(target_profile_id)?;
-    let account_id = account_id_from_account(&account)?;
-    let access_token = account
-        .get("tokens")
-        .and_then(|tokens| tokens.get("access_token"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    if !access_token.is_empty() {
-        match get_usage(&access_token, &account_id, MANUAL_QUOTA_TIMEOUT_MS) {
-            Ok(usage_info) => {
-                let store = update_account_usage_preserve_tokens(&account, Ok(usage_info))?;
-                return Ok(json!({
-                    "ok": true,
-                    "message": "配额已刷新",
-                    "store": store
-                }));
-            }
-            Err(error) if !is_auth_retryable_usage_error(&error) => {
-                let message = usage_error_message(&error, "Usage refresh failed");
-                let code = raw_string_field(&error, "code");
-                let store = update_account_usage_preserve_tokens(&account, Err(error))?;
-                return Ok(json!({
-                    "ok": false,
-                    "message": format!("配额刷新失败\n{message}"),
-                    "code": code,
-                    "store": store
-                }));
-            }
-            Err(_) => {}
-        }
-    }
-
     refresh_account_with_token_refresh(target_profile_id.to_string())
 }
 
@@ -224,4 +155,75 @@ pub(super) fn refresh_account_token_impl(id: String) -> Result<Value, String> {
         "refresh_token": string_field(&context.exchange, "refresh_token"),
         "store": store
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::quota::subscription_claims::subscription_claims_summary;
+    use std::{env, thread, time::Duration};
+
+    fn usage_summary(account: &Value) -> String {
+        let usage = account
+            .get("custom")
+            .and_then(|custom| custom.get("usage_info"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        format!(
+            "usage plan_type={:?} reset_credits={} fetched_at={:?}",
+            string_field(&usage, "plan_type"),
+            usage.get("reset_credits").cloned().unwrap_or(Value::Null),
+            string_field(&usage, "fetched_at")
+        )
+    }
+
+    fn access_token(account: &Value) -> String {
+        account
+            .get("tokens")
+            .and_then(|tokens| tokens.get("access_token"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Real-environment check for the manual refresh path. It re-issues the tokens of
+    /// the live account named by CODEX_SWITCH_REAL_REFRESH_PROFILE_ID (same effect as
+    /// clicking 刷新配额) and prints the id_token subscription claims before and after,
+    /// then re-reads accounts.json after a delay to prove the rotated tokens persisted.
+    #[test]
+    #[ignore = "rotates the refresh_token of a live account; set CODEX_SWITCH_REAL_REFRESH_PROFILE_ID"]
+    fn real_manual_refresh_reissues_subscription_claims() {
+        let Ok(profile_id) = env::var("CODEX_SWITCH_REAL_REFRESH_PROFILE_ID") else {
+            eprintln!("CODEX_SWITCH_REAL_REFRESH_PROFILE_ID 未设置，跳过真实刷新");
+            return;
+        };
+        // main.rs installs the provider at startup; the test binary has to do it itself.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let before = find_store_account(&profile_id).expect("account exists");
+        eprintln!(
+            "[real-refresh] before: {}",
+            subscription_claims_summary(&before)
+        );
+        eprintln!("[real-refresh] before: {}", usage_summary(&before));
+
+        let result = refresh_account_impl(profile_id.clone()).expect("refresh command runs");
+        eprintln!(
+            "[real-refresh] result ok={} message={:?}",
+            result["ok"], result["message"]
+        );
+        assert_eq!(result["ok"], Value::Bool(true), "{result}");
+
+        thread::sleep(Duration::from_secs(3));
+        let after = find_store_account(&profile_id).expect("account still exists");
+        eprintln!(
+            "[real-refresh] after: {}",
+            subscription_claims_summary(&after)
+        );
+        eprintln!("[real-refresh] after: {}", usage_summary(&after));
+        assert_ne!(
+            access_token(&before),
+            access_token(&after),
+            "rotated access_token must persist in accounts.json"
+        );
+    }
 }

@@ -6,7 +6,10 @@ use crate::{
     accounts::{read_store_value, read_store_with_active_sync},
     events::emit_store_updated,
     json_util::value_u64_field,
-    quota::usage_store::{get_usage_with_auth_retry, update_account_usage_result},
+    quota::{
+        subscription_claims::refresh_stale_subscription_claims,
+        usage_store::{get_usage_with_auth_retry, update_account_usage_result},
+    },
     time_util::now_string,
 };
 use serde_json::{json, Value};
@@ -39,10 +42,14 @@ pub(super) fn start_refresh_all_quotas_in_background(
                 30_000,
             );
             let usage_ok = usage_result.is_ok();
+            let fresh_usage_info = usage_result.as_ref().ok().cloned();
             let store_result = update_account_usage_result(&target.profile_id, usage_result);
             let store_update_ok = store_result.is_ok();
             if let Ok(store) = store_result {
                 emit_store_updated(&app, store);
+            }
+            if let (true, Some(usage_info)) = (store_update_ok, fresh_usage_info) {
+                refresh_stale_subscription_claims(&app, &target.profile_id, &usage_info);
             }
 
             let status = update_refresh_all_status_value(runtime.as_ref(), |mut current| {

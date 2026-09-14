@@ -76,6 +76,34 @@ mod tests {
     }
 
     #[test]
+    fn session_usage_keeps_plan_type_without_reset_credits() {
+        let line = json!({
+            "timestamp": "2026-09-13T17:14:32Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "rate_limits": {
+                    "limit_id": "codex",
+                    "primary": {
+                        "used_percent": 99.0,
+                        "window_minutes": 10080,
+                        "resets_at": 1_789_889_905
+                    },
+                    "secondary": null,
+                    "plan_type": "pro"
+                }
+            }
+        })
+        .to_string();
+
+        let usage_info = normalize::usage_info_from_line(&line).unwrap();
+
+        assert_eq!(string_field(&usage_info, "plan_type"), "pro");
+        assert_eq!(usage_info["reset_credits"], Value::Null);
+        assert_eq!(primary_used_percent(&usage_info), 99.0);
+    }
+
+    #[test]
     fn session_usage_requires_valid_timestamp() {
         assert!(normalize::usage_info_from_line(&token_count_line("", 42.0)).is_none());
         assert!(normalize::usage_info_from_line(&token_count_line("not-a-date", 42.0)).is_none());

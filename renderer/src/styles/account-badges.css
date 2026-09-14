@@ -89,6 +89,23 @@
   border-radius: 4px;
 }
 
+.expire-date.expire-date-stale {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.reset-credits-badge {
+  font-size: 11px;
+  color: #86efac;
+  padding: 2px 8px;
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(134, 239, 172, 0.26);
+  border-radius: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .account-id-badge {
   font-size: 11px;
   color: #cbd5e1;

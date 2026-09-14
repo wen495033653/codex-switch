@@ -123,8 +123,28 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                         </span>
                     )}
                     {info.showExpiresAt && info.expiresAt && (
-                        <span className="expire-date" title={t('订阅到期日期')}>
-                            {t('到期 {date}', { date: new Date(info.expiresAt).toLocaleDateString(language) })}
+                        info.expiresAtStale ? (
+                            <span
+                                className="expire-date expire-date-stale"
+                                title={t('登录信息中的订阅到期时间 {date} 已过，但账号仍是 {plan}；OpenAI 最后核对于 {checked}，尚未更新到期信息', {
+                                    date: new Date(info.expiresAt).toLocaleDateString(language),
+                                    plan: plan.toUpperCase(),
+                                    checked: info.subscriptionLastCheckedAt
+                                        ? new Date(info.subscriptionLastCheckedAt).toLocaleString(language)
+                                        : t('未知')
+                                })}
+                            >
+                                {t('到期时间未同步')}
+                            </span>
+                        ) : (
+                            <span className="expire-date" title={t('订阅到期日期')}>
+                                {t('到期 {date}', { date: new Date(info.expiresAt).toLocaleDateString(language) })}
+                            </span>
+                        )
+                    )}
+                    {info.resetCredits && info.resetCredits.availableCount > 0 && (
+                        <span className="reset-credits-badge" title={t('可用的 Codex 用量重置次数，请在 Codex 中使用')}>
+                            {t('可重置 {count} 次', { count: info.resetCredits.availableCount })}
                         </span>
                     )}
                 </div>

@@ -83,6 +83,18 @@ html[data-theme="light"] .expire-date {
   border-color: #cbd5e1;
 }
 
+html[data-theme="light"] .expire-date.expire-date-stale {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fcd34d;
+}
+
+html[data-theme="light"] .reset-credits-badge {
+  background: #dcfce7;
+  color: #15803d;
+  border-color: #86efac;
+}
+
 html[data-theme="light"] .account-id-badge {
   background: #f1f5f9;
   color: #475569;

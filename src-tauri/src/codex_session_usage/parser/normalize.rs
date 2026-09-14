@@ -54,11 +54,19 @@ fn normalize_session_usage_info(rate_limits: &SessionRateLimits, fetched_at: &st
         return Value::Null;
     }
 
+    // token_count events carry plan_type but never usage-reset credits; the active
+    // account keeps its last API-reported reset_credits in usage_store::update.
     json!({
         "rate_limit": {
             "primary_window": primary_window,
             "secondary_window": secondary_window
         },
+        "plan_type": rate_limits
+            .plan_type
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default(),
+        "reset_credits": Value::Null,
         "fetched_at": fetched_at.to_string()
     })
 }

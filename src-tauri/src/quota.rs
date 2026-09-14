@@ -1,6 +1,7 @@
 mod active_usage;
 mod auth_refresh;
 mod refresh_all;
+pub(crate) mod subscription_claims;
 mod usage_store;
 
 pub(crate) use active_usage::{

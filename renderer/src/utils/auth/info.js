@@ -1,6 +1,6 @@
 import { getChatgptAccountId, isApiModeAccount } from './account';
 import { safeParseJwt } from './jwt';
-import { getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
+import { getResetCredits, getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
 
 const PLAN_TYPE_ALIASES = {
     prolite: 'pro',
@@ -47,7 +47,10 @@ export function parseAuthInfo(account) {
             planType: 'API',
             usage: null,
             usageWindows: [],
+            resetCredits: null,
             expiresAt: '',
+            expiresAtStale: false,
+            subscriptionLastCheckedAt: '',
             showExpiresAt: false,
             authStatus: configured ? 'active' : 'error',
             authStatusMessage: configured ? '' : '请先在设置中填写 API Key',
@@ -71,7 +74,10 @@ export function parseAuthInfo(account) {
             planType: '',
             usage: null,
             usageWindows: [],
+            resetCredits: null,
             expiresAt: '',
+            expiresAtStale: false,
+            subscriptionLastCheckedAt: '',
             showExpiresAt: false,
             authStatus: 'error',
             authStatusMessage: parsed.error,
@@ -89,9 +95,20 @@ export function parseAuthInfo(account) {
     const auth = claims['https://api.openai.com/auth'] || {};
 
     const accountId = getChatgptAccountId(account);
-    const planType = normalizePlanType(auth.chatgpt_plan_type);
+    const custom = account && account.custom ? account.custom : {};
+    const usage = custom.usage_info;
+    // /wham/usage plan_type refreshes with every quota sync; the id_token claim only
+    // changes when the token is re-issued, so prefer the usage value when present.
+    const usagePlanType = normalizePlanType(usage && usage.plan_type);
+    const planType = usagePlanType || normalizePlanType(auth.chatgpt_plan_type);
     const isFreePlan = planType.toLowerCase() === 'free';
     const expiresAt = auth.chatgpt_subscription_active_until || '';
+    const subscriptionLastCheckedAt = auth.chatgpt_subscription_last_checked || '';
+    // OpenAI does not always re-check the subscription when it re-issues the id_token:
+    // an expired claim next to a paid usage plan means the claim is stale, not the plan.
+    const expiresAtTime = Date.parse(expiresAt);
+    const expiresAtStale = Boolean(usagePlanType) && !isFreePlan
+        && Number.isFinite(expiresAtTime) && expiresAtTime <= Date.now();
 
     const orgs = Array.isArray(auth.organizations) ? auth.organizations : [];
     let workspace = '工作空间缺失';
@@ -104,9 +121,8 @@ export function parseAuthInfo(account) {
     }
 
     const email = claims.email || '';
-    const custom = account && account.custom ? account.custom : {};
-    const usage = custom.usage_info;
     const usageWindows = getUsageWindows(usage);
+    const resetCredits = getResetCredits(usage);
     const authError = normalizeErrorState(custom.auth_error);
     const authStatus = typeof custom.auth_status === 'string' && custom.auth_status
         ? custom.auth_status
@@ -127,7 +143,10 @@ export function parseAuthInfo(account) {
         planType,
         usage,
         usageWindows,
+        resetCredits,
         expiresAt: isFreePlan ? '' : expiresAt,
+        expiresAtStale,
+        subscriptionLastCheckedAt,
         showExpiresAt: !isFreePlan,
         authStatus,
         authStatusMessage,
