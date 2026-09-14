@@ -669,6 +669,12 @@ html[data-theme="light"] .account-card-name {
   font-weight: 600;
 }
 
+.delinquent-badge,
+.reset-credits-badge {
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .current-badge,
 html[data-theme="light"] .current-badge {
   border-color: var(--accent-border);
