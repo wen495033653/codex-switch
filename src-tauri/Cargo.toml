@@ -18,12 +18,12 @@ panic = "abort"
 
 [dependencies]
 arboard = "3.6.1"
-base64 = "0.22.1"
-open = "5.4.0"
+base64 = "0.23.1"
+open = "5.4.4"
 rand = "0.10.2"
-reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "charset", "form", "http2", "json", "rustls-no-provider", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "charset", "form", "http2", "json", "rustls-no-provider", "system-proxy"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
