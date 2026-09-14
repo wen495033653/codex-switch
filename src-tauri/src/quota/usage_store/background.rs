@@ -1,3 +1,4 @@
+use super::super::subscription::refresh_account_subscription;
 use super::retry::get_usage_with_auth_retry;
 use crate::{
     accounts::{add_account_to_store, find_store_account, set_usage_state},
@@ -49,6 +50,9 @@ pub(crate) fn sync_account_usage_in_background(
         if let Ok(store) =
             add_account_to_store(json!({ "tokens": tokens, "custom": custom }), false)
         {
+            emit_store_updated(&app, store);
+        }
+        if let Some(store) = refresh_account_subscription(&profile_id, AUTO_QUOTA_TIMEOUT_MS) {
             emit_store_updated(&app, store);
         }
     });

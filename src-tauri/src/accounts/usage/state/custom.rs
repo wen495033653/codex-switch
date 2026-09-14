@@ -1,4 +1,7 @@
-use super::{error::normalize_error_state, usage_info::normalize_usage_info};
+use super::{
+    error::normalize_error_state, subscription::normalize_subscription,
+    usage_info::normalize_usage_info,
+};
 use crate::json_util::raw_string_field;
 use serde_json::{json, Value};
 
@@ -52,6 +55,12 @@ pub(crate) fn set_usage_state(
     normalize_custom(Some(&next))
 }
 
+pub(crate) fn set_subscription_state(custom: Option<&Value>, subscription: Value) -> Value {
+    let mut next = normalize_custom(custom);
+    next["subscription"] = subscription;
+    normalize_custom(Some(&next))
+}
+
 pub(crate) fn normalize_custom(value: Option<&Value>) -> Value {
     let raw = value.unwrap_or(&Value::Null);
     let auth_error = normalize_error_state(raw.get("auth_error"));
@@ -91,6 +100,7 @@ pub(crate) fn normalize_custom(value: Option<&Value>) -> Value {
         "created_at": raw_string_field(raw, "created_at"),
         "last_used_at": raw_string_field(raw, "last_used_at"),
         "usage_info": usage_info,
+        "subscription": normalize_subscription(raw.get("subscription")),
         "auth_status": auth_status,
         "auth_status_message": raw_string_field(raw, "auth_status_message"),
         "auth_error": if auth_status == "error" { auth_error } else { Value::Null },

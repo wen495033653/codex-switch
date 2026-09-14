@@ -95,6 +95,17 @@
   border-color: rgba(245, 158, 11, 0.3);
 }
 
+.delinquent-badge {
+  font-size: 11px;
+  color: #fca5a5;
+  padding: 2px 8px;
+  background: rgba(248, 114, 114, 0.14);
+  border: 1px solid rgba(248, 114, 114, 0.22);
+  border-radius: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .reset-credits-badge {
   font-size: 11px;
   color: #86efac;

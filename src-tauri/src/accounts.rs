@@ -16,6 +16,7 @@ const OAUTH_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 const OAUTH_AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const OAUTH_SCOPE: &str = "openid profile email offline_access";
 const CHATGPT_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CHATGPT_SUBSCRIPTION_ENDPOINT: &str = "https://chatgpt.com/backend-api/subscriptions";
 
 pub(crate) struct ImportTokenResult {
     pub(crate) account: Option<Value>,

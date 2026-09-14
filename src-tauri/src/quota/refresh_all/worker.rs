@@ -6,12 +6,17 @@ use crate::{
     accounts::{read_store_value, read_store_with_active_sync},
     events::emit_store_updated,
     json_util::value_u64_field,
-    quota::usage_store::{get_usage_with_auth_retry, update_account_usage_result},
+    quota::{
+        subscription::refresh_account_subscription,
+        usage_store::{get_usage_with_auth_retry, update_account_usage_result},
+    },
     time_util::now_string,
 };
 use serde_json::{json, Value};
 use std::{sync::Arc, thread};
 use tauri::AppHandle;
+
+const SUBSCRIPTION_TIMEOUT_MS: u64 = 30_000;
 
 pub(super) fn start_refresh_all_quotas_in_background(
     app: AppHandle,
@@ -42,6 +47,11 @@ pub(super) fn start_refresh_all_quotas_in_background(
             let store_result = update_account_usage_result(&target.profile_id, usage_result);
             let store_update_ok = store_result.is_ok();
             if let Ok(store) = store_result {
+                emit_store_updated(&app, store);
+            }
+            if let Some(store) =
+                refresh_account_subscription(&target.profile_id, SUBSCRIPTION_TIMEOUT_MS)
+            {
                 emit_store_updated(&app, store);
             }
 

@@ -1,5 +1,6 @@
 import { getChatgptAccountId, isApiModeAccount } from './account';
 import { safeParseJwt } from './jwt';
+import { getSubscription } from './subscription';
 import { getResetCredits, getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
 
 const PLAN_TYPE_ALIASES = {
@@ -48,6 +49,7 @@ export function parseAuthInfo(account) {
             usage: null,
             usageWindows: [],
             resetCredits: null,
+            subscription: null,
             expiresAt: '',
             expiresAtStale: false,
             subscriptionLastCheckedAt: '',
@@ -75,6 +77,7 @@ export function parseAuthInfo(account) {
             usage: null,
             usageWindows: [],
             resetCredits: null,
+            subscription: null,
             expiresAt: '',
             expiresAtStale: false,
             subscriptionLastCheckedAt: '',
@@ -100,15 +103,21 @@ export function parseAuthInfo(account) {
     // /wham/usage plan_type refreshes with every quota sync; the id_token claim only
     // changes when the token is re-issued, so prefer the usage value when present.
     const usagePlanType = normalizePlanType(usage && usage.plan_type);
-    const planType = usagePlanType || normalizePlanType(auth.chatgpt_plan_type);
+    const subscription = getSubscription(custom);
+    const planType = usagePlanType
+        || normalizePlanType(subscription && subscription.planType)
+        || normalizePlanType(auth.chatgpt_plan_type);
     const isFreePlan = planType.toLowerCase() === 'free';
-    const expiresAt = auth.chatgpt_subscription_active_until || '';
+    // The id_token claim is a snapshot OpenAI does not always refresh, so the renewal date
+    // comes from the subscriptions endpoint whenever it has been read for this account.
+    const claimExpiresAt = auth.chatgpt_subscription_active_until || '';
+    const expiresAt = subscription ? subscription.activeUntil : claimExpiresAt;
     const subscriptionLastCheckedAt = auth.chatgpt_subscription_last_checked || '';
-    // OpenAI does not always re-check the subscription when it re-issues the id_token:
-    // an expired claim next to a paid usage plan means the claim is stale, not the plan.
-    const expiresAtTime = Date.parse(expiresAt);
-    const expiresAtStale = Boolean(usagePlanType) && !isFreePlan
-        && Number.isFinite(expiresAtTime) && expiresAtTime <= Date.now();
+    // Without endpoint data an expired claim next to a paid plan proves only that the claim
+    // is stale, so the card must not present that past date as the renewal date.
+    const claimExpiresAtTime = Date.parse(claimExpiresAt);
+    const expiresAtStale = !subscription && Boolean(usagePlanType) && !isFreePlan
+        && Number.isFinite(claimExpiresAtTime) && claimExpiresAtTime <= Date.now();
 
     const orgs = Array.isArray(auth.organizations) ? auth.organizations : [];
     let workspace = '工作空间缺失';
@@ -144,6 +153,7 @@ export function parseAuthInfo(account) {
         usage,
         usageWindows,
         resetCredits,
+        subscription,
         expiresAt: isFreePlan ? '' : expiresAt,
         expiresAtStale,
         subscriptionLastCheckedAt,

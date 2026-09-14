@@ -46,6 +46,13 @@ fn update_account_usage_preserve_tokens(
     add_account_to_store(account_with_usage_result(account, usage_result), false)
 }
 
+/// Subscription renewal data lives behind a second endpoint, so every successful quota
+/// refresh also re-reads it. A failed subscription read keeps the stored snapshot and the
+/// quota result, which is why the previous store value is the fallback here.
+fn store_with_refreshed_subscription(profile_id: &str, store: Value) -> Value {
+    refresh_account_subscription(profile_id, MANUAL_QUOTA_TIMEOUT_MS).unwrap_or(store)
+}
+
 pub(super) struct AccountRefreshContext {
     pub(super) account: Value,
     pub(super) exchange: Value,
@@ -129,6 +136,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
         match get_usage(&access_token, &account_id, MANUAL_QUOTA_TIMEOUT_MS) {
             Ok(usage_info) => {
                 let store = update_account_usage_preserve_tokens(&account, Ok(usage_info))?;
+                let store = store_with_refreshed_subscription(target_profile_id, store);
                 return Ok(json!({
                     "ok": true,
                     "message": "配额已刷新",
@@ -189,6 +197,7 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
         }));
     }
 
+    let store = store_with_refreshed_subscription(&context.profile_id, store);
     let new_account = find_store_account(&context.profile_id)?;
     let new_usage = new_account
         .get("custom")

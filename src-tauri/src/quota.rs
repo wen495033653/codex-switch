@@ -1,6 +1,7 @@
 mod active_usage;
 mod auth_refresh;
 mod refresh_all;
+mod subscription;
 mod usage_store;
 
 pub(crate) use active_usage::{
@@ -11,4 +12,5 @@ pub(crate) use refresh_all::{
     begin_refresh_all_quotas, get_refresh_all_status_value, start_background_quota_auto_refresher,
     RefreshAllRuntime,
 };
+pub(crate) use subscription::refresh_account_subscription;
 pub(crate) use usage_store::sync_account_usage_in_background;

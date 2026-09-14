@@ -24,7 +24,7 @@ before(async () => {
 
 after(async () => { await server?.close(); });
 
-function account({ claimPlan = 'pro', activeUntil = '2026-09-04T12:29:43+00:00', usagePlan = 'pro', resetCredits = { available_count: 3, applicable_available_count: 0 } } = {}) {
+function account({ claimPlan = 'pro', activeUntil = '2026-09-04T12:29:43+00:00', usagePlan = 'pro', resetCredits = { available_count: 3, applicable_available_count: 0 }, subscription = null } = {}) {
   const claims = {
     email: 'fixture@example.invalid',
     'https://api.openai.com/auth': {
@@ -44,6 +44,7 @@ function account({ claimPlan = 'pro', activeUntil = '2026-09-04T12:29:43+00:00',
     custom: {
       auth_status: 'active',
       usage_status: 'ok',
+      subscription,
       usage_info: {
         rate_limit: {
           primary_window: { used_percent: 100, limit_window_seconds: 604800, reset_at: 1789805431 },
@@ -59,6 +60,7 @@ function account({ claimPlan = 'pro', activeUntil = '2026-09-04T12:29:43+00:00',
 
 test('plan type prefers the fresh usage plan over the id_token claim', () => {
   assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: 'pro' })).planType, 'pro');
+  assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: '', subscription: SUBSCRIPTION })).planType, 'pro');
   assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: 'prolite' })).planType, 'pro');
   assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: '' })).planType, 'plus');
   assert.equal(parseAuthInfo(account({ claimPlan: 'pro', usagePlan: 'free' })).showExpiresAt, false);
@@ -104,13 +106,67 @@ test('account card shows the available reset count and hides it at zero', () => 
   assert.doesNotMatch(renderCard(account({ resetCredits: null })), /reset-credits-badge/);
 });
 
-test('an expired claim next to a paid usage plan is reported as stale, not as the expiry', () => {
+const SUBSCRIPTION = {
+  active_until: '2026-10-10T13:30:31Z',
+  plan_type: 'pro',
+  will_renew: true,
+  is_delinquent: false,
+  fetched_at: '2026-09-14T07:00:00Z'
+};
+
+test('the renewal date comes from the subscription endpoint and falls back to the claim', () => {
+  const withEndpoint = parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00', subscription: SUBSCRIPTION }));
+  assert.equal(withEndpoint.expiresAt, '2026-10-10T13:30:31Z');
+  assert.equal(withEndpoint.expiresAtStale, false);
+  assert.deepEqual(withEndpoint.subscription, {
+    activeUntil: '2026-10-10T13:30:31Z',
+    planType: 'pro',
+    willRenew: true,
+    isDelinquent: false,
+    fetchedAt: '2026-09-14T07:00:00Z'
+  });
+
+  const withoutEndpoint = parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00' }));
+  assert.equal(withoutEndpoint.expiresAt, '2026-09-04T12:29:43+00:00');
+  assert.equal(withoutEndpoint.subscription, null);
+
+  assert.equal(parseAuthInfo(account({ subscription: { plan_type: 'pro' } })).subscription, null);
+  assert.equal(parseAuthInfo(account({ subscription: { active_until: '  ' } })).subscription, null);
+  assert.equal(parseAuthInfo({ type: 'api', api: { configured: true } }).subscription, null);
+});
+
+test('account card shows the endpoint renewal date and the renewal tooltip', () => {
+  const renewing = renderCard(account({ subscription: SUBSCRIPTION }));
+  assert.match(renewing, /<span class="expire-date" title="订阅到期日期，到期后自动续费">到期 2026\/10\/10<\/span>/);
+  assert.doesNotMatch(renewing, /到期时间未同步|delinquent-badge/);
+
+  const ending = renderCard(account({ subscription: { ...SUBSCRIPTION, will_renew: false } }));
+  assert.match(ending, /title="订阅到期日期，到期后不再续费"/);
+
+  const unknown = renderCard(account({ subscription: { active_until: '2026-10-10T13:30:31Z' } }));
+  assert.match(unknown, /title="订阅到期日期"/);
+
+  const english = renderCard(account({ subscription: SUBSCRIPTION }), 'en');
+  assert.match(english, /title="Subscription renewal date; renews automatically"/);
+});
+
+test('a past-due subscription is flagged on the card', () => {
+  const html = renderCard(account({ subscription: { ...SUBSCRIPTION, is_delinquent: true } }));
+  assert.match(html, /<span class="delinquent-badge" title="[^"]*">欠费<\/span>/);
+  assert.match(renderCard(account({ subscription: { ...SUBSCRIPTION, is_delinquent: true } }), 'en'), />Past due<\/span>/);
+
+  assert.doesNotMatch(renderCard(account({ subscription: SUBSCRIPTION })), /delinquent-badge/);
+  assert.doesNotMatch(renderCard(account({ subscription: { active_until: '2026-10-10T13:30:31Z' } })), /delinquent-badge/);
+});
+
+test('an expired claim without endpoint data is reported as stale, not as the expiry', () => {
   const stale = parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00', usagePlan: 'pro' }));
   assert.equal(stale.expiresAtStale, true);
   assert.equal(stale.expiresAt, '2026-09-04T12:29:43+00:00');
   assert.equal(parseAuthInfo(account({ activeUntil: '2099-01-01T00:00:00Z', usagePlan: 'pro' })).expiresAtStale, false);
   assert.equal(parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00', usagePlan: '' })).expiresAtStale, false);
   assert.equal(parseAuthInfo(account({ activeUntil: '', usagePlan: 'pro' })).expiresAtStale, false);
+  assert.equal(parseAuthInfo(account({ activeUntil: '2026-09-04T12:29:43+00:00', subscription: SUBSCRIPTION })).expiresAtStale, false);
 
   const html = renderCard(account({ activeUntil: '2026-09-04T12:29:43+00:00', usagePlan: 'pro' }));
   assert.match(html, /<span class="expire-date expire-date-stale" title="[^"]*PRO[^"]*">到期时间未同步<\/span>/);

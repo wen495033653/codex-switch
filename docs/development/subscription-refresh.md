@@ -2,39 +2,76 @@
 
 ## 问题与根因（2026-09-14）
 
-- 账号卡片上的套餐徽标和“到期 {date}”来自 `tokens.id_token` 的 claims：`chatgpt_plan_type`、`chatgpt_subscription_active_until`（同一 claims 里还有 `chatgpt_subscription_last_checked`）。
-- 这些 claims 只在 refresh_token grant 重新签发 id_token 时才可能变化。5.4.7 及之前，“刷新配额”只用旧 access_token 请求 `/wham/usage`，仅在返回 401/403 时才刷新 token，所以套餐徽标会一直停在旧值。
-- `/wham/usage` 响应里带 `plan_type` 和 `rate_limit_reset_credits {available_count, applicable_available_count}`，修改前 `normalize_usage_info` 把两者都丢弃了。`/wham/rate-limit-reset-credits` 可列出每张重置券的 `granted_at`/`expires_at`，未接入。
+- 账号卡片上的套餐徽标和“到期 {date}”原本只来自 `tokens.id_token` 的 claims：`chatgpt_plan_type`、`chatgpt_subscription_active_until`。
+- 这些 claims 是 OpenAI 签发 id_token 时写入的快照，且不保证在重新签发时更新。续费或改套餐后，卡片会一直显示旧的套餐和到期日。
+- `/wham/usage` 响应里带 `plan_type` 和 `rate_limit_reset_credits {available_count, applicable_available_count}`，原先 `normalize_usage_info` 把两者都丢弃了。
 
-## 本机证据（2026-09-14，账号只记 account_id 前 8 位）
+## 数据来源验证（2026-09-14，账号只记 account_id 前 8 位）
 
-- `672f189a`（pro，claims 到期 2026-09-04 已过）：当天通过 refresh_token grant 重签 3 次（04:13、04:49、06:00 UTC），每次 access_token 都轮换并落盘，新 id_token 的 `active_until`/`last_checked` 始终停在 2026-09-04。
-- `6eb799f4`（pro，claims 到期 2026-09-19 未过）：06:00 UTC 重签一次，`active_until`/`last_checked` 同样不变（仍为 09-19 / 09-06）。
-- CPA（香港服务器 `cli-proxy-api`）持有的 `eb2ec034`、`a4c2d3b4`（plus）在 2026-09-13 被 CPA 重签，claims 也停在 2026-09-04；CPA 管理页“续期时间”读的就是同一个 claim，没有别的来源。
-- Codex OAuth access_token 访问 `/backend-api/accounts/check/v4-2023-04-27` 返回 403；`/wham/accounts/check` 只有 `plan_type`。
-- 结论：refresh_token 重签拿不到新的订阅到期日；可靠的实时套餐只有 `/wham/usage` 的 `plan_type`。
+### refresh_token 重签拿不到到期日
 
-## 当前实现（5.4.9）
+- `672f189a`（pro，claim 到期 2026-09-04 已过）：当天重签 3 次（04:13、04:49、06:00 UTC），access_token 每次都轮换并落盘，新 id_token 的 `active_until`/`last_checked` 始终停在 2026-09-04。
+- `6eb799f4`（pro，claim 到期 2026-09-19 未过）：重签一次，claims 同样不变。
+- 结论：订阅是否过期都一样，refresh_token grant 不会刷新订阅 claims。
 
-1. `normalize_usage_info` 保留 `plan_type` 和 `reset_credits`（兼容 API 原始字段名 `rate_limit_reset_credits` 与已存储的 `reset_credits`）。
-2. Codex 会话 `token_count` 事件解析 `rate_limits.plan_type`；该来源没有重置券信息，当前账号从会话同步 usage 时沿用上一次 API 返回的 `reset_credits` 和缺失的 `plan_type`（`quota/usage_store/update.rs`）。
-3. “刷新配额”、“刷新所有配额”和定时刷新都只拉配额，不换 token；只有 `/wham/usage` 返回 401/403 时才走 refresh_token 重签（与 5.4.7 相同）。需要强制重签用“查看 Refresh Token”里的“刷新 Refresh Token”。
-4. 前端 `parseAuthInfo`：套餐优先取 `usage_info.plan_type`，无则回退 id_token claim；新增 `resetCredits`、`expiresAtStale`、`subscriptionLastCheckedAt`。
-5. 账号卡片：`available_count > 0` 时显示“可重置 {count} 次”徽标；claims 到期时间已过而 usage 套餐仍为付费时，显示“到期时间未同步”并在 tooltip 里给出旧到期时间、当前套餐和 OpenAI 最后核对时间。
+### 找到权威来源 `/backend-api/subscriptions`
+
+线索来自 [codex2api PR #670](https://github.com/james-6-23/codex2api/pull/670)（"Query /backend-api/subscriptions with Codex CLI identity first"）和 [sub2api issue #3606](https://github.com/Wei-Shaw/sub2api/issues/3606)（Codex 内部接口所需的 header）。
+
+```
+GET https://chatgpt.com/backend-api/subscriptions?account_id=<account_id>
+Authorization: Bearer <access_token>
+Accept: application/json
+ChatGPT-Account-ID: <account_id>
+OpenAI-Beta: codex-1
+Originator: Codex Desktop
+User-Agent: codex_cli_rs/...
+```
+
+响应包含 `plan_type`、`active_start`、`active_until`、`will_renew`、`is_delinquent`、`billing_period`、`grace_period_end_timestamp` 等。
+
+本机五个账号实测（claim vs 接口）：
+
+| 账号 | claim active_until | 接口 active_until | will_renew | is_delinquent |
+| --- | --- | --- | --- | --- |
+| `672f189a` pro | 2026-09-04 | 2026-10-10 | true | false |
+| `6eb799f4` pro | 2026-09-19 | 2026-09-19 | true | false |
+| `94b94237` prolite | 2026-10-14 | 2026-10-14 | true | false |
+| `eb2ec034` plus | 2026-09-04 | 2026-10-04 | true | true |
+| `a4c2d3b4` plus | 2026-09-04 | 2026-10-04 | true | true |
+
+### 访问条件
+
+- 必须带上面全部 header。缺 `Accept`、`ChatGPT-Account-ID`、`OpenAI-Beta` 或 Codex `User-Agent` 会被 Cloudflare 返回 403 HTML。
+- **必须走 HTTP/1.1**。同一请求在 reqwest 默认的 HTTP/2 下稳定返回 403 HTML，`http1_only()` 下返回 200（本机探针对比验证）。`/wham/usage` 没有这个限制，保持 HTTP/2 不变。
+- 偶发 403：连续快速请求多个账号时出现过一次，单独重试即成功。属于限流，不是凭据问题。
+- 其它已排查且拿不到到期日的接口：`/wham/accounts/check`、`/wham/profiles/me`、`/wham/settings/user`、`/wham/config/bundle`、`auth.openai.com/oauth/userinfo`、`/backend-api/accounts/check/v4-2023-04-27`、`/backend-api/me`。
+
+## 当前实现
+
+1. `accounts/usage/client.rs::get_subscription` 请求上述接口（HTTP/1.1 + Codex 身份头），`accounts/usage/state/subscription.rs` 归一化为 `custom.subscription`：`active_until`、`plan_type`、`will_renew`、`is_delinquent`、`fetched_at`。缺 `active_until` 视为无效，不写入。
+2. `quota/subscription.rs::refresh_account_subscription` 从 store 读取当前凭据（而不是由调用方传入，避免用到已轮换的 token），拉取成功且内容变化才写回。失败时保留上一次快照，并把 code、status、message、原始响应写入 stderr（`[subscription]` 前缀，账号只记前 8 位）。
+3. 调用点：手动“刷新配额”、“刷新所有配额”与定时刷新、导入账号后的后台同步。都不额外重签 token。
+4. `normalize_usage_info` 保留 `plan_type` 和 `reset_credits`；Codex 会话 `token_count` 事件解析 `rate_limits.plan_type`，该来源没有重置券信息，当前账号从会话同步时沿用上一次 API 返回的值。
+5. 前端 `parseAuthInfo`：到期日优先取 `custom.subscription.active_until`，接口从未成功过才回退 id_token claim；套餐优先取 `usage_info.plan_type`，其次 `subscription.plan_type`，最后 claim。
+6. 账号卡片：到期徽标 tooltip 区分“到期后自动续费”和“到期后不再续费”；`is_delinquent` 为 true 时显示“欠费”徽标；`available_count > 0` 时显示“可重置 {count} 次”。仅在接口从未成功、claim 已过期且 usage 套餐仍为付费时，才显示“到期时间未同步”，避免把已知错误的过期日期当成真实到期时间。
 
 ## 5.4.8 到 5.4.9 的变更原因
 
-- 5.4.8 让“刷新配额”先重签 token，并在后台刷新发现 claims 过期（套餐不一致或付费套餐到期日已过）时每 24 小时重签一次。
-- 2026-09-14 的真实重签证明重签拿不到新到期日；而 refresh_token 轮换会让与 CPA 共用同一 refresh_token 的账号在对方下次刷新时报 `refresh_token_reused`（当天 `eb2ec034`、`a4c2d3b4` 在 codex-switch 里就是这样失效的）。重签只有成本没有收益，因此 5.4.9 去掉后台自动重签，“刷新配额”恢复为只拉配额。
+- 5.4.8 让“刷新配额”先重签 token，并在后台发现 claims 过期时每 24 小时重签一次，目的是刷新订阅信息。
+- 上述验证证明重签拿不到新到期日；而 refresh_token 轮换会让与 CPA 共用同一 refresh_token 的账号在对方下次刷新时报 `refresh_token_reused`（当天 `eb2ec034`、`a4c2d3b4` 就是这样在 codex-switch 里失效的）。
+- 因此 5.4.9 去掉后台自动重签，“刷新配额”恢复为只拉配额，并改用 `/backend-api/subscriptions` 获取真实到期日。
 
 ## 已知边界
 
-- 到期日期仍只能来自 id_token claims，OpenAI 何时更新由其后端决定，本项目无法触发。
-- 与 CPA 共用 refresh_token 的账号，任一方重签都会让另一方在下次刷新时失效；自动认证刷新（token 到期前 30 分钟）仍会重签，这是既有行为。
-- 重置次数只展示 `available_count`。
+- `/backend-api/subscriptions` 是非公开接口，字段和路径可能随 OpenAI 更新变化；失败时界面退回 claim 或“到期时间未同步”，不会报错中断配额刷新。
+- 与 CPA 共用 refresh_token 的账号，任一方重签都会让另一方在下次刷新时失效。自动认证刷新（token 到期前 30 分钟）仍会重签，这是既有行为。
+- 重置次数只展示 `available_count`，不展示 `applicable_available_count` 和每张券的到期时间。
+- 旧版本（5.4.8 及以前）写 accounts.json 时会丢弃 `custom.subscription` 字段；新旧版本交替运行时该字段会在下次刷新后重新补上。
 
-## 验证记录
+## 验证记录（2026-09-14）
 
-- 2026-09-14（5.4.8）：`cargo fmt --check`、`cargo test`（242 passed、2 ignored）、`cargo clippy -- -D warnings`、`npm run check`、Node 回归 22 passed；真实手动刷新 `672f189a` 一次，claims 不变。
-- 2026-09-14（5.4.9）：真实重签 `672f189a` 与 `6eb799f4` 各一次（`CODEX_SWITCH_REAL_REFRESH_PROFILE_ID=<profile_id> cargo test real_manual_refresh_reissues_subscription_claims -- --ignored --nocapture`，5.4.8 代码），两账号 claims 均不变；随后的离线检查结果见本文件末尾。
-- 5.4.9 离线检查：`cargo fmt --check`、`cargo test`（236 passed、2 ignored）、`cargo clippy -- -D warnings`、`npm run check`、Node 回归 22 passed 全部通过。未做安装版 UI 点击验证。
+- 真实运行：对全部 5 个账号执行 `CODEX_SWITCH_REAL_SUBSCRIPTION_PROFILE_ID=<profile_id> cargo test real_subscription_endpoint_fills_renewal_date -- --ignored --nocapture`，均成功写入 `custom.subscription` 并回读确认，数值见上表。其中 `94b94237` 首次遇到偶发 403，重试成功，失败日志按设计记录了 status 和原始响应。
+- 真实运行：对 `672f189a`、`6eb799f4` 执行 refresh_token 重签各一次，claims 不变（5.4.8 代码）。
+- 离线检查：`cargo fmt --check`、`cargo test`（240 passed、3 ignored）、`cargo clippy --all-targets -- -D warnings`、`npm run check`、Node 回归 25 passed 全部通过。
+- 未做：安装版 UI 点击验证；“刷新所有配额”“定时刷新”两条路径的真实后台观察（与手动路径共用 `refresh_account_subscription`）。
