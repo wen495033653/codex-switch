@@ -669,13 +669,12 @@ html[data-theme="light"] .account-card-name {
   font-weight: 600;
 }
 
-/* CJK badge text needs 12px to stay legible; Latin badges keep 10px. The row still fits
-   a 290px card with plan + expiry + past-due + reset badges on one line. */
+/* CJK badge text is one step larger than the Latin plan badge so the strokes stay
+   readable without the badges outgrowing the row. */
 .expire-date,
 .delinquent-badge,
 .reset-credits-badge {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
 }
 
 .current-badge,
