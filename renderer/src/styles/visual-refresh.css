@@ -661,7 +661,7 @@ html[data-theme="light"] .account-card-name {
 .account-id-badge,
 .api-profile-test-tag {
   min-height: 21px;
-  padding: 3px 7px;
+  padding: 3px 6px;
   display: inline-flex;
   align-items: center;
   border-radius: 6px;
@@ -669,10 +669,13 @@ html[data-theme="light"] .account-card-name {
   font-weight: 600;
 }
 
+/* CJK badge text needs 12px to stay legible; Latin badges keep 10px. The row still fits
+   a 290px card with plan + expiry + past-due + reset badges on one line. */
+.expire-date,
 .delinquent-badge,
 .reset-credits-badge {
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .current-badge,
