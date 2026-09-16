@@ -1,7 +1,7 @@
 use super::{
     detect::{
         build_ide_summary, normalize_executable_path, normalize_ide_entries,
-        process_entry_executable_path, process_entry_pid,
+        process_entry_executable_path, process_entry_parent_pid, process_entry_pid,
     },
     *,
 };
@@ -28,11 +28,12 @@ where
         }));
     }
 
-    let pids: Vec<u64> = entries
+    let process_tree: Vec<(u64, u64)> = entries
         .iter()
-        .map(process_entry_pid)
-        .filter(|pid| *pid > 0)
+        .map(|entry| (process_entry_pid(entry), process_entry_parent_pid(entry)))
+        .filter(|(pid, _)| *pid > 0)
         .collect();
+    let pids: Vec<u64> = process_tree.iter().map(|(pid, _)| *pid).collect();
     let mut executables: Vec<String> = entries
         .iter()
         .map(process_entry_executable_path)
@@ -41,14 +42,15 @@ where
     executables.sort_by_key(|path| normalize_executable_path(path));
     executables.dedup_by_key(|path| normalize_executable_path(path));
 
-    for pid in &pids {
-        kill_process_tree(*pid)?;
-    }
+    kill_root_process_trees(&process_tree)?;
     let mut alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
-        for pid in &alive {
-            kill_process_tree(*pid)?;
-        }
+        let alive_tree = process_tree
+            .iter()
+            .copied()
+            .filter(|(pid, _)| alive.contains(pid))
+            .collect::<Vec<_>>();
+        kill_root_process_trees(&alive_tree)?;
         alive = wait_for_pids_exit(&alive, 6_000);
     }
     if !alive.is_empty() {

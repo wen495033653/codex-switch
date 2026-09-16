@@ -1,6 +1,6 @@
 use super::{
-    codex_processes_have_cdp_launch, inject_codex_mobile_no_replace_hook, kill_process_tree,
-    launch_codex_process_with_options, launch_codex_with_cdp_hooks, wait_for_pids_exit,
+    codex_processes_have_cdp_launch, inject_codex_mobile_no_replace_hook, kill_root_process_trees,
+    launch_codex_process_with_options, launch_codex_with_cdp_hooks, root_pids, wait_for_pids_exit,
     CodexAppOpenOutcome, CodexCdpLaunchHooks, CodexProcess,
 };
 use crate::{
@@ -499,10 +499,8 @@ fn relaunch_running_codex_processes(
     post_exit_session_sync: bool,
     post_exit_remote_control_runtime_sync: bool,
 ) -> Result<usize, String> {
-    let pids = processes
-        .iter()
-        .map(|process| process.pid)
-        .collect::<Vec<_>>();
+    let process_tree = super::codex_app_watcher::codex_process_tree(processes);
+    let pids = process_tree.iter().map(|(pid, _)| *pid).collect::<Vec<_>>();
     let mut executables = processes
         .iter()
         .map(|process| process.executable_path.clone())
@@ -526,13 +524,12 @@ fn relaunch_running_codex_processes(
             "origin": format!("{origin:?}"),
             "mode": format!("{mode:?}"),
             "pids": pids.clone(),
+            "rootPids": root_pids(&process_tree),
             "executables": executables.clone()
         }),
     );
 
-    for pid in &pids {
-        kill_process_tree(*pid)?;
-    }
+    kill_root_process_trees(&process_tree)?;
     let alive = wait_for_pids_exit(&pids, 12_000);
     if !alive.is_empty() {
         return Err(format!(

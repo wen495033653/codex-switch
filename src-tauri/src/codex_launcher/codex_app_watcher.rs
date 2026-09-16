@@ -1,4 +1,4 @@
-use super::{codex_desktop_display_name, codex_desktop_support_status, detect_ide_app};
+use super::{codex_desktop_display_name, codex_desktop_support_status, detect_ide_app, root_pids};
 use crate::session_sync_diagnostics::log_session_sync_event;
 use crate::time_util::now_string;
 use serde_json::{json, Value};
@@ -655,19 +655,15 @@ fn codex_pids(processes: &[CodexProcess]) -> Vec<u64> {
     processes.iter().map(|process| process.pid).collect()
 }
 
+pub(crate) fn codex_process_tree(processes: &[CodexProcess]) -> Vec<(u64, u64)> {
+    processes
+        .iter()
+        .map(|process| (process.pid, process.parent_pid))
+        .collect()
+}
+
 fn codex_root_pids(processes: &[CodexProcess]) -> Vec<u64> {
-    let all_pids = processes
-        .iter()
-        .map(|process| process.pid)
-        .collect::<HashSet<_>>();
-    let mut root_pids = processes
-        .iter()
-        .filter(|process| process.parent_pid == 0 || !all_pids.contains(&process.parent_pid))
-        .map(|process| process.pid)
-        .collect::<Vec<_>>();
-    root_pids.sort_unstable();
-    root_pids.dedup();
-    root_pids
+    root_pids(&codex_process_tree(processes))
 }
 
 fn running_codex_processes() -> Result<Vec<CodexProcess>, String> {
