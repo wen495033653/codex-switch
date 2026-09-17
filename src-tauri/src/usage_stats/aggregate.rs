@@ -8,7 +8,10 @@ use super::{
 };
 use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, UtcOffset};
 
 #[derive(Default)]
@@ -58,6 +61,62 @@ struct UsageRow {
     priced: bool,
     pricing_context: String,
     unpriced_reason: String,
+}
+
+/// The last aggregation and the window cut-offs it was computed for.
+pub(super) struct AggregateCache {
+    db_path: PathBuf,
+    starts: UsageWindowStarts,
+    response: Value,
+}
+
+/// The aggregation depends on the clock only through the three window cut-offs. With an unchanged
+/// database the previous answer is still exact as long as "today" starts at the same instant and no
+/// token event has slipped out of the 7 or 30 day window. That is checked through the timestamp
+/// index, instead of scanning every token event again on each poll.
+pub(super) fn aggregate_usage_cached(
+    connection: &Connection,
+    db_path: &Path,
+    now_seconds: i64,
+    warnings: &ScanWarnings,
+    database_changed: bool,
+    cache: &mut Option<AggregateCache>,
+) -> Result<Value, String> {
+    let starts = usage_window_starts(now_seconds);
+    if !database_changed {
+        if let Some(cached) = cache.as_ref() {
+            if cached.db_path == db_path
+                && cached.starts.today == starts.today
+                && !events_between(connection, cached.starts.days_7, starts.days_7)?
+                && !events_between(connection, cached.starts.days_30, starts.days_30)?
+            {
+                return Ok(cached.response.clone());
+            }
+        }
+    }
+    let response = aggregate_usage(connection, now_seconds, warnings)?;
+    *cache = Some(AggregateCache {
+        db_path: db_path.to_path_buf(),
+        starts,
+        response: response.clone(),
+    });
+    Ok(response)
+}
+
+// Whether a token event lies in `[from, to)`, i.e. left a window whose start moved from `from` to `to`.
+fn events_between(connection: &Connection, from: i64, to: i64) -> Result<bool, String> {
+    if to <= from {
+        // the clock went backwards: events may have re-entered the window
+        return Ok(to < from);
+    }
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_token_events WHERE timestamp_seconds >= ?1 AND timestamp_seconds < ?2)",
+            params![from, to],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|found| found == 1)
+        .map_err(|err| db_error("检查 token 统计窗口边界失败", err))
 }
 
 pub(super) fn aggregate_usage(

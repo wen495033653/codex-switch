@@ -38,8 +38,9 @@ pub(super) fn scan_codex_sessions(
     now: &str,
     warnings: &mut ScanWarnings,
     scan_states: &mut HashMap<String, SessionScanState>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let files = collect_session_files(&source.codex_home)?;
+    let mut changed = false;
     let scan_scope = session_scan_scope(source, stats_started_at_seconds);
     let mut seen_session_ids = HashSet::new();
     for path in files {
@@ -62,6 +63,8 @@ pub(super) fn scan_codex_sessions(
                 continue;
             }
         }
+        // everything below this point writes to the database
+        changed = true;
 
         let parsed = match parse_session_file(&path, window_starts) {
             Ok(parsed) => parsed,
@@ -155,7 +158,7 @@ pub(super) fn scan_codex_sessions(
             now,
         )?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 fn session_scan_scope(source: &UsageScanSource, stats_started_at_seconds: i64) -> String {

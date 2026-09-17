@@ -21,7 +21,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use {
-    aggregate::{aggregate_usage, usage_window_starts},
+    aggregate::{aggregate_usage_cached, usage_window_starts, AggregateCache},
     db::{
         meta_value, open_usage_connection, record_attribution_at, usage_db_path,
         META_STATS_STARTED_AT,
@@ -35,7 +35,8 @@ use {
     sources::default_usage_scan_sources,
 };
 
-static USAGE_STATS_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+// The scan lock also owns the aggregation cache, so both are only touched by one caller at a time.
+static USAGE_STATS_SCAN_LOCK: OnceLock<Mutex<Option<AggregateCache>>> = OnceLock::new();
 
 #[tauri::command]
 pub(crate) async fn usage_stats_get() -> Result<Value, String> {
@@ -78,14 +79,14 @@ pub(crate) fn record_current_attribution_if_available() -> Result<(), String> {
 }
 
 fn usage_stats_get_impl() -> Result<Value, String> {
-    let _scan_guard = USAGE_STATS_SCAN_LOCK
-        .get_or_init(|| Mutex::new(()))
+    let mut cache = USAGE_STATS_SCAN_LOCK
+        .get_or_init(|| Mutex::new(None))
         .lock()
         .map_err(|_| "token 统计扫描锁异常".to_string())?;
     let db_path = usage_db_path()?;
     let codex_home = codex_dir()?;
     let scan_sources = default_usage_scan_sources(&codex_home)?;
-    usage_stats_get_for_scan_sources(&db_path, &scan_sources, &now_string())
+    usage_stats_get_for_scan_sources(&db_path, &scan_sources, &now_string(), &mut cache)
 }
 
 #[cfg(test)]
@@ -94,13 +95,19 @@ fn usage_stats_get_for_paths(
     codex_home: &Path,
     now: &str,
 ) -> Result<Value, String> {
-    usage_stats_get_for_scan_sources(db_path, &[sources::main_usage_scan_source(codex_home)], now)
+    usage_stats_get_for_scan_sources(
+        db_path,
+        &[sources::main_usage_scan_source(codex_home)],
+        now,
+        &mut None,
+    )
 }
 
 fn usage_stats_get_for_scan_sources(
     db_path: &Path,
     scan_sources: &[UsageScanSource],
     now: &str,
+    cache: &mut Option<AggregateCache>,
 ) -> Result<Value, String> {
     let now_seconds =
         parse_rfc3339_seconds(now).ok_or_else(|| "token 统计当前时间无效".to_string())?;
@@ -112,8 +119,9 @@ fn usage_stats_get_for_scan_sources(
     let mut warnings = ScanWarnings::default();
     // 先一次性载入全部 cursor，避免每个 session 都单独查询 SQLite。
     let mut scan_states = load_session_scan_states(&connection)?;
+    let mut database_changed = false;
     for source in scan_sources {
-        scan_codex_sessions(
+        database_changed |= scan_codex_sessions(
             &connection,
             source,
             &window_starts,
@@ -123,8 +131,14 @@ fn usage_stats_get_for_scan_sources(
             &mut scan_states,
         )?;
     }
-    recompute_existing_costs_if_needed(&connection)?;
+    database_changed |= recompute_existing_costs_if_needed(&connection)?;
     warnings.missing_price = count_unpriced_sessions(&connection)?;
-    let response = aggregate_usage(&connection, now_seconds, &warnings)?;
-    Ok(response)
+    aggregate_usage_cached(
+        &connection,
+        db_path,
+        now_seconds,
+        &warnings,
+        database_changed,
+        cache,
+    )
 }

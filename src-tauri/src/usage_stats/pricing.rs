@@ -107,7 +107,7 @@ struct ModelPrice {
     long_context_threshold: Option<u64>,
 }
 
-pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Result<(), String> {
+pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Result<bool, String> {
     let existing: Option<String> = connection
         .query_row(
             "SELECT value FROM meta WHERE key = ?1",
@@ -117,7 +117,7 @@ pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Res
         .optional()
         .map_err(|err| db_error("读取 token 定价版本失败", err))?;
     if existing.as_deref() == Some(PRICING_UPDATED_AT) {
-        return Ok(());
+        return Ok(false);
     }
     recompute_existing_costs(connection)?;
     connection
@@ -129,7 +129,7 @@ pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Res
             params![META_PRICING_UPDATED_AT, PRICING_UPDATED_AT],
         )
         .map_err(|err| db_error("写入 token 定价版本失败", err))?;
-    Ok(())
+    Ok(true)
 }
 
 fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {

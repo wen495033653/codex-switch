@@ -339,6 +339,127 @@ fn cached_session_windows_age_from_token_events_without_rescanning_file() {
     fs::remove_dir_all(root).unwrap();
 }
 
+fn cached_stats(
+    db_path: &Path,
+    codex_home: &Path,
+    now: &str,
+    cache: &mut Option<AggregateCache>,
+) -> Value {
+    usage_stats_get_for_scan_sources(
+        db_path,
+        &[sources::main_usage_scan_source(codex_home)],
+        now,
+        cache,
+    )
+    .unwrap()
+}
+
+#[test]
+fn aggregation_cache_answers_an_unchanged_database_and_notices_new_data() {
+    let root = temp_root("aggregate-cache");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    record_attribution_at(
+        &db_path,
+        OWNER_TYPE_API_PROFILE,
+        "api-a",
+        PROVIDER_API,
+        "2026-06-15T00:00:00Z",
+    )
+    .unwrap();
+    let session_path = write_session(
+        &codex_home,
+        "15",
+        "rollout-aggregate-cache",
+        &[
+            session_meta_line(
+                "session-aggregate-cache",
+                PROVIDER_API,
+                "2026-06-15T01:00:00Z",
+                Some("gpt-5.5"),
+            ),
+            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
+        ],
+    );
+    let mut cache = None;
+
+    let first = cached_stats(&db_path, &codex_home, "2026-06-15T03:00:00Z", &mut cache);
+    // An unchanged database half a minute later must be answered from the cache, not by scanning
+    // every token event again. Emptying the table proves the second answer did not read it.
+    Connection::open(&db_path)
+        .unwrap()
+        .execute("DELETE FROM session_token_events", [])
+        .unwrap();
+    let second = cached_stats(&db_path, &codex_home, "2026-06-15T03:00:30Z", &mut cache);
+    assert_eq!(first, second);
+    assert_eq!(window_total(&second, "api_profiles", "api-a", "today"), 120);
+
+    // Appending to the session changes the database, so the cache must not be used.
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&session_path)
+        .unwrap();
+    use std::io::Write as _;
+    writeln!(
+        file,
+        "{}",
+        token_count_line("2026-06-15T03:01:00Z", 300, 0, 60, 15, 360, 258_400)
+    )
+    .unwrap();
+    drop(file);
+    let third = cached_stats(&db_path, &codex_home, "2026-06-15T03:02:00Z", &mut cache);
+    assert_eq!(window_total(&third, "api_profiles", "api-a", "today"), 360);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn aggregation_cache_recomputes_when_an_event_leaves_a_window() {
+    let root = temp_root("aggregate-cache-windows");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    record_attribution_at(
+        &db_path,
+        OWNER_TYPE_API_PROFILE,
+        "api-a",
+        PROVIDER_API,
+        "2026-06-15T00:00:00Z",
+    )
+    .unwrap();
+    write_session(
+        &codex_home,
+        "15",
+        "rollout-aggregate-window",
+        &[
+            session_meta_line(
+                "session-aggregate-window",
+                PROVIDER_API,
+                "2026-06-15T01:00:00Z",
+                Some("gpt-5.5"),
+            ),
+            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
+        ],
+    );
+    let mut cache = None;
+
+    let inside = cached_stats(&db_path, &codex_home, "2026-06-22T01:00:30Z", &mut cache);
+    assert_eq!(
+        window_total(&inside, "api_profiles", "api-a", "days_7"),
+        120
+    );
+    // Same day, unchanged database, one minute later: the only event is now older than seven days.
+    let outside = cached_stats(&db_path, &codex_home, "2026-06-22T01:01:30Z", &mut cache);
+    assert_eq!(window_total(&outside, "api_profiles", "api-a", "days_7"), 0);
+    assert_eq!(
+        window_total(&outside, "api_profiles", "api-a", "days_30"),
+        120
+    );
+
+    // A new day moves the start of "today", which also invalidates the cache.
+    let next_day = cached_stats(&db_path, &codex_home, "2026-06-23T01:01:30Z", &mut cache);
+    assert_eq!(window_total(&next_day, "api_profiles", "api-a", "today"), 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skips_sessions_before_stats_started_at() {
     let root = temp_root("started-at");
@@ -445,7 +566,8 @@ fn managed_instance_sessions_use_marker_attribution() {
     let mut sources = vec![main_usage_scan_source(&main_codex_home)];
     sources.extend(managed_instance_usage_scan_sources(&instances_dir).unwrap());
     let response =
-        usage_stats_get_for_scan_sources(&db_path, &sources, "2026-06-15T03:00:00Z").unwrap();
+        usage_stats_get_for_scan_sources(&db_path, &sources, "2026-06-15T03:00:00Z", &mut None)
+            .unwrap();
 
     assert_eq!(
         window_total(&response, "api_profiles", "cpa-plus", "all"),
