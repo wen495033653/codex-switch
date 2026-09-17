@@ -3,226 +3,24 @@ import { useApiProfilePagination } from '../hooks';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import {
   DEFAULT_API_TEST_MODEL,
-  getApiLastAvailableAt,
   getApiTestSignature,
   isFreshApiTest,
   normalizeApiTestModelInput,
   normalizeApiTestResults,
-  runApiProfilePrecheck
+  runApiProfilePrecheck,
 } from '../utils/apiPrecheck';
-import Modal from './Modal';
 import UsageStatsSummary from './UsageStatsSummary';
 import { useI18n } from '../i18n';
-
-function formatApiCheckTime(value, language) {
-  if (!Number.isFinite(value)) return '';
-  try {
-    return new Intl.DateTimeFormat(language, {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).format(new Date(value));
-  } catch {
-    return '';
-  }
-}
-
-function getApiCheckTimeText(test, t, language) {
-  if (!test) return '';
-  const timestamp = Number.isFinite(test.checkedAt) ? test.checkedAt : test.startedAt;
-  const formatted = formatApiCheckTime(timestamp, language);
-  if (!formatted) return '';
-  return test.loading
-    ? t('开始时间 {time}', { time: formatted })
-    : t('预检时间 {time}', { time: formatted });
-}
-
-function getApiLastAvailableTimeText(test, t, language) {
-  const timestamp = getApiLastAvailableAt(test);
-  const formatted = formatApiCheckTime(timestamp, language);
-  return formatted ? t('上次可用 {time}', { time: formatted }) : '';
-}
-
-function getApiTestModelOptions(test, fallbackModel) {
-  const models = Array.isArray(test && test.modelIds)
-    ? test.modelIds.map(item => String(item || '').trim()).filter(Boolean)
-    : [];
-  const uniqueModels = [...new Set(models)];
-  const fallback = normalizeApiTestModelInput(fallbackModel);
-  if (uniqueModels.length > 0) {
-    return uniqueModels.includes(fallback) ? uniqueModels : [fallback, ...uniqueModels];
-  }
-  return [fallback];
-}
-
-function getApiModelsStatus(test, t) {
-  if (!test) {
-    return { state: 'idle', text: t('等待 /models') };
-  }
-  if (test.loading) {
-    return { state: 'loading', text: t('正在获取 /models') };
-  }
-  const response = test.modelsResponse || null;
-  if (response && response.error) {
-    return { state: 'error', text: t('/models 请求失败') };
-  }
-  const status = response && Number.isFinite(response.status) ? response.status : null;
-  if (status && (status < 200 || status >= 300)) {
-    return { state: 'error', text: `/models HTTP ${status}` };
-  }
-  const models = Array.isArray(test.modelIds)
-    ? test.modelIds.map(item => String(item || '').trim()).filter(Boolean)
-    : [];
-  if (models.length > 0) {
-    if (!models.includes(DEFAULT_API_TEST_MODEL) && test.testModel === DEFAULT_API_TEST_MODEL) {
-      return { state: 'warning', text: t('/models：{count} 个模型，默认模型不在列表', { count: models.length }) };
-    }
-    return { state: 'success', text: t('/models：{count} 个模型', { count: models.length }) };
-  }
-  if (response) {
-    return { state: 'warning', text: t('/models 未返回可选模型') };
-  }
-  return { state: 'idle', text: t('等待 /models') };
-}
-
-function getApiTestState(test) {
-  if (!test) return 'idle';
-  if (test.loading) return 'loading';
-  return test.ok ? 'success' : 'error';
-}
-
-function getApiTestStateLabel(test, t) {
-  const state = getApiTestState(test);
-  if (state === 'loading') return t('预检中');
-  if (state === 'success') return t('可用');
-  if (state === 'error') return t('不可用');
-  return t('未预检');
-}
-
-function prettyApiTestBody(body) {
-  if (typeof body !== 'string' || !body) return '';
-  try {
-    return JSON.stringify(JSON.parse(body), null, 2);
-  } catch {
-    return body;
-  }
-}
-
-function formatApiTestJson(value) {
-  if (value === null || value === undefined) return '';
-  return JSON.stringify(value, null, 2);
-}
-
-function getApiTestResponseBody(response, t) {
-  if (!response) return '';
-  if (typeof response.body === 'string' && response.body) return prettyApiTestBody(response.body);
-  if (response.json !== null && response.json !== undefined) return formatApiTestJson(response.json);
-  if (response.error) return String(response.error);
-  return t('空响应');
-}
-
-function getApiTestResponseStatusLabel(response, t) {
-  if (!response) return t('未请求');
-  const status = Number.isFinite(response.status) ? response.status : null;
-  const statusText = response.statusText ? ` ${response.statusText}` : '';
-  return status ? `HTTP ${status}${statusText}` : (response.error ? t('请求失败') : t('无状态'));
-}
-
-function getApiModelsDetailLabel(test, t) {
-  const response = test && test.modelsResponse ? test.modelsResponse : null;
-  if (!response) return '/models';
-  const status = Number.isFinite(response.status) ? response.status : null;
-  if (status) return `/models ${status}`;
-  if (response.error) return t('/models 失败');
-  return t('/models 详情');
-}
-
-function ApiTestResponseBlock({ response, title }) {
-  const { t } = useI18n();
-  if (!response) return null;
-  const body = getApiTestResponseBody(response, t);
-
-  return (
-    <section className="api-test-response-block">
-      <div className="api-test-response-head">
-        <div className="api-test-response-title">{title}</div>
-        <div className="api-test-response-status">{getApiTestResponseStatusLabel(response, t)}</div>
-      </div>
-      <div className="api-test-response-endpoint" title={response.endpoint || ''}>
-        {response.endpoint || t('未返回 endpoint')}
-      </div>
-      <pre className="api-test-response-body">{body}</pre>
-    </section>
-  );
-}
-
-function ApiTestResponsesBlock({ request, response }) {
-  const { t } = useI18n();
-  if (!request && !response) return null;
-  const endpoint = (response && response.endpoint) || (request && request.endpoint) || '';
-  const requestBody = request ? formatApiTestJson(request.body || {}) : t('未发送请求');
-  const responseBody = response ? getApiTestResponseBody(response, t) : t('未返回响应');
-
-  return (
-    <section className="api-test-response-block api-test-chat-block">
-      <div className="api-test-response-head">
-        <div className="api-test-response-title">{t('Responses 调用')}</div>
-        <div className="api-test-response-status">{getApiTestResponseStatusLabel(response, t)}</div>
-      </div>
-      <div className="api-test-response-endpoint" title={endpoint}>
-        {endpoint || t('未返回 endpoint')}
-      </div>
-      <div className="api-test-chat-grid">
-        <div className="api-test-chat-pane">
-          <div className="api-test-chat-pane-title">{t('请求')}</div>
-          <pre className="api-test-response-body">{requestBody}</pre>
-        </div>
-        <div className="api-test-chat-pane">
-          <div className="api-test-chat-pane-title">{t('返回')}</div>
-          <pre className="api-test-response-body">{responseBody}</pre>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ApiTestDetailContent({ test }) {
-  const { language, t, translateRuntimeText } = useI18n();
-  const state = getApiTestState(test);
-  const timeText = getApiCheckTimeText(test, t, language);
-  const lastAvailableTimeText = getApiLastAvailableTimeText(test, t, language);
-  const shouldShowMessage = test.loading || !test.ok;
-
-  return (
-    <div className="api-test-detail-content">
-      <div className="api-test-detail-head">
-        <div className="api-test-detail-title-stack">
-          <div className="api-test-detail-time">{timeText || t('等待预检时间')}</div>
-          {lastAvailableTimeText && (
-            <div className="api-test-detail-time api-test-detail-time-available">
-              {lastAvailableTimeText}
-            </div>
-          )}
-        </div>
-        <span className={`api-test-panel-state ${state}`}>{getApiTestStateLabel(test, t)}</span>
-      </div>
-
-      {shouldShowMessage && (
-        <div className={`api-test-message ${state}`}>
-          {translateRuntimeText(test.message) || getApiTestStateLabel(test, t)}
-        </div>
-      )}
-
-      <ApiTestResponsesBlock
-        request={test.responsesRequest || test.chatRequest}
-        response={test.responsesResponse || test.chatResponse}
-      />
-    </div>
-  );
-}
+import {
+  getApiCheckTimeText,
+  getApiLastAvailableTimeText,
+  getApiTestModelOptions,
+  getApiModelsStatus,
+  getApiTestState,
+  getApiTestStateLabel,
+  getApiModelsDetailLabel,
+} from '../utils/apiTestView';
+import ApiCheckModal from './api/ApiCheckModal';
 
 export default function ApiModePage({
   activeApiProfileId,
@@ -577,112 +375,27 @@ export default function ApiModePage({
       </div>
 
       {checkModalProfileId && (
-        <Modal
-          title={detailProfileName || checkModalProfileId || t('API 预检')}
-          width="760px"
-          onClose={closeCheckModal}
-        >
-          <div className="api-check-controls">
-            <div className="api-check-model-field">
-              <span>{t('测试模型')}</span>
-              <div
-                className="api-check-model-picker"
-                onBlur={event => {
-                  if (!event.currentTarget.contains(event.relatedTarget)) {
-                    setModelDropdownOpen(false);
-                    commitTestModelDraft(checkModalProfileId);
-                  }
-                }}
-              >
-                <button
-                  type="button"
-                  className="api-check-model-trigger"
-                  disabled={Boolean(detailTest && detailTest.loading)}
-                  onClick={() => setModelDropdownOpen(open => !open)}
-                  aria-haspopup="listbox"
-                  aria-expanded={modelDropdownOpen}
-                >
-                  <span title={effectiveDetailModel}>{effectiveDetailModel}</span>
-                  <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" />
-                  </svg>
-                </button>
-                {modelDropdownOpen && !(detailTest && detailTest.loading) && (
-                  <div className="api-check-model-menu" role="listbox">
-                    {detailModelOptions.map(model => {
-                      const selected = model === effectiveDetailModel;
-                      return (
-                        <button
-                          key={model}
-                          type="button"
-                          className={`api-check-model-option ${selected ? 'selected' : ''}`}
-                          role="option"
-                          aria-selected={selected}
-                          onClick={() => {
-                            selectTestModelDraft(checkModalProfileId, model);
-                            setModelDropdownOpen(false);
-                          }}
-                        >
-                          {model}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              <div className="api-check-model-meta">
-                <div className={`api-check-model-status ${modelsStatus.state}`}>
-                  {modelsStatus.text}
-                </div>
-                {modelsDetailAvailable && (
-                  <button
-                    type="button"
-                    className={`api-check-model-tag ${modelsStatus.state} ${modelsDetailsOpen ? 'active' : ''}`}
-                    onClick={() => setModelsDetailsOpen(open => !open)}
-                    aria-expanded={modelsDetailsOpen}
-                  >
-                    {modelsDetailLabel}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {modelsDetailsOpen && modelsDetailAvailable && (
-            <div className="api-check-model-detail">
-              <ApiTestResponseBlock title={t('/models 详情')} response={detailTest.modelsResponse} />
-            </div>
-          )}
-
-          {visibleDetailTest ? (
-            <ApiTestDetailContent test={visibleDetailTest} />
-          ) : (
-            <div className="api-check-placeholder">{detailPlaceholderText}</div>
-          )}
-
-          <div className="api-test-detail-actions">
-            <button
-              type="button"
-              className="btn btn-primary api-test-detail-retest-button"
-              disabled={!detailProfile || Boolean(detailTest && detailTest.loading)}
-              onClick={() => handleTestBaseUrl(
-                detailProfile,
-                checkModalProfileId,
-                detailProfile.name || (detailTest && detailTest.profileName) || checkModalProfileId,
-                effectiveDetailModel
-              )}
-            >
-              {t('重新预检')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary api-test-detail-close-button"
-              onClick={closeCheckModal}
-            >
-              {t('关闭')}
-            </button>
-          </div>
-        </Modal>
+        <ApiCheckModal
+          checkModalProfileId={checkModalProfileId}
+          closeCheckModal={closeCheckModal}
+          commitTestModelDraft={commitTestModelDraft}
+          detailModelOptions={detailModelOptions}
+          detailPlaceholderText={detailPlaceholderText}
+          detailProfile={detailProfile}
+          detailProfileName={detailProfileName}
+          detailTest={detailTest}
+          effectiveDetailModel={effectiveDetailModel}
+          handleTestBaseUrl={handleTestBaseUrl}
+          modelDropdownOpen={modelDropdownOpen}
+          modelsDetailAvailable={modelsDetailAvailable}
+          modelsDetailLabel={modelsDetailLabel}
+          modelsDetailsOpen={modelsDetailsOpen}
+          modelsStatus={modelsStatus}
+          selectTestModelDraft={selectTestModelDraft}
+          setModelDropdownOpen={setModelDropdownOpen}
+          setModelsDetailsOpen={setModelsDetailsOpen}
+          visibleDetailTest={visibleDetailTest}
+        />
       )}
     </div>
   );
