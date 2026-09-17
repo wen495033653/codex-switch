@@ -1,5 +1,8 @@
+#[cfg(windows)]
 use serde_json::Value;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
 
 #[cfg(windows)]
 pub(crate) fn hide_command_window(command: &mut Command) {
