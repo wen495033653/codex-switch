@@ -1,6 +1,14 @@
-use super::*;
+use super::shell::hide_command_window;
 use crate::session_sync_diagnostics::log_session_sync_event;
+use serde_json::json;
 use std::process::Child;
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration as StdDuration, Instant},
+};
 use sysinfo::{Pid, System};
 
 const PROCESS_KILL_TIMEOUT_MS: u64 = 10_000;

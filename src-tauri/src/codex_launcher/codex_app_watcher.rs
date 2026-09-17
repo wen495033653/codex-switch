@@ -1,4 +1,7 @@
-use super::{codex_desktop_display_name, detect_ide_app, root_pids};
+use super::{
+    ide_snapshot::{codex_desktop_display_name, detect_ide_app},
+    process_control::root_pids,
+};
 use crate::session_sync_diagnostics::log_session_sync_event;
 use crate::time_util::now_string;
 use serde_json::{json, Value};

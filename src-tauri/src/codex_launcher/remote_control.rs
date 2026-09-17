@@ -1,6 +1,6 @@
-use super::kill_process_tree;
+use super::process_control::kill_process_tree;
 #[cfg(windows)]
-use super::{json_as_array, parse_json_output, run_pwsh};
+use super::shell::{json_as_array, parse_json_output, run_pwsh};
 use crate::{
     accounts::{
         auth_error_is_login_expired, get_codex_state_value, lookup_store_account,

@@ -1,23 +1,6 @@
-use crate::{
-    accounts::{random_urlsafe, store_payload},
-    json_util::{bool_field, raw_string_field, string_field, value_u64_field},
-    paths::codex_dir,
-    proxy_config::{normalize_proxy_display_url, normalize_proxy_url},
-    settings::update_settings_value,
-    time_util::now_string,
-};
 use serde_json::{json, Value};
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::{Arc, Mutex},
-    thread,
-    time::{Duration as StdDuration, Instant},
-};
-use tauri::{AppHandle, State};
-use time::OffsetDateTime;
+use std::{collections::HashMap, sync::Mutex, time::Instant};
+use tauri::AppHandle;
 
 pub(crate) struct IdePending {
     snapshot: Value,
@@ -32,23 +15,23 @@ pub(crate) struct IdeRuntime {
 }
 
 mod cdp;
-mod codex_app;
+pub(crate) mod codex_app;
 mod codex_app_instances;
 mod codex_app_open;
 mod codex_app_watcher;
-mod ide_snapshot;
+pub(crate) mod ide_snapshot;
 mod process_control;
-mod remote_control;
+pub(crate) mod remote_control;
 mod shell;
 
-pub(crate) use cdp::*;
-pub(crate) use codex_app::*;
+pub(crate) use codex_app::apply_codex_proxy_env_state_to_settings;
 pub(crate) use codex_app_instances::{codex_desktop_cli_source_path, codex_desktop_support_status};
-pub(crate) use codex_app_watcher::{CodexAppOpenOutcome, CodexProcess};
-pub(crate) use ide_snapshot::*;
-pub(crate) use process_control::*;
-pub(crate) use remote_control::*;
-pub(crate) use shell::*;
+pub(crate) use codex_app_watcher::CodexProcess;
+pub(crate) use ide_snapshot::{attach_ide_reopen, build_ide_reopen_payload};
+pub(crate) use remote_control::{
+    remote_control_codex_app_running, reset_remote_control_to_api_mode_settings,
+    sync_remote_control_runtime_for_current_settings,
+};
 
 pub(crate) fn start_codex_app_watcher() {
     codex_app_watcher::start_codex_app_open_watcher(codex_app_open::handle_codex_app_open);
@@ -108,6 +91,7 @@ async fn run_codex_restart(
 #[cfg(test)]
 mod restart_tests {
     use super::*;
+    use std::thread;
 
     #[test]
     fn restart_runs_off_calling_thread_and_returns_result() {

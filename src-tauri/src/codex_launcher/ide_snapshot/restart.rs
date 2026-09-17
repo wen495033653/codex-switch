@@ -1,10 +1,15 @@
-use super::{
-    detect::{
-        build_ide_summary, normalize_executable_path, normalize_ide_entries,
-        process_entry_executable_path, process_entry_parent_pid, process_entry_pid,
-    },
-    *,
+use super::detect::{
+    build_ide_summary, normalize_executable_path, normalize_ide_entries,
+    process_entry_executable_path, process_entry_parent_pid, process_entry_pid,
 };
+use crate::{
+    codex_launcher::process_control::{
+        kill_root_process_trees, relaunch_executable_with_retry, wait_for_pids_exit,
+    },
+    json_util::string_field,
+};
+use serde_json::{json, Value};
+use std::{collections::HashSet, thread, time::Duration as StdDuration};
 
 pub(crate) fn restart_from_ide_snapshot<F>(
     snapshot: &Value,

@@ -1,10 +1,19 @@
-use super::*;
+use super::{
+    codex_app_watcher::CodexProcess, process_control::sanitize_desktop_app_launch_env,
+    shell::hide_command_window,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
+};
+use std::{
+    process::{Command, Stdio},
+    thread,
+    time::{Duration as StdDuration, Instant},
 };
 use url::Url;
 

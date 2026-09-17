@@ -1,7 +1,17 @@
-use super::*;
+use super::remote_control::restart_remote_control_runtime_for_current_settings;
+use crate::{
+    paths::codex_dir,
+    proxy_config::{normalize_proxy_display_url, normalize_proxy_url},
+    settings::update_settings_value,
+};
 use crate::{
     session_sync_diagnostics::log_session_sync_event,
     settings::remote_control_enabled_from_settings,
+};
+use serde_json::{json, Value};
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 
 const CODEX_PROXY_ENV_NAMES: [&str; 4] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
