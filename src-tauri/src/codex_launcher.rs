@@ -56,9 +56,11 @@ pub(crate) fn start_codex_app_watcher() {
 
 #[tauri::command]
 pub(crate) async fn get_current_codex_app_processes() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(codex_app_watcher::current_codex_app_processes_value)
-        .await
-        .map_err(|err| format!("后台检测 Codex 进程失败: {err}"))?
+    tauri::async_runtime::spawn_blocking(|| {
+        codex_app_watcher::current_codex_app_processes_value(&codex_desktop_support_status())
+    })
+    .await
+    .map_err(|err| format!("后台检测 Codex 进程失败: {err}"))?
 }
 
 #[tauri::command]

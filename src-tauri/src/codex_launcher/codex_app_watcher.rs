@@ -1,4 +1,4 @@
-use super::{codex_desktop_display_name, codex_desktop_support_status, detect_ide_app, root_pids};
+use super::{codex_desktop_display_name, detect_ide_app, root_pids};
 use crate::session_sync_diagnostics::log_session_sync_event;
 use crate::time_util::now_string;
 use serde_json::{json, Value};
@@ -76,8 +76,9 @@ fn suppressed_codex_app_open_state() -> &'static Mutex<SuppressedCodexAppOpen> {
     SUPPRESSED_CODEX_APP_OPENS.get_or_init(|| Mutex::new(SuppressedCodexAppOpen::default()))
 }
 
-pub(crate) fn current_codex_app_processes_value() -> Result<Value, String> {
-    let support = codex_desktop_support_status();
+// `support` is the desktop compatibility status. The caller supplies it so that the watcher does
+// not depend on the instance manager, which itself drives the watcher.
+pub(crate) fn current_codex_app_processes_value(support: &Value) -> Result<Value, String> {
     let snapshot = current_codex_app_processes_state()
         .lock()
         .map_err(|_| "Codex watcher 状态锁异常".to_string())?
