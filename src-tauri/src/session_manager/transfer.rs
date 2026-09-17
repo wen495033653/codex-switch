@@ -1,4 +1,61 @@
-use super::*;
+use super::{
+    backup::backup_file,
+    catalog::{conversation_from_path, read_current_state_conversations},
+    codex_home::{
+        conversation_path_key, ensure_session_relative_path, normalize_relative_path,
+        normalize_status, read_session_index, resolve_codex_root, status_from_relative_path,
+        validate_codex_root,
+    },
+    model::ManifestSession,
+    rollout::parse_session_file_for_list,
+    state_db::{thread_metadata_from_manifest, upsert_state_threads},
+    util::{backup_stamp, sha256_bytes, sha256_file},
+    zip::{write_zip_store, ZipArchiveLite},
+};
+use crate::{
+    codex_sessions::lock_codex_session_io, paths::codex_state_db_path_for_root,
+    time_util::now_string,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+};
+use tauri::AppHandle;
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
+
+const MANIFEST_FORMAT: &str = "codex-context-manager";
+
+const MANIFEST_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ExportManifest {
+    format: String,
+    version: u32,
+    exported_at: String,
+    source_os: String,
+    sessions: Vec<ManifestSession>,
+}
+
+#[derive(Debug, Clone)]
+struct ImportCandidate {
+    manifest: ManifestSession,
+    data: Vec<u8>,
+    target_path: PathBuf,
+    action: ImportAction,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ImportAction {
+    Import,
+    SkipSame,
+    Conflict,
+    Error,
+}
 
 pub(super) fn export_conversations_impl(
     app: AppHandle,
@@ -303,7 +360,7 @@ pub(super) fn import_conversations_impl(app: AppHandle, root: String) -> Result<
     }))
 }
 
-pub(super) fn build_import_candidate(
+fn build_import_candidate(
     root: &Path,
     archive: &ZipArchiveLite,
     session: &ManifestSession,
@@ -340,7 +397,7 @@ pub(super) fn build_import_candidate(
     })
 }
 
-pub(super) fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
+fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
     if manifest.format != MANIFEST_FORMAT {
         return Err("manifest format 不受支持".to_string());
     }

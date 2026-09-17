@@ -1,4 +1,77 @@
-use super::*;
+use super::{
+    backup::{
+        sanitize_id_fragment, session_manager_data_dir, status_overwrite_backup_path,
+        unique_backup_id,
+    },
+    codex_home::{
+        conversation_path_key, ensure_session_relative_path, extract_uuid_like,
+        normalize_relative_path, normalize_status, path_to_slash, reassigned_relative_path,
+        remove_from_global_state, resolve_codex_root, session_id_variants,
+        status_from_relative_path, validate_codex_root, validate_session_file_path,
+    },
+    model::{ConflictStrategy, ManifestSession, SessionSummary},
+    rollout::{
+        conversation_title_from_summary, copy_session_with_new_id, new_session_id,
+        parse_session_file_for_list,
+    },
+    state_db::{
+        delete_state_threads_for_sessions, thread_metadata_from_manifest, upsert_state_threads,
+    },
+    util::{backup_stamp, sha256_file, unique_sibling_path},
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    fs,
+    io::Write,
+    path::{Component, Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const DELETED_SESSIONS_DIR: &str = "deleted-sessions";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct DeletedSessionRecord {
+    pub(super) delete_id: String,
+    pub(super) id: String,
+    pub(super) title: String,
+    pub(super) deleted_at: String,
+    pub(super) updated_at: Option<String>,
+    pub(super) original_status: String,
+    pub(super) original_relative_path: String,
+    pub(super) deleted_relative_path: String,
+    pub(super) root_path: String,
+    pub(super) size_bytes: u64,
+    pub(super) cwd: Option<String>,
+    pub(super) session_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) sha256: Option<String>,
+    #[serde(default = "default_deleted_session_state")]
+    pub(super) state: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct DeleteCandidate {
+    pub(super) id: String,
+    pub(super) title: String,
+    pub(super) updated_at: Option<String>,
+    pub(super) source_path: PathBuf,
+    pub(super) relative_path: PathBuf,
+    pub(super) summary: SessionSummary,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RestoreCandidate {
+    pub(super) record: DeletedSessionRecord,
+    pub(super) record_dir: PathBuf,
+    pub(super) source_file: PathBuf,
+    pub(super) root: PathBuf,
+    pub(super) target_path: PathBuf,
+    pub(super) target_relative: PathBuf,
+    pub(super) target_id: String,
+    pub(super) rewrite_id: Option<(String, String)>,
+    pub(super) overwritten_id: Option<String>,
+}
 
 pub(super) fn save_deleted_session_record(
     deleted_root: &Path,
@@ -65,7 +138,7 @@ pub(super) fn save_deleted_session_record(
     result
 }
 
-pub(super) fn create_deleted_session_record_dir(
+fn create_deleted_session_record_dir(
     deleted_root: &Path,
     session_id: &str,
 ) -> Result<(String, PathBuf), String> {
@@ -97,7 +170,7 @@ pub(super) fn discard_uncommitted_deleted_record(record_dir: &Path, errors: &mut
     }
 }
 
-pub(super) fn copy_file_verified(
+fn copy_file_verified(
     source: &Path,
     target: &Path,
     expected_sha256: Option<&str>,
@@ -130,7 +203,7 @@ pub(super) fn copy_file_verified(
     Ok(target_sha)
 }
 
-pub(super) fn sync_file_contents(path: &Path) -> Result<(), String> {
+fn sync_file_contents(path: &Path) -> Result<(), String> {
     fs::File::options()
         .write(true)
         .open(path)
@@ -138,7 +211,7 @@ pub(super) fn sync_file_contents(path: &Path) -> Result<(), String> {
         .map_err(|err| format!("同步文件失败 {}: {err}", path.display()))
 }
 
-pub(super) fn write_deleted_session_record(
+fn write_deleted_session_record(
     record_dir: &Path,
     record: &DeletedSessionRecord,
 ) -> Result<(), String> {
@@ -149,11 +222,7 @@ pub(super) fn write_deleted_session_record(
     write_new_file_atomically(&path, &content, "delete-metadata")
 }
 
-pub(super) fn write_new_file_atomically(
-    path: &Path,
-    content: &[u8],
-    label: &str,
-) -> Result<(), String> {
+fn write_new_file_atomically(path: &Path, content: &[u8], label: &str) -> Result<(), String> {
     if path.exists() {
         return Err(format!("目标文件已存在，拒绝覆盖: {}", path.display()));
     }
@@ -180,7 +249,7 @@ pub(super) fn write_new_file_atomically(
     result
 }
 
-pub(super) fn temporary_sibling_path(path: &Path, label: &str) -> Result<PathBuf, String> {
+fn temporary_sibling_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -248,7 +317,7 @@ pub(super) fn read_deleted_session_record(
         .map_err(|err| format!("解析已删除会话元数据失败 {}: {err}", path.display()))
 }
 
-pub(super) fn default_deleted_session_state() -> String {
+fn default_deleted_session_state() -> String {
     "ready".to_string()
 }
 
@@ -285,9 +354,7 @@ pub(super) fn recover_deleted_session_record_state(
     }
 }
 
-pub(super) fn deleted_record_original_path(
-    record: &DeletedSessionRecord,
-) -> Result<PathBuf, String> {
+fn deleted_record_original_path(record: &DeletedSessionRecord) -> Result<PathBuf, String> {
     let root = record.root_path.trim();
     if root.is_empty() {
         return Err(format!("已删除会话缺少原 Codex 数据目录: {}", record.title));
@@ -607,7 +674,7 @@ pub(super) fn restore_deleted_candidate(
     Ok((sqlite_updated, trash_removed, warnings))
 }
 
-pub(super) fn prepare_restored_temp_file(
+fn prepare_restored_temp_file(
     candidate: &RestoreCandidate,
     temp_path: &Path,
 ) -> Result<(), String> {
@@ -639,7 +706,7 @@ pub(super) fn prepare_restored_temp_file(
     }
 }
 
-pub(super) fn append_restore_rollback_error(
+fn append_restore_rollback_error(
     message: &mut String,
     target_path: &Path,
     overwrite_backup: Option<&Path>,
@@ -680,7 +747,7 @@ pub(super) fn deleted_session_record_dir_at(
     Ok(deleted_root.join(delete_id))
 }
 
-pub(super) fn validate_delete_id(delete_id: &str) -> Result<(), String> {
+fn validate_delete_id(delete_id: &str) -> Result<(), String> {
     if delete_id.trim().is_empty()
         || !delete_id
             .chars()
@@ -691,7 +758,7 @@ pub(super) fn validate_delete_id(delete_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn unique_delete_id(id: &str) -> String {
+fn unique_delete_id(id: &str) -> String {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())

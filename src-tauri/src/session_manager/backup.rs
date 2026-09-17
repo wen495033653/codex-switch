@@ -1,4 +1,12 @@
-use super::*;
+use super::util::{backup_stamp, unique_sibling_path};
+use crate::paths::app_data_dir;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const SESSION_MANAGER_DATA_DIR: &str = "session-manager";
 
 pub(super) fn session_manager_data_dir() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join(SESSION_MANAGER_DATA_DIR))
@@ -53,11 +61,6 @@ pub(super) fn sanitize_backup_reason(reason: &str) -> String {
     }
 }
 
-pub(super) fn dedupe_strings(items: &mut Vec<String>) {
-    let mut seen = HashSet::new();
-    items.retain(|item| seen.insert(item.clone()));
-}
-
 pub(super) fn backup_file(path: &Path) -> Result<PathBuf, String> {
     backup_file_with_reason(path, "")
 }
@@ -89,39 +92,5 @@ pub(super) fn backup_file_with_reason(path: &Path, reason: &str) -> Result<PathB
             backup.display()
         )
     })?;
-    Ok(backup)
-}
-
-pub(super) fn backup_state_database_for_delete(
-    connection: &Connection,
-    _root: &Path,
-) -> Result<PathBuf, String> {
-    backup_state_database_with_reason(connection, "delete")
-}
-
-pub(super) fn backup_state_database_for_status(
-    connection: &Connection,
-    _root: &Path,
-) -> Result<PathBuf, String> {
-    backup_state_database_with_reason(connection, "status")
-}
-
-pub(super) fn backup_state_database_with_reason(
-    connection: &Connection,
-    reason: &str,
-) -> Result<PathBuf, String> {
-    let reason = sanitize_backup_reason(reason);
-    let backup_dir = session_manager_backup_dir(&reason)?;
-    fs::create_dir_all(&backup_dir)
-        .map_err(|err| format!("创建备份目录失败 {}: {err}", backup_dir.display()))?;
-    let base_name = format!(
-        "state_5.sqlite.bak.context-manager-{reason}-{}",
-        backup_stamp()
-    );
-    let backup = unique_sibling_path(&backup_dir.join(&base_name), &base_name);
-    let backup_literal = sqlite_string_literal(&backup);
-    connection
-        .execute_batch(&format!("VACUUM main INTO {backup_literal};"))
-        .map_err(|err| format!("备份 state_5.sqlite 失败 {}: {err}", backup.display()))?;
     Ok(backup)
 }

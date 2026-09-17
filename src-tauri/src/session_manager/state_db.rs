@@ -1,4 +1,206 @@
-use super::*;
+use super::{
+    backup::{sanitize_backup_reason, session_manager_backup_dir},
+    codex_home::path_to_slash,
+    model::{ManifestSession, SessionSummary, StatusMove, ThreadMetadata},
+    util::{backup_stamp, dedupe_strings, unique_sibling_path},
+};
+use crate::{paths::codex_state_db_path_for_root, time_util::parse_rfc3339_seconds};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+const CURRENT_STATE_MIN_SQLX_MIGRATION: i64 = 40;
+
+pub(super) const CURRENT_STATE_REQUIRED_COLUMNS: &[&str] = &[
+    "id",
+    "rollout_path",
+    "title",
+    "cwd",
+    "archived",
+    "updated_at",
+    "updated_at_ms",
+    "preview",
+    "recency_at",
+    "recency_at_ms",
+    "history_mode",
+];
+
+const THREAD_METADATA_COLUMNS: &[&str] = &[
+    "id",
+    "rollout_path",
+    "created_at",
+    "updated_at",
+    "source",
+    "model_provider",
+    "cwd",
+    "title",
+    "sandbox_policy",
+    "approval_mode",
+    "tokens_used",
+    "has_user_event",
+    "archived",
+    "archived_at",
+    "cli_version",
+    "first_user_message",
+    "agent_nickname",
+    "agent_role",
+    "memory_mode",
+    "model",
+    "reasoning_effort",
+    "agent_path",
+    "created_at_ms",
+    "updated_at_ms",
+    "thread_source",
+    "preview",
+    "recency_at",
+    "recency_at_ms",
+    "history_mode",
+];
+
+const THREAD_METADATA_UPDATE_COLUMNS: &[&str] = &[
+    "rollout_path",
+    "source",
+    "updated_at",
+    "model_provider",
+    "cwd",
+    "title",
+    "archived",
+    "archived_at",
+    "cli_version",
+    "first_user_message",
+    "agent_nickname",
+    "agent_role",
+    "model",
+    "reasoning_effort",
+    "agent_path",
+    "updated_at_ms",
+    "thread_source",
+    "preview",
+    "recency_at",
+    "recency_at_ms",
+    "history_mode",
+];
+
+#[derive(Debug)]
+pub(super) struct StateThreadColumn {
+    pub(super) name: String,
+    pub(super) not_null: bool,
+    pub(super) default_value: Option<String>,
+    pub(super) primary_key: bool,
+}
+
+fn backup_state_database_for_delete(
+    connection: &Connection,
+    _root: &Path,
+) -> Result<PathBuf, String> {
+    backup_state_database_with_reason(connection, "delete")
+}
+
+fn backup_state_database_for_status(
+    connection: &Connection,
+    _root: &Path,
+) -> Result<PathBuf, String> {
+    backup_state_database_with_reason(connection, "status")
+}
+
+pub(super) fn backup_state_database_with_reason(
+    connection: &Connection,
+    reason: &str,
+) -> Result<PathBuf, String> {
+    let reason = sanitize_backup_reason(reason);
+    let backup_dir = session_manager_backup_dir(&reason)?;
+    fs::create_dir_all(&backup_dir)
+        .map_err(|err| format!("创建备份目录失败 {}: {err}", backup_dir.display()))?;
+    let base_name = format!(
+        "state_5.sqlite.bak.context-manager-{reason}-{}",
+        backup_stamp()
+    );
+    let backup = unique_sibling_path(&backup_dir.join(&base_name), &base_name);
+    let backup_literal = sqlite_string_literal(&backup);
+    connection
+        .execute_batch(&format!("VACUUM main INTO {backup_literal};"))
+        .map_err(|err| format!("备份 state_5.sqlite 失败 {}: {err}", backup.display()))?;
+    Ok(backup)
+}
+
+pub(super) fn validate_state_database(path: &Path) -> Result<(), String> {
+    let connection = Connection::open(path).map_err(|err| {
+        format!(
+            "打开迁移后的 Codex state 数据库失败 {}: {err}",
+            path.display()
+        )
+    })?;
+    validate_state_database_connection(&connection, path)
+}
+
+pub(super) fn validate_state_database_connection(
+    connection: &Connection,
+    path: &Path,
+) -> Result<(), String> {
+    let result: String = connection
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|err| {
+            format!(
+                "校验迁移后的 Codex state 数据库失败 {}: {err}",
+                path.display()
+            )
+        })?;
+    if !result.eq_ignore_ascii_case("ok") {
+        return Err(format!(
+            "迁移后的 Codex state 数据库校验失败 {}: {result}",
+            path.display()
+        ));
+    }
+    let mut statement = connection
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(|err| format!("检查 Codex state 外键失败 {}: {err}", path.display()))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|err| format!("查询 Codex state 外键失败 {}: {err}", path.display()))?;
+    if rows
+        .next()
+        .map_err(|err| format!("读取 Codex state 外键检查失败 {}: {err}", path.display()))?
+        .is_some()
+    {
+        return Err(format!(
+            "迁移后的 Codex state 数据库存在外键异常: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn state_database_has_current_migrations(
+    connection: &Connection,
+) -> Result<bool, String> {
+    let has_table = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM sqlite_master
+               WHERE type = 'table' AND name = '_sqlx_migrations'
+             )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("检查 Codex SQLx migration 表失败: {err}"))?;
+    if has_table == 0 {
+        return Ok(false);
+    }
+    let (max_version, failed): (i64, i64) = connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0),
+                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+             FROM _sqlx_migrations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|err| format!("读取 Codex SQLx migration 状态失败: {err}"))?;
+    Ok(max_version >= CURRENT_STATE_MIN_SQLX_MIGRATION && failed == 0)
+}
 
 pub(super) fn thread_metadata_from_manifest(
     session: &ManifestSession,
@@ -81,7 +283,7 @@ pub(super) fn insert_missing_state_threads(
     write_state_threads(root, items, true)
 }
 
-pub(super) fn write_state_threads(
+fn write_state_threads(
     root: &Path,
     items: &[ThreadMetadata],
     insert_only: bool,
@@ -199,78 +401,11 @@ pub(super) fn write_state_threads(
     Ok(updated)
 }
 
-pub(super) const THREAD_METADATA_COLUMNS: &[&str] = &[
-    "id",
-    "rollout_path",
-    "created_at",
-    "updated_at",
-    "source",
-    "model_provider",
-    "cwd",
-    "title",
-    "sandbox_policy",
-    "approval_mode",
-    "tokens_used",
-    "has_user_event",
-    "archived",
-    "archived_at",
-    "cli_version",
-    "first_user_message",
-    "agent_nickname",
-    "agent_role",
-    "memory_mode",
-    "model",
-    "reasoning_effort",
-    "agent_path",
-    "created_at_ms",
-    "updated_at_ms",
-    "thread_source",
-    "preview",
-    "recency_at",
-    "recency_at_ms",
-    "history_mode",
-];
-
-pub(super) const THREAD_METADATA_UPDATE_COLUMNS: &[&str] = &[
-    "rollout_path",
-    "source",
-    "updated_at",
-    "model_provider",
-    "cwd",
-    "title",
-    "archived",
-    "archived_at",
-    "cli_version",
-    "first_user_message",
-    "agent_nickname",
-    "agent_role",
-    "model",
-    "reasoning_effort",
-    "agent_path",
-    "updated_at_ms",
-    "thread_source",
-    "preview",
-    "recency_at",
-    "recency_at_ms",
-    "history_mode",
-];
-
-#[derive(Debug)]
-pub(super) struct StateThreadColumn {
-    name: String,
-    not_null: bool,
-    default_value: Option<String>,
-    primary_key: bool,
-}
-
-pub(super) fn thread_metadata_supported_column(column: &str) -> bool {
+fn thread_metadata_supported_column(column: &str) -> bool {
     THREAD_METADATA_COLUMNS.contains(&column)
 }
 
-pub(super) fn thread_metadata_sql_value(
-    item: &ThreadMetadata,
-    column: &str,
-) -> rusqlite::types::Value {
+fn thread_metadata_sql_value(item: &ThreadMetadata, column: &str) -> rusqlite::types::Value {
     use rusqlite::types::Value as SqlValue;
 
     match column {
@@ -334,7 +469,7 @@ pub(super) fn thread_metadata_sql_value(
     }
 }
 
-pub(super) fn sync_thread_spawn_edge(
+fn sync_thread_spawn_edge(
     transaction: &rusqlite::Transaction<'_>,
     item: &ThreadMetadata,
     enabled: bool,
@@ -367,7 +502,7 @@ pub(super) fn sync_thread_spawn_edge(
     Ok(())
 }
 
-pub(super) fn sync_thread_dynamic_tools(
+fn sync_thread_dynamic_tools(
     transaction: &rusqlite::Transaction<'_>,
     item: &ThreadMetadata,
     enabled: bool,
@@ -565,7 +700,7 @@ pub(super) fn delete_state_threads_for_sessions(
     Ok(())
 }
 
-pub(super) fn rollout_path_lookup_values(root: &Path, path: &Path) -> Vec<String> {
+fn rollout_path_lookup_values(root: &Path, path: &Path) -> Vec<String> {
     let mut values = Vec::new();
     values.push(path.to_string_lossy().to_string());
     values.push(path_to_slash(path));
@@ -626,17 +761,14 @@ pub(super) fn state_threads_schema_for(
     Ok(Some(columns))
 }
 
-pub(super) fn state_threads_has_columns(
-    connection: &Connection,
-    required: &[&str],
-) -> Result<bool, String> {
+fn state_threads_has_columns(connection: &Connection, required: &[&str]) -> Result<bool, String> {
     let Some(columns) = state_threads_schema(connection)? else {
         return Ok(false);
     };
     Ok(required.iter().all(|column| columns.contains_key(*column)))
 }
 
-pub(super) fn state_table_has_columns(
+fn state_table_has_columns(
     connection: &Connection,
     table: &str,
     required: &[&str],
@@ -666,4 +798,19 @@ pub(super) fn state_table_has_columns(
         columns.insert(row.map_err(|err| format!("读取 Codex Desktop {table} 列失败: {err}"))?);
     }
     Ok(required.iter().all(|column| columns.contains(*column)))
+}
+
+fn sqlite_string_literal(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
+}
+
+pub(super) fn quote_sqlite_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn now_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }

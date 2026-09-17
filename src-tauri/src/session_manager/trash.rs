@@ -1,4 +1,29 @@
-use super::*;
+use super::{
+    codex_home::{
+        conversation_path_key, ensure_session_relative_path, extract_uuid_like,
+        normalize_relative_path, path_to_slash, read_session_index, remove_empty_parent_dirs,
+        remove_from_global_state, resolve_codex_root, session_id_variants, session_index_entry,
+        session_index_title, status_from_relative_path, validate_codex_root,
+        validate_session_file_path,
+    },
+    model::{parse_conflict_strategy, ConflictStrategy, ConversationItem},
+    preview::{normalize_preview_limit, read_preview_message_page},
+    rollout::{conversation_title_from_summary, parse_session_file_for_list},
+    state_db::delete_state_threads_for_sessions,
+    trash_store::{
+        build_restore_deleted_candidate, deleted_record_session_path,
+        deleted_session_record_dir_at, deleted_sessions_dir, discard_uncommitted_deleted_record,
+        mark_deleted_session_ready, read_deleted_session_record,
+        read_deleted_session_records_from_dir, reassign_restore_candidate,
+        recover_deleted_session_record_state, restore_deleted_candidate,
+        save_deleted_session_record, should_rebuild_deleted_title,
+        validate_deleted_record_identity, verify_deleted_session_backup, DeleteCandidate,
+    },
+    util::{dedupe_strings, sha256_file, system_time_to_rfc3339},
+};
+use crate::{codex_sessions::lock_codex_session_io, time_util::now_string};
+use serde_json::{json, Value};
+use std::{collections::HashSet, fs, path::Path};
 
 pub(super) fn delete_conversations_impl(
     root: String,
@@ -422,74 +447,92 @@ pub(super) fn purge_deleted_sessions_locked(
     }))
 }
 
-pub(super) fn remove_from_global_state(
-    root: &Path,
-    ids: &[String],
-    reason: &str,
-) -> Result<(), String> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-    let path = root.join(".codex-global-state.json");
-    if !path.exists() {
-        return Ok(());
-    }
-    let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    let content = fs::read_to_string(&path)
-        .map_err(|err| format!("读取 .codex-global-state.json 失败: {err}"))?;
-    let mut value: Value = serde_json::from_str(&content)
-        .map_err(|err| format!("解析 .codex-global-state.json 失败: {err}"))?;
-    let removed = remove_matching_object_keys(&mut value, &id_set);
-    if removed == 0 {
-        return Ok(());
-    }
-    backup_file_with_reason(&path, reason)?;
-    let mut output = serde_json::to_string_pretty(&value)
-        .map_err(|err| format!("序列化 .codex-global-state.json 失败: {err}"))?;
-    output.push('\n');
-    fs::write(&path, output).map_err(|err| format!("写入 .codex-global-state.json 失败: {err}"))?;
-    Ok(())
+pub(super) fn preview_deleted_conversation_impl(
+    delete_id: String,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<String>,
+    request_id: Option<u64>,
+) -> Result<Value, String> {
+    let deleted_root = deleted_sessions_dir()?;
+    preview_deleted_conversation_from_dir(
+        &deleted_root,
+        &delete_id,
+        before_cursor,
+        snapshot_size,
+        limit,
+        message_source.as_deref(),
+        request_id,
+    )
 }
 
-pub(super) fn remove_matching_object_keys(value: &mut Value, ids: &HashSet<&str>) -> usize {
-    match value {
-        Value::Object(map) => {
-            let keys = map
-                .keys()
-                .filter(|key| ids.contains(key.as_str()))
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut removed = 0usize;
-            for key in keys {
-                map.remove(&key);
-                removed += 1;
-            }
-            for (key, value) in map.iter_mut() {
-                if matches!(key.as_str(), "pinned-thread-ids" | "pinnedThreadIds") {
-                    if let Value::Array(items) = value {
-                        let before = items.len();
-                        items.retain(|item| item.as_str().is_none_or(|id| !ids.contains(id)));
-                        removed += before.saturating_sub(items.len());
-                    }
-                } else {
-                    removed += remove_matching_object_keys(value, ids);
-                }
-            }
-            removed
-        }
-        Value::Array(items) => items
-            .iter_mut()
-            .map(|item| remove_matching_object_keys(item, ids))
-            .sum(),
-        _ => 0,
+pub(super) fn preview_deleted_conversation_from_dir(
+    deleted_root: &Path,
+    delete_id: &str,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: Option<usize>,
+    message_source: Option<&str>,
+    request_id: Option<u64>,
+) -> Result<Value, String> {
+    let record_dir = deleted_session_record_dir_at(deleted_root, delete_id)?;
+    let record = read_deleted_session_record(&record_dir)?;
+    validate_deleted_record_identity(delete_id, &record)?;
+    let record = recover_deleted_session_record_state(&record_dir, record)?
+        .ok_or_else(|| "删除操作尚未完成，原会话文件仍然存在".to_string())?;
+    let session_file = deleted_record_session_path(&record_dir, &record)?;
+    if !session_file.exists() {
+        return Err(format!("已删除会话备份文件缺失: {}", record.title));
     }
-}
+    verify_deleted_session_backup(&record, &session_file)?;
+    let summary = parse_session_file_for_list(&session_file).unwrap_or_default();
+    let size_bytes = session_file
+        .metadata()
+        .map(|item| item.len())
+        .unwrap_or(record.size_bytes);
+    let title = if should_rebuild_deleted_title(&record.title) {
+        conversation_title_from_summary(&summary)
+    } else {
+        record.title.clone()
+    };
+    let conversation = ConversationItem {
+        id: record.id.clone(),
+        title,
+        updated_at: record
+            .updated_at
+            .clone()
+            .or(Some(record.deleted_at.clone())),
+        status: "deleted".to_string(),
+        source_path: session_file.to_string_lossy().to_string(),
+        relative_path: record.original_relative_path.clone(),
+        size_bytes,
+        cwd: summary.cwd.clone().or(record.cwd.clone()),
+        preview: summary.preview.clone(),
+        sha256: record.sha256.clone(),
+        parse_error: summary.parse_error.clone(),
+    };
+    let page = read_preview_message_page(
+        &session_file,
+        before_cursor,
+        snapshot_size,
+        limit,
+        message_source,
+        request_id,
+    )?;
 
-pub(super) fn conversation_title_from_summary(summary: &SessionSummary) -> String {
-    summary
-        .title
-        .clone()
-        .or_else(|| summary.first_user_message.clone())
-        .map(|value| truncate_text(&value, 80))
-        .unwrap_or_else(|| "未命名会话".to_string())
+    Ok(json!({
+        "ok": true,
+        "conversation": conversation,
+        "messages": page.messages,
+        "message_page": {
+            "source": page.source.as_str(),
+            "next_before": page.next_before,
+            "has_more": page.has_more,
+            "file_size": page.file_size,
+            "limit": normalize_preview_limit(limit)
+        },
+        "warnings": [],
+        "parse_error": summary.parse_error
+    }))
 }

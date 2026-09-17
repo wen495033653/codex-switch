@@ -1,4 +1,41 @@
-use super::*;
+use super::{
+    codex_home::{
+        collect_conversation_files, extract_uuid_like, normalized_path_identity, path_to_slash,
+        read_session_index, session_id_variants, session_index_entry,
+    },
+    model::{ManifestSession, ThreadMetadata},
+    rollout::parse_session_file_for_list,
+    state_db::{
+        backup_state_database_with_reason, insert_missing_state_threads, quote_sqlite_identifier,
+        state_database_has_current_migrations, state_threads_schema, state_threads_schema_for,
+        thread_metadata_from_manifest, validate_state_database, validate_state_database_connection,
+        StateThreadColumn, CURRENT_STATE_REQUIRED_COLUMNS,
+    },
+    util::{hex_bytes, system_time_to_rfc3339, truncate_text},
+};
+use crate::{
+    codex_sessions::lock_codex_session_io,
+    paths::{
+        app_data_dir, codex_dir, codex_state_db_path_for_root, legacy_codex_state_db_path_from_home,
+    },
+    time_util::now_string,
+};
+use rusqlite::{params, Connection, OpenFlags};
+use serde_json::{json, Value};
+use sha2::Digest;
+use sha2::Sha256;
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+const CODEX_DESKTOP_MIGRATION_VERSION: u32 = 2;
+
+const CODEX_DESKTOP_MIGRATION_DIR: &str = "migrations";
+
+const CODEX_DESKTOP_MIGRATION_FILE_PREFIX: &str = "codex-chatgpt-desktop-final-v2";
 
 pub(crate) fn migrate_legacy_codex_data_for_current_home() -> Result<Value, String> {
     let root = codex_dir()?;
@@ -113,7 +150,7 @@ pub(crate) fn migrate_legacy_codex_data_for_root(root: &Path) -> Result<Value, S
     Ok(report)
 }
 
-pub(super) fn read_state_thread_ids(connection: &Connection) -> Result<HashSet<String>, String> {
+fn read_state_thread_ids(connection: &Connection) -> Result<HashSet<String>, String> {
     let mut statement = connection
         .prepare("SELECT id FROM threads")
         .map_err(|err| format!("读取新版 Codex thread id 失败: {err}"))?;
@@ -124,7 +161,7 @@ pub(super) fn read_state_thread_ids(connection: &Connection) -> Result<HashSet<S
         .map_err(|err| format!("解析新版 Codex thread id 失败: {err}"))
 }
 
-pub(super) fn waiting_for_current_state_schema(root: &Path, source: &Path, target: &Path) -> Value {
+fn waiting_for_current_state_schema(root: &Path, source: &Path, target: &Path) -> Value {
     json!({
         "ok": false,
         "completed": false,
@@ -255,7 +292,7 @@ pub(super) fn merge_legacy_state_metadata(
     }
 }
 
-pub(super) fn merge_legacy_table_rows(
+fn merge_legacy_table_rows(
     transaction: &rusqlite::Transaction<'_>,
     table: &str,
     where_clause: Option<&str>,
@@ -294,7 +331,7 @@ pub(super) fn merge_legacy_table_rows(
         .map_err(|err| format!("迁移旧版 Codex 表 {table} 失败: {err}"))
 }
 
-pub(super) fn merge_legacy_agent_jobs(
+fn merge_legacy_agent_jobs(
     transaction: &rusqlite::Transaction<'_>,
 ) -> Result<(usize, usize), String> {
     if state_table_columns_for(transaction, "main", "agent_jobs")?.is_none()
@@ -327,7 +364,7 @@ pub(super) fn merge_legacy_agent_jobs(
     Ok((jobs, items))
 }
 
-pub(super) fn state_table_columns_for(
+fn state_table_columns_for(
     connection: &Connection,
     schema: &str,
     table: &str,
@@ -359,7 +396,7 @@ pub(super) fn state_table_columns_for(
         .map_err(|err| format!("解析 Codex state 表结构 {schema}.{table} 失败: {err}"))
 }
 
-pub(super) fn collect_thread_metadata_for_migration(
+fn collect_thread_metadata_for_migration(
     root: &Path,
     existing_thread_ids: &HashSet<String>,
 ) -> (Vec<ThreadMetadata>, Vec<String>, usize, usize) {
@@ -440,82 +477,7 @@ pub(super) fn collect_thread_metadata_for_migration(
     (items, errors, rollout_files, skipped_existing)
 }
 
-pub(super) fn validate_state_database(path: &Path) -> Result<(), String> {
-    let connection = Connection::open(path).map_err(|err| {
-        format!(
-            "打开迁移后的 Codex state 数据库失败 {}: {err}",
-            path.display()
-        )
-    })?;
-    validate_state_database_connection(&connection, path)
-}
-
-pub(super) fn validate_state_database_connection(
-    connection: &Connection,
-    path: &Path,
-) -> Result<(), String> {
-    let result: String = connection
-        .query_row("PRAGMA quick_check", [], |row| row.get(0))
-        .map_err(|err| {
-            format!(
-                "校验迁移后的 Codex state 数据库失败 {}: {err}",
-                path.display()
-            )
-        })?;
-    if !result.eq_ignore_ascii_case("ok") {
-        return Err(format!(
-            "迁移后的 Codex state 数据库校验失败 {}: {result}",
-            path.display()
-        ));
-    }
-    let mut statement = connection
-        .prepare("PRAGMA foreign_key_check")
-        .map_err(|err| format!("检查 Codex state 外键失败 {}: {err}", path.display()))?;
-    let mut rows = statement
-        .query([])
-        .map_err(|err| format!("查询 Codex state 外键失败 {}: {err}", path.display()))?;
-    if rows
-        .next()
-        .map_err(|err| format!("读取 Codex state 外键检查失败 {}: {err}", path.display()))?
-        .is_some()
-    {
-        return Err(format!(
-            "迁移后的 Codex state 数据库存在外键异常: {}",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn state_database_has_current_migrations(
-    connection: &Connection,
-) -> Result<bool, String> {
-    let has_table = connection
-        .query_row(
-            "SELECT EXISTS(
-               SELECT 1 FROM sqlite_master
-               WHERE type = 'table' AND name = '_sqlx_migrations'
-             )",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|err| format!("检查 Codex SQLx migration 表失败: {err}"))?;
-    if has_table == 0 {
-        return Ok(false);
-    }
-    let (max_version, failed): (i64, i64) = connection
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0),
-                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
-             FROM _sqlx_migrations",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|err| format!("读取 Codex SQLx migration 状态失败: {err}"))?;
-    Ok(max_version >= CURRENT_STATE_MIN_SQLX_MIGRATION && failed == 0)
-}
-
-pub(super) fn codex_desktop_migration_marker_path(root: &Path) -> Result<PathBuf, String> {
+fn codex_desktop_migration_marker_path(root: &Path) -> Result<PathBuf, String> {
     let identity = normalized_path_identity(root);
     let digest = Sha256::digest(identity.as_bytes());
     let key = &hex_bytes(&digest)[..16];
@@ -524,7 +486,7 @@ pub(super) fn codex_desktop_migration_marker_path(root: &Path) -> Result<PathBuf
         .join(format!("{CODEX_DESKTOP_MIGRATION_FILE_PREFIX}-{key}.json")))
 }
 
-pub(super) fn read_completed_codex_desktop_migration(path: &Path) -> Result<Option<Value>, String> {
+fn read_completed_codex_desktop_migration(path: &Path) -> Result<Option<Value>, String> {
     if !path.exists() {
         return Ok(None);
     }
@@ -542,10 +504,7 @@ pub(super) fn read_completed_codex_desktop_migration(path: &Path) -> Result<Opti
     }
 }
 
-pub(super) fn write_codex_desktop_migration_marker(
-    path: &Path,
-    report: &Value,
-) -> Result<(), String> {
+fn write_codex_desktop_migration_marker(path: &Path, report: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("创建 Codex 数据迁移目录失败 {}: {err}", parent.display()))?;

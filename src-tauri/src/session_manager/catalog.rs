@@ -1,4 +1,38 @@
-use super::*;
+use super::{
+    codex_home::{
+        conversation_path_key, ensure_session_relative_path, extract_uuid_like,
+        normalize_relative_path, path_to_slash, relative_path_under_root, resolve_codex_root,
+        session_index_title, validate_codex_root, SessionIndex,
+    },
+    model::{ConversationItem, SessionSummary},
+    rollout::parse_session_file_for_list,
+    state_db::{
+        state_database_has_current_migrations, state_threads_schema, CURRENT_STATE_REQUIRED_COLUMNS,
+    },
+    util::{
+        non_empty, sha256_file, system_time_to_rfc3339, timestamp_millis_to_rfc3339,
+        timestamp_seconds_to_rfc3339, truncate_text,
+    },
+};
+use crate::{
+    codex_app_server::{list_interactive_threads, CodexDesktopThread},
+    paths::codex_state_db_path_for_root,
+    time_util::parse_rfc3339_seconds,
+};
+use rusqlite::{Connection, OpenFlags};
+use serde_json::{json, Value};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+#[derive(Debug)]
+pub(super) struct CurrentStateCatalog {
+    pub(super) conversations: Vec<ConversationItem>,
+    pub(super) warnings: Vec<String>,
+}
 
 pub(super) fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
     let root = resolve_codex_root(root.as_deref())?;
@@ -112,166 +146,6 @@ pub(super) fn conversations_from_desktop_threads(
     }
 
     (conversations, warnings, errors)
-}
-
-pub(super) fn resolve_codex_root(root: Option<&str>) -> Result<PathBuf, String> {
-    let root = root.map(str::trim).filter(|value| !value.is_empty());
-    let path = match root {
-        Some(root) => PathBuf::from(root),
-        None => codex_dir()?,
-    };
-    if !path.exists() {
-        return Err(format!("Codex 数据目录不存在: {}", path.display()));
-    }
-    if !path.is_dir() {
-        return Err(format!("Codex 数据目录不是文件夹: {}", path.display()));
-    }
-    Ok(path)
-}
-
-pub(super) fn session_id_variants(session_id: &str) -> Vec<String> {
-    let raw = session_id.trim();
-    let bare = raw.strip_prefix("local:").unwrap_or(raw);
-    let mut variants = vec![raw.to_string(), bare.to_string()];
-    if !bare.is_empty() {
-        variants.push(format!("local:{bare}"));
-    }
-    dedupe_strings(&mut variants);
-    variants
-}
-
-pub(super) fn session_index_entry<'a>(
-    index: &'a SessionIndex,
-    session_id: &str,
-) -> Option<&'a SessionIndexEntry> {
-    session_id_variants(session_id)
-        .into_iter()
-        .find_map(|variant| index.get(&variant))
-}
-
-pub(super) fn session_index_title(index: &SessionIndex, session_id: &str) -> Option<String> {
-    session_index_entry(index, session_id).and_then(|entry| entry.thread_name.clone())
-}
-
-pub(super) fn validate_codex_root(root: &Path) -> Result<(), String> {
-    let sessions = root.join("sessions");
-    let archived = root.join("archived_sessions");
-    if sessions.exists() || archived.exists() {
-        Ok(())
-    } else {
-        Err(format!(
-            "不是有效的 Codex 数据目录，缺少 sessions 或 archived_sessions: {}",
-            root.display()
-        ))
-    }
-}
-
-pub(super) fn validate_session_file_path(root: &Path, path: &Path) -> Result<(), String> {
-    let root = root
-        .canonicalize()
-        .map_err(|err| format!("读取 Codex 数据目录失败 {}: {err}", root.display()))?;
-    let path = path
-        .canonicalize()
-        .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
-
-    if !path.starts_with(&root) {
-        return Err(format!(
-            "拒绝处理 Codex 数据目录外的文件: {}",
-            path.display()
-        ));
-    }
-    if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-        return Err(format!("拒绝处理非 jsonl 会话文件: {}", path.display()));
-    }
-    let sessions = root.join("sessions");
-    let archived_sessions = root.join("archived_sessions");
-    if !path.starts_with(&sessions) && !path.starts_with(&archived_sessions) {
-        return Err(format!("拒绝处理非会话目录中的文件: {}", path.display()));
-    }
-    Ok(())
-}
-
-pub(super) fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> SessionIndex {
-    let path = root.join("session_index.jsonl");
-    let mut map = HashMap::new();
-    if !path.exists() {
-        warnings
-            .push("session_index.jsonl 不存在，已使用其他会话元数据推断标题和更新时间".to_string());
-        return map;
-    }
-    let file = match fs::File::open(&path) {
-        Ok(file) => file,
-        Err(err) => {
-            warnings.push(format!("读取 session_index.jsonl 失败: {err}"));
-            return map;
-        }
-    };
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let id = raw_string_field(&value, "id");
-        if id.is_empty() {
-            continue;
-        }
-        let thread_name = first_non_empty(&[
-            raw_string_field(&value, "thread_name"),
-            raw_string_field(&value, "title"),
-        ]);
-        let updated_at = non_empty(raw_string_field(&value, "updated_at"));
-        let previous = session_index_entry(&map, &id).cloned();
-        let entry = SessionIndexEntry {
-            thread_name: thread_name.or_else(|| {
-                previous
-                    .as_ref()
-                    .and_then(|entry| entry.thread_name.clone())
-            }),
-            updated_at: updated_at
-                .or_else(|| previous.as_ref().and_then(|entry| entry.updated_at.clone())),
-        };
-        for variant in session_id_variants(&id) {
-            map.insert(variant, entry.clone());
-        }
-    }
-    map
-}
-
-pub(super) fn collect_conversation_files(
-    dir: &Path,
-    status: &str,
-    files: &mut Vec<(String, PathBuf)>,
-    errors: &mut Vec<String>,
-) {
-    if !dir.exists() {
-        return;
-    }
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) => {
-            errors.push(format!("读取目录失败 {}: {err}", dir.display()));
-            return;
-        }
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                errors.push(format!("读取目录条目失败 {}: {err}", dir.display()));
-                continue;
-            }
-        };
-        let path = entry.path();
-        match entry.file_type() {
-            Ok(file_type) if file_type.is_dir() => {
-                collect_conversation_files(&path, status, files, errors);
-            }
-            Ok(file_type) if file_type.is_file() && is_jsonl_file(&path) => {
-                files.push((status.to_string(), path));
-            }
-            Ok(_) => {}
-            Err(err) => errors.push(format!("读取文件类型失败 {}: {err}", path.display())),
-        }
-    }
 }
 
 pub(super) fn conversation_from_path(
@@ -474,10 +348,7 @@ pub(super) fn current_state_conversation_for_path(
         .find(|item| conversation_path_key(Path::new(&item.source_path)) == target))
 }
 
-pub(super) fn resolve_state_rollout_path(
-    root: &Path,
-    rollout_path: &str,
-) -> Option<(PathBuf, PathBuf)> {
+fn resolve_state_rollout_path(root: &Path, rollout_path: &str) -> Option<(PathBuf, PathBuf)> {
     let raw = rollout_path.trim();
     if raw.is_empty() {
         return None;
@@ -495,48 +366,9 @@ pub(super) fn resolve_state_rollout_path(
     Some((path, relative))
 }
 
-pub(super) fn relative_path_under_root(root: &Path, path: &Path) -> Option<PathBuf> {
-    if let Ok(relative) = path.strip_prefix(root) {
-        return Some(relative.to_path_buf());
-    }
-    if path.exists() {
-        let canonical_root = root.canonicalize().ok()?;
-        let canonical_path = path.canonicalize().ok()?;
-        if let Ok(relative) = canonical_path.strip_prefix(canonical_root) {
-            return Some(relative.to_path_buf());
-        }
-    }
-    if cfg!(windows) {
-        let root_text = path_to_slash(root).trim_end_matches('/').to_string();
-        let path_text = path_to_slash(path);
-        if path_text.len() > root_text.len()
-            && path_text[..root_text.len()].eq_ignore_ascii_case(&root_text)
-            && path_text.as_bytes().get(root_text.len()) == Some(&b'/')
-        {
-            return normalize_relative_path(&path_text[root_text.len() + 1..]).ok();
-        }
-    }
-    None
-}
-
-pub(super) fn conversation_path_key(path: &Path) -> String {
-    normalized_path_identity(path)
-}
-
-pub(super) fn normalized_path_identity(path: &Path) -> String {
-    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut value = resolved.to_string_lossy().replace('\\', "/");
-    if let Some(rest) = value.strip_prefix("//?/UNC/") {
-        value = format!("//{rest}");
-    } else if let Some(rest) = value.strip_prefix("//?/") {
-        value = rest.to_string();
-    }
-    while value.len() > 1 && value.ends_with('/') {
-        value.pop();
-    }
-    if cfg!(windows) {
-        value.to_ascii_lowercase()
-    } else {
-        value
-    }
+fn conversation_sort_key(item: &ConversationItem) -> i64 {
+    item.updated_at
+        .as_deref()
+        .and_then(parse_rfc3339_seconds)
+        .unwrap_or(0)
 }

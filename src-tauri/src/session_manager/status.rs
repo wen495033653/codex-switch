@@ -1,4 +1,27 @@
-use super::*;
+use super::{
+    backup::status_overwrite_backup_path,
+    codex_home::{
+        ensure_session_relative_path, extract_uuid_like, normalize_relative_path, normalize_status,
+        path_to_slash, reassigned_relative_path, remove_empty_parent_dirs,
+        remove_from_global_state, resolve_codex_root, status_from_relative_path,
+        validate_codex_root, validate_session_file_path,
+    },
+    model::{parse_conflict_strategy, ConflictStrategy, SessionSummary, StatusMove},
+    rollout::{
+        conversation_title_from_summary, copy_session_with_new_id, new_session_id,
+        parse_session_file_for_list,
+    },
+    state_db::{delete_state_threads_for_sessions, update_state_thread_status},
+    util::dedupe_strings,
+};
+use crate::codex_sessions::lock_codex_session_io;
+use serde_json::{json, Value};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
+use time::OffsetDateTime;
 
 pub(super) fn set_conversation_status_impl(
     root: String,
@@ -257,4 +280,50 @@ pub(super) fn set_conversation_status_impl(
             "errors": errors
         }
     }))
+}
+
+fn session_date_parts(summary: &SessionSummary, path: &Path) -> (String, String, String) {
+    if let Some(file_name) = path.file_name().and_then(|value| value.to_str()) {
+        if let Some(parts) = date_parts_from_rollout_filename(file_name) {
+            return parts;
+        }
+    }
+    let timestamp = summary
+        .updated_at
+        .as_deref()
+        .or(summary.created_at.as_deref())
+        .and_then(date_parts_from_timestamp);
+    if let Some(parts) = timestamp {
+        return parts;
+    }
+    let now = OffsetDateTime::now_utc();
+    (
+        format!("{:04}", now.year()),
+        format!("{:02}", u8::from(now.month())),
+        format!("{:02}", now.day()),
+    )
+}
+
+fn date_parts_from_timestamp(timestamp: &str) -> Option<(String, String, String)> {
+    let date = timestamp.get(0..10)?;
+    let mut parts = date.split('-');
+    let year = parts.next()?;
+    let month = parts.next()?;
+    let day = parts.next()?;
+    if year.len() == 4
+        && month.len() == 2
+        && day.len() == 2
+        && [year, month, day]
+            .iter()
+            .all(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        Some((year.to_string(), month.to_string(), day.to_string()))
+    } else {
+        None
+    }
+}
+
+fn date_parts_from_rollout_filename(file_name: &str) -> Option<(String, String, String)> {
+    let raw = file_name.strip_prefix("rollout-")?.get(0..10)?;
+    date_parts_from_timestamp(raw)
 }

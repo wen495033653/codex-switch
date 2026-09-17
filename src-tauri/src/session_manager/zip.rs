@@ -1,129 +1,26 @@
-use super::*;
+use super::codex_home::{ensure_session_relative_path, normalize_relative_path};
+use std::io::Seek;
+use std::{collections::HashMap, fs, io::Write, path::Path};
 
-pub(super) fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffffu32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            let mask = 0u32.wrapping_sub(crc & 1);
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
-}
+const ZIP_LOCAL_FILE_HEADER: u32 = 0x0403_4b50;
 
-pub(super) struct ZipCentralEntry {
+const ZIP_CENTRAL_DIRECTORY_HEADER: u32 = 0x0201_4b50;
+
+const ZIP_END_OF_CENTRAL_DIRECTORY: u32 = 0x0605_4b50;
+
+const ZIP_UTF8_FLAG: u16 = 1 << 11;
+
+struct ZipCentralEntry {
     name: String,
     crc: u32,
     size: u32,
     offset: u32,
 }
 
-pub(super) fn write_zip_store(path: &Path, entries: &[(String, Vec<u8>)]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("创建导出目录失败 {}: {err}", parent.display()))?;
-    }
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("创建 zip 文件失败 {}: {err}", path.display()))?;
-    let mut central_entries = Vec::new();
-    for (name, data) in entries {
-        let name_bytes = name.as_bytes();
-        if name_bytes.len() > u16::MAX as usize {
-            return Err(format!("zip 条目路径过长: {name}"));
-        }
-        if data.len() > u32::MAX as usize {
-            return Err(format!("zip 条目过大: {name}"));
-        }
-        let offset = file
-            .stream_position()
-            .map_err(|err| format!("读取 zip 写入位置失败: {err}"))?;
-        if offset > u32::MAX as u64 {
-            return Err("zip 文件过大，V1 不支持 Zip64".to_string());
-        }
-        let crc = crc32(data);
-        write_u32(&mut file, ZIP_LOCAL_FILE_HEADER)?;
-        write_u16(&mut file, 20)?;
-        write_u16(&mut file, ZIP_UTF8_FLAG)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 33)?;
-        write_u32(&mut file, crc)?;
-        write_u32(&mut file, data.len() as u32)?;
-        write_u32(&mut file, data.len() as u32)?;
-        write_u16(&mut file, name_bytes.len() as u16)?;
-        write_u16(&mut file, 0)?;
-        file.write_all(name_bytes)
-            .map_err(|err| format!("写入 zip 条目名失败: {err}"))?;
-        file.write_all(data)
-            .map_err(|err| format!("写入 zip 条目失败: {err}"))?;
-        central_entries.push(ZipCentralEntry {
-            name: name.clone(),
-            crc,
-            size: data.len() as u32,
-            offset: offset as u32,
-        });
-    }
-    let central_start = file
-        .stream_position()
-        .map_err(|err| format!("读取 zip central directory 位置失败: {err}"))?;
-    if central_start > u32::MAX as u64 {
-        return Err("zip 文件过大，V1 不支持 Zip64".to_string());
-    }
-    for entry in &central_entries {
-        let name_bytes = entry.name.as_bytes();
-        write_u32(&mut file, ZIP_CENTRAL_DIRECTORY_HEADER)?;
-        write_u16(&mut file, 20)?;
-        write_u16(&mut file, 20)?;
-        write_u16(&mut file, ZIP_UTF8_FLAG)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 33)?;
-        write_u32(&mut file, entry.crc)?;
-        write_u32(&mut file, entry.size)?;
-        write_u32(&mut file, entry.size)?;
-        write_u16(&mut file, name_bytes.len() as u16)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 0)?;
-        write_u16(&mut file, 0)?;
-        write_u32(&mut file, 0)?;
-        write_u32(&mut file, entry.offset)?;
-        file.write_all(name_bytes)
-            .map_err(|err| format!("写入 zip central directory 失败: {err}"))?;
-    }
-    let central_end = file
-        .stream_position()
-        .map_err(|err| format!("读取 zip central directory 大小失败: {err}"))?;
-    let central_size = central_end - central_start;
-    if central_size > u32::MAX as u64 || central_entries.len() > u16::MAX as usize {
-        return Err("zip 文件过大，V1 不支持 Zip64".to_string());
-    }
-    write_u32(&mut file, ZIP_END_OF_CENTRAL_DIRECTORY)?;
-    write_u16(&mut file, 0)?;
-    write_u16(&mut file, 0)?;
-    write_u16(&mut file, central_entries.len() as u16)?;
-    write_u16(&mut file, central_entries.len() as u16)?;
-    write_u32(&mut file, central_size as u32)?;
-    write_u32(&mut file, central_start as u32)?;
-    write_u16(&mut file, 0)?;
-    Ok(())
-}
-
-pub(super) fn write_u16(file: &mut fs::File, value: u16) -> Result<(), String> {
-    file.write_all(&value.to_le_bytes())
-        .map_err(|err| format!("写入 zip 失败: {err}"))
-}
-
-pub(super) fn write_u32(file: &mut fs::File, value: u32) -> Result<(), String> {
-    file.write_all(&value.to_le_bytes())
-        .map_err(|err| format!("写入 zip 失败: {err}"))
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct ZipArchiveLite {
-    data: Vec<u8>,
-    entries: HashMap<String, ZipReadEntry>,
+    pub(super) data: Vec<u8>,
+    pub(super) entries: HashMap<String, ZipReadEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -234,7 +131,120 @@ impl ZipArchiveLite {
     }
 }
 
-pub(super) fn find_eocd(data: &[u8]) -> Option<usize> {
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+pub(super) fn write_zip_store(path: &Path, entries: &[(String, Vec<u8>)]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("创建导出目录失败 {}: {err}", parent.display()))?;
+    }
+    let mut file = fs::File::create(path)
+        .map_err(|err| format!("创建 zip 文件失败 {}: {err}", path.display()))?;
+    let mut central_entries = Vec::new();
+    for (name, data) in entries {
+        let name_bytes = name.as_bytes();
+        if name_bytes.len() > u16::MAX as usize {
+            return Err(format!("zip 条目路径过长: {name}"));
+        }
+        if data.len() > u32::MAX as usize {
+            return Err(format!("zip 条目过大: {name}"));
+        }
+        let offset = file
+            .stream_position()
+            .map_err(|err| format!("读取 zip 写入位置失败: {err}"))?;
+        if offset > u32::MAX as u64 {
+            return Err("zip 文件过大，V1 不支持 Zip64".to_string());
+        }
+        let crc = crc32(data);
+        write_u32(&mut file, ZIP_LOCAL_FILE_HEADER)?;
+        write_u16(&mut file, 20)?;
+        write_u16(&mut file, ZIP_UTF8_FLAG)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 33)?;
+        write_u32(&mut file, crc)?;
+        write_u32(&mut file, data.len() as u32)?;
+        write_u32(&mut file, data.len() as u32)?;
+        write_u16(&mut file, name_bytes.len() as u16)?;
+        write_u16(&mut file, 0)?;
+        file.write_all(name_bytes)
+            .map_err(|err| format!("写入 zip 条目名失败: {err}"))?;
+        file.write_all(data)
+            .map_err(|err| format!("写入 zip 条目失败: {err}"))?;
+        central_entries.push(ZipCentralEntry {
+            name: name.clone(),
+            crc,
+            size: data.len() as u32,
+            offset: offset as u32,
+        });
+    }
+    let central_start = file
+        .stream_position()
+        .map_err(|err| format!("读取 zip central directory 位置失败: {err}"))?;
+    if central_start > u32::MAX as u64 {
+        return Err("zip 文件过大，V1 不支持 Zip64".to_string());
+    }
+    for entry in &central_entries {
+        let name_bytes = entry.name.as_bytes();
+        write_u32(&mut file, ZIP_CENTRAL_DIRECTORY_HEADER)?;
+        write_u16(&mut file, 20)?;
+        write_u16(&mut file, 20)?;
+        write_u16(&mut file, ZIP_UTF8_FLAG)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 33)?;
+        write_u32(&mut file, entry.crc)?;
+        write_u32(&mut file, entry.size)?;
+        write_u32(&mut file, entry.size)?;
+        write_u16(&mut file, name_bytes.len() as u16)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 0)?;
+        write_u16(&mut file, 0)?;
+        write_u32(&mut file, 0)?;
+        write_u32(&mut file, entry.offset)?;
+        file.write_all(name_bytes)
+            .map_err(|err| format!("写入 zip central directory 失败: {err}"))?;
+    }
+    let central_end = file
+        .stream_position()
+        .map_err(|err| format!("读取 zip central directory 大小失败: {err}"))?;
+    let central_size = central_end - central_start;
+    if central_size > u32::MAX as u64 || central_entries.len() > u16::MAX as usize {
+        return Err("zip 文件过大，V1 不支持 Zip64".to_string());
+    }
+    write_u32(&mut file, ZIP_END_OF_CENTRAL_DIRECTORY)?;
+    write_u16(&mut file, 0)?;
+    write_u16(&mut file, 0)?;
+    write_u16(&mut file, central_entries.len() as u16)?;
+    write_u16(&mut file, central_entries.len() as u16)?;
+    write_u32(&mut file, central_size as u32)?;
+    write_u32(&mut file, central_start as u32)?;
+    write_u16(&mut file, 0)?;
+    Ok(())
+}
+
+fn write_u16(file: &mut fs::File, value: u16) -> Result<(), String> {
+    file.write_all(&value.to_le_bytes())
+        .map_err(|err| format!("写入 zip 失败: {err}"))
+}
+
+fn write_u32(file: &mut fs::File, value: u32) -> Result<(), String> {
+    file.write_all(&value.to_le_bytes())
+        .map_err(|err| format!("写入 zip 失败: {err}"))
+}
+
+fn find_eocd(data: &[u8]) -> Option<usize> {
     if data.len() < 22 {
         return None;
     }
@@ -244,14 +254,14 @@ pub(super) fn find_eocd(data: &[u8]) -> Option<usize> {
         .find(|index| read_u32_at(data, *index).ok() == Some(ZIP_END_OF_CENTRAL_DIRECTORY))
 }
 
-pub(super) fn read_u16_at(data: &[u8], offset: usize) -> Result<u16, String> {
+fn read_u16_at(data: &[u8], offset: usize) -> Result<u16, String> {
     let bytes = data
         .get(offset..offset + 2)
         .ok_or_else(|| "zip 数据越界".to_string())?;
     Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
 }
 
-pub(super) fn read_u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
+fn read_u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
     let bytes = data
         .get(offset..offset + 4)
         .ok_or_else(|| "zip 数据越界".to_string())?;
