@@ -1,179 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
+import {
+  PREVIEW_PAGE_SIZE,
+  PREVIEW_MESSAGE_WINDOW,
+  DELETE_UNDO_WINDOW_MS,
+  formatSize,
+  displayPath,
+  formatTime,
+  statusLabel,
+  statusActionLabel,
+  lower,
+  deletedActiveKey,
+  deletedPreviewConversation,
+  responseDeleteIds,
+  responseRestoredDeleteIds,
+  responsePurgedDeleteIds,
+  previewMessageKey,
+  isPreviewCancellation,
+  isPreviewStale,
+  nextPreviewRequestId,
+} from '../utils/sessionManager';
 import ConfirmDialog from './ConfirmDialog';
-
-const STATUS_FILTERS = [
-  { key: 'all', label: '全部' },
-  { key: 'active', label: '未归档' },
-  { key: 'archived', label: '已归档' },
-  { key: 'deleted', label: '已删除' }
-];
-
-const PAGE_SIZE_OPTIONS = [50, 100, 200];
-const PREVIEW_PAGE_SIZE = 80;
-const PREVIEW_MESSAGE_WINDOW = 240;
-const DELETE_UNDO_WINDOW_MS = 10_000;
-
-function formatSize(bytes) {
-  const value = Number(bytes) || 0;
-  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${value} B`;
-}
-
-function displayPath(value) {
-  const path = String(value || '').trim();
-  if (/^\\\\\?\\UNC\\/i.test(path)) return `\\\\${path.slice(8)}`;
-  if (/^\\\\\?\\/.test(path)) return path.slice(4);
-  return path;
-}
-
-function formatTime(value, language, t) {
-  if (!value) return t('未知');
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(language);
-}
-
-function statusLabel(status, t) {
-  if (status === 'archived') return t('已归档');
-  if (status === 'deleted') return t('已删除');
-  return t('未归档');
-}
-
-function statusActionLabel(status, t) {
-  return status === 'archived' ? t('归档') : t('取消归档');
-}
-
-function lower(value) {
-  return String(value || '').toLowerCase();
-}
-
-function deletedActiveKey(item) {
-  return `deleted:${item.delete_id}`;
-}
-
-function deletedPreviewConversation(item) {
-  return {
-    id: item.id,
-    title: item.title,
-    status: 'deleted',
-    updated_at: item.deleted_at,
-    size_bytes: item.size_bytes,
-    cwd: item.cwd,
-    source_path: item.root_path,
-    relative_path: item.original_relative_path
-  };
-}
-
-function responseDeleteIds(response) {
-  const ids = Array.isArray(response?.report?.delete_ids)
-    ? response.report.delete_ids
-    : response?.delete_ids;
-  return Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
-}
-
-function responseRestoredDeleteIds(response) {
-  const ids = Array.isArray(response?.report?.restored_delete_ids)
-    ? response.report.restored_delete_ids
-    : response?.restored_delete_ids;
-  return Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
-}
-
-function responsePurgedDeleteIds(response) {
-  const ids = response?.report?.purged_delete_ids;
-  return Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
-}
-
-function previewMessageKey(message, fallbackIndex = 0) {
-  if (message && message.offset !== undefined && message.offset !== null) {
-    return `${message.role || 'message'}:${message.offset}`;
-  }
-  return `${message?.role || 'message'}:${message?.timestamp || 'unknown'}:${fallbackIndex}`;
-}
-
-function isPreviewCancellation(error) {
-  return String(error?.message || error || '').includes('会话预览请求已取消');
-}
-
-function isPreviewStale(error) {
-  return String(error?.message || error || '').includes('会话文件已变化');
-}
-
-function nextPreviewRequestId(requestRef) {
-  const candidate = (Date.now() * 1000) + ((requestRef.current + 1) % 1000);
-  requestRef.current = Math.max(requestRef.current + 1, candidate);
-  return requestRef.current;
-}
-
-export function useSessionManagerState() {
-  const [rootPath, setRootPath] = useState('');
-  const [conversations, setConversations] = useState([]);
-  const [deletedSessions, setDeletedSessions] = useState([]);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-  const [selected, setSelected] = useState(() => new Set());
-  const [selectedDeleted, setSelectedDeleted] = useState(() => new Set());
-  const [activePath, setActivePath] = useState('');
-  const [preview, setPreview] = useState(null);
-  const [contextMenu, setContextMenu] = useState(null);
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const [purgeConfirm, setPurgeConfirm] = useState(null);
-  const [deleteUndo, setDeleteUndo] = useState(null);
-  const [conflictConfirm, setConflictConfirm] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const previewRef = useRef(null);
-  const previewRequestRef = useRef(0);
-  const hasAutoLoadedRef = useRef(false);
-
-  return {
-    rootPath,
-    setRootPath,
-    conversations,
-    setConversations,
-    deletedSessions,
-    setDeletedSessions,
-    search,
-    setSearch,
-    statusFilter,
-    setStatusFilter,
-    page,
-    setPage,
-    pageSize,
-    setPageSize,
-    selected,
-    setSelected,
-    selectedDeleted,
-    setSelectedDeleted,
-    activePath,
-    setActivePath,
-    preview,
-    setPreview,
-    contextMenu,
-    setContextMenu,
-    deleteConfirm,
-    setDeleteConfirm,
-    purgeConfirm,
-    setPurgeConfirm,
-    deleteUndo,
-    setDeleteUndo,
-    conflictConfirm,
-    setConflictConfirm,
-    loading,
-    setLoading,
-    previewLoading,
-    setPreviewLoading,
-    actionLoading,
-    setActionLoading,
-    previewRef,
-    previewRequestRef,
-    hasAutoLoadedRef
-  };
-}
+import SessionConflictDialog from './session/SessionConflictDialog';
+import SessionContextMenu from './session/SessionContextMenu';
+import SessionFilterBar from './session/SessionFilterBar';
+import SessionListPanel from './session/SessionListPanel';
+import SessionPreviewPanel from './session/SessionPreviewPanel';
 
 export default function SessionManagerPage({ toast, toastError, sessionState }) {
   const { language, t, translateRuntimeText } = useI18n();
@@ -828,52 +680,20 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
 
   return (
     <div className="session-manager-page">
-      <div className="session-filterbar">
-        <div className="search-wrapper session-search">
-          <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input
-            className="search-input"
-            placeholder={t('搜索标题、ID、工作目录或路径...')}
-            aria-label={t('搜索标题、ID、工作目录或路径...')}
-            value={search}
-            onChange={event => setSearch(event.target.value)}
-          />
-        </div>
-        <div className="nav-tabs session-status-tabs">
-          {STATUS_FILTERS.map(item => {
-            const count = item.key === 'all'
-              ? conversations.length
-              : item.key === 'deleted'
-                ? deletedSessions.length
-                : conversations.filter(conversation => conversation.status === item.key).length;
-            return (
-              <button
-                key={item.key}
-                  type="button"
-                  className={`nav-item session-status-tab ${statusFilter === item.key ? 'active' : ''}`}
-                  aria-pressed={statusFilter === item.key}
-                  onClick={() => setStatusFilter(item.key)}
-                >
-                  <span className="session-status-label">{t(item.label)}</span>
-                  <span className="session-status-count">{count}</span>
-                </button>
-            );
-          })}
-        </div>
-        <div className="session-page-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => refreshSessions(rootPath)} disabled={loading || actionLoading}>
-            {loading ? t('刷新中...') : t('刷新')}
-          </button>
-          {!isDeletedView && (
-            <button type="button" className="btn btn-primary" onClick={handleImport} disabled={!rootPath || actionLoading}>
-              {t('导入会话')}
-            </button>
-          )}
-        </div>
-      </div>
+      <SessionFilterBar
+        actionLoading={actionLoading}
+        conversations={conversations}
+        deletedSessions={deletedSessions}
+        handleImport={handleImport}
+        isDeletedView={isDeletedView}
+        loading={loading}
+        refreshSessions={refreshSessions}
+        rootPath={rootPath}
+        search={search}
+        setSearch={setSearch}
+        setStatusFilter={setStatusFilter}
+        statusFilter={statusFilter}
+      />
 
       {deleteUndo && (
         <div className="session-delete-undo" role="status" aria-live="polite">
@@ -890,292 +710,73 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
       )}
 
       <div className="session-workspace">
-        <div className="session-list-panel">
-          <div className="session-list-header">
-            <label className="session-checkbox">
-              <input
-                type="checkbox"
-                aria-label={t('选择本页会话')}
-                checked={allPageSelected}
-                onChange={toggleSelectFiltered}
-              />
-            </label>
-            <span>{t('标题')}</span>
-            <span>{t('状态')}</span>
-            <span>{isDeletedView ? t('删除时间') : t('更新时间')}</span>
-            <span>{t('大小')}</span>
-          </div>
-          <div className="session-list-body">
-            <div className={`session-list ${selectedCount > 0 ? 'has-batch-actions' : ''}`}>
-              {pageItems.map(item => {
-                const rowKey = isDeletedView ? item.delete_id : item.relative_path;
-                const activeKey = isDeletedView ? deletedActiveKey(item) : item.relative_path;
-                const isSelected = isDeletedView
-                  ? selectedDeleted.has(item.delete_id)
-                  : selected.has(item.relative_path);
-                return (
-                  <div
-                    key={rowKey}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={item.title}
-                    className={`session-row ${activePath === activeKey ? 'active' : ''}`}
-                    onClick={() => loadPreview(item)}
-                    onKeyDown={event => handleRowKeyDown(event, item)}
-                    onContextMenu={event => openContextMenu(event, item)}
-                  >
-                    <span className="session-checkbox" onClick={event => event.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        aria-label={t('选择会话：{title}', { title: item.title || t('未命名') })}
-                        checked={isSelected}
-                        onChange={event => toggleSelection(item, event.target.checked)}
-                      />
-                    </span>
-                    <span className="session-title-cell">
-                      <strong title={item.title}>{item.title}</strong>
-                    </span>
-                    <span className={`session-status-pill ${item.status}`}>{statusLabel(item.status, t)}</span>
-                    <span className="session-muted">
-                      {formatTime(isDeletedView ? item.deleted_at : item.updated_at, language, t)}
-                    </span>
-                    <span className="session-muted">{formatSize(item.size_bytes)}</span>
-                  </div>
-                );
-              })}
-              {visibleItems.length === 0 && (
-                <div className="empty-state session-empty">
-                  {isDeletedView ? t('暂无已删除会话') : t('暂无会话数据')}
-                </div>
-              )}
-            </div>
-            {selectedCount > 0 && (
-              <div className="session-contextual-toolbar" role="toolbar" aria-label={t('会话批量操作')}>
-                <span className="session-batch-count">{t('已选 {count}', { count: selectedCount })}</span>
-                {isDeletedView ? (
-                  <>
-                    <button type="button" className="btn btn-secondary" onClick={() => handleRestoreDeleted()} disabled={actionLoading}>
-                      {t('恢复')}
-                    </button>
-                    <button type="button" className="btn btn-danger" onClick={() => handlePurgeDeleted()} disabled={actionLoading}>
-                      {t('彻底删除')}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button type="button" className="btn btn-secondary" onClick={() => handleExport()} disabled={actionLoading}>
-                      {t('导出')}
-                    </button>
-                    {selectedActivePaths.length > 0 && (
-                      <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedActivePaths, 'archived')} disabled={actionLoading}>
-                        {t('归档')}
-                      </button>
-                    )}
-                    {selectedArchivedPaths.length > 0 && (
-                      <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedArchivedPaths, 'active')} disabled={actionLoading}>
-                        {t('取消归档')}
-                      </button>
-                    )}
-                    <button type="button" className="btn btn-danger" onClick={() => handleDeleteSessions()} disabled={actionLoading}>
-                      {t('删除')}
-                    </button>
-                  </>
-                )}
-                <button type="button" className="btn btn-secondary" onClick={clearSelection} disabled={actionLoading}>
-                  {t('取消选择')}
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="session-footer">
-            <span>{t('总计 {count} 个', { count: isDeletedView ? deletedSessions.length : conversations.length })}</span>
-            <span>{t('筛选 {count} 个', { count: visibleItems.length })}</span>
-            <span>{t('本页 {count} 个', { count: pageItems.length })}</span>
-            <span>{t('已选 {count} 个', { count: selectedCount })}</span>
-            <span>{formatSize(selectedSize)}</span>
-            <div className="session-pagination">
-              <button type="button" className="btn btn-secondary" onClick={() => setPage(1)} disabled={currentPage <= 1}>
-                {t('首页')}
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => setPage(value => Math.max(1, value - 1))} disabled={currentPage <= 1}>
-                {t('上页')}
-              </button>
-              <span>{currentPage}/{totalPages}</span>
-              <button type="button" className="btn btn-secondary" onClick={() => setPage(value => Math.min(totalPages, value + 1))} disabled={currentPage >= totalPages}>
-                {t('下页')}
-              </button>
-              <select value={pageSize} onChange={event => setPageSize(Number(event.target.value))}>
-                {PAGE_SIZE_OPTIONS.map(value => (
-                  <option key={value} value={value}>{t('每页 {count}', { count: value })}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
+        <SessionListPanel
+          actionLoading={actionLoading}
+          activePath={activePath}
+          allPageSelected={allPageSelected}
+          clearSelection={clearSelection}
+          conversations={conversations}
+          currentPage={currentPage}
+          deletedSessions={deletedSessions}
+          handleDeleteSessions={handleDeleteSessions}
+          handleExport={handleExport}
+          handlePurgeDeleted={handlePurgeDeleted}
+          handleRestoreDeleted={handleRestoreDeleted}
+          handleRowKeyDown={handleRowKeyDown}
+          handleSetStatus={handleSetStatus}
+          isDeletedView={isDeletedView}
+          loadPreview={loadPreview}
+          openContextMenu={openContextMenu}
+          pageItems={pageItems}
+          pageSize={pageSize}
+          selected={selected}
+          selectedActivePaths={selectedActivePaths}
+          selectedArchivedPaths={selectedArchivedPaths}
+          selectedCount={selectedCount}
+          selectedDeleted={selectedDeleted}
+          selectedSize={selectedSize}
+          setPage={setPage}
+          setPageSize={setPageSize}
+          toggleSelectFiltered={toggleSelectFiltered}
+          toggleSelection={toggleSelection}
+          totalPages={totalPages}
+          visibleItems={visibleItems}
+        />
 
-        <div className="session-preview-panel">
-          {!activeConversation && (
-            <div className="empty-state session-preview-empty">{t('选择一条会话查看预览')}</div>
-          )}
-          {activeConversation && (
-            <>
-              <div className="session-preview-head">
-                <div>
-                  <h2 title={activeConversation.title}>{activeConversation.title}</h2>
-                  <p title={activeConversation.id}>{activeConversation.id}</p>
-                </div>
-                <span className={`session-status-pill ${activeConversation.status}`}>
-                  {statusLabel(activeConversation.status, t)}
-                </span>
-              </div>
-              <div className="session-preview-meta">
-                <span>
-                  {activeConversation.status === 'deleted'
-                    ? t('删除时间：{time}', { time: formatTime(activeConversation.updated_at, language, t) })
-                    : t('更新时间：{time}', { time: formatTime(activeConversation.updated_at, language, t) })}
-                </span>
-                <span>{t('大小：{size}', { size: formatSize(activeConversation.size_bytes) })}</span>
-                <span title={activeCwd}>{t('工作目录：{path}', { path: activeCwd || t('未知') })}</span>
-                <span title={activeSourcePath}>{t('路径：{path}', { path: activeConversation.relative_path })}</span>
-              </div>
-              {previewLoading && <div className="session-preview-loading">{t('读取中...')}</div>}
-              {(activeConversation.parse_error || preview.parse_error) && (
-                <div className="session-preview-error">
-                  {translateRuntimeText(activeConversation.parse_error || preview.parse_error)}
-                </div>
-              )}
-              <div className="session-message-list" ref={previewRef}>
-                {preview?.message_page?.has_more && (
-                  <div className="session-preview-page-control">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={loadEarlierMessages}
-                      disabled={previewEarlierLoading}
-                    >
-                      {previewEarlierLoading ? t('加载中...') : t('加载更早内容')}
-                    </button>
-                  </div>
-                )}
-                {messages.map((message, index) => (
-                  <div
-                    key={previewMessageKey(message, index)}
-                    data-message-offset={message.offset ?? undefined}
-                    className={`session-message-row ${message.role === 'user' ? 'user' : 'assistant'}`}
-                  >
-                    <div className="session-message-meta">
-                      {message.role === 'user' ? t('你') : 'Codex'} · {formatTime(message.timestamp, language, t)}
-                    </div>
-                    <div className="session-message-bubble">
-                      {message.text}
-                    </div>
-                  </div>
-                ))}
-                {previewTrimmedNewer && (
-                  <div className="session-preview-latest-control">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => loadPreview(previewItemRef.current)}
-                      disabled={previewLoading}
-                    >
-                      {t('回到最新内容')}
-                    </button>
-                  </div>
-                )}
-                {messages.length === 0 && !previewLoading && !previewEarlierLoading && (
-                  <div className="empty-state session-empty">{t('没有解析到可读对话')}</div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+        <SessionPreviewPanel
+          activeConversation={activeConversation}
+          activeCwd={activeCwd}
+          activeSourcePath={activeSourcePath}
+          loadEarlierMessages={loadEarlierMessages}
+          loadPreview={loadPreview}
+          messages={messages}
+          preview={preview}
+          previewEarlierLoading={previewEarlierLoading}
+          previewItemRef={previewItemRef}
+          previewLoading={previewLoading}
+          previewRef={previewRef}
+          previewTrimmedNewer={previewTrimmedNewer}
+        />
       </div>
 
       {contextMenu && (
-        <div
-          className="session-context-menu"
-          role="menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={event => event.stopPropagation()}
-        >
-          {contextMenu.item.status === 'deleted' ? (
-            <>
-              <button type="button" role="menuitem" onClick={() => {
-                const item = contextMenu.item;
-                setContextMenu(null);
-                handleRestoreDeleted([item.delete_id]);
-              }}>{t('恢复')}</button>
-              <button type="button" role="menuitem" className="danger" onClick={() => {
-                const item = contextMenu.item;
-                setContextMenu(null);
-                handlePurgeDeleted([item.delete_id]);
-              }}>{t('彻底删除')}</button>
-            </>
-          ) : (
-            <>
-              {contextMenu.item.status === 'active' && (
-                <button type="button" role="menuitem" onClick={() => {
-                  const item = contextMenu.item;
-                  setContextMenu(null);
-                  handleSetStatus([item.relative_path], 'archived');
-                }}>{t('归档')}</button>
-              )}
-              {contextMenu.item.status === 'archived' && (
-                <button type="button" role="menuitem" onClick={() => {
-                  const item = contextMenu.item;
-                  setContextMenu(null);
-                  handleSetStatus([item.relative_path], 'active');
-                }}>{t('取消归档')}</button>
-              )}
-              <button type="button" role="menuitem" onClick={() => {
-                const item = contextMenu.item;
-                setContextMenu(null);
-                handleExport([item.relative_path]);
-              }}>{t('导出')}</button>
-              <button type="button" role="menuitem" className="danger" onClick={() => {
-                const item = contextMenu.item;
-                setContextMenu(null);
-                handleDeleteSessions([item.relative_path]);
-              }}>{t('删除')}</button>
-            </>
-          )}
-        </div>
+        <SessionContextMenu
+          contextMenu={contextMenu}
+          handleDeleteSessions={handleDeleteSessions}
+          handleExport={handleExport}
+          handlePurgeDeleted={handlePurgeDeleted}
+          handleRestoreDeleted={handleRestoreDeleted}
+          handleSetStatus={handleSetStatus}
+          setContextMenu={setContextMenu}
+        />
       )}
 
       {conflictConfirm && (
-        <div className="modal-overlay">
-          <div className="modal-content modal-content-lg session-conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="session-conflict-title" aria-describedby="session-conflict-message">
-            <h3 id="session-conflict-title">{conflictConfirm.title}</h3>
-            <p id="session-conflict-message">{conflictConfirm.message}</p>
-            <div className="session-conflict-list">
-              {conflictConfirm.conflicts.slice(0, 8).map((item, index) => (
-                <div key={`${item.target || item.relative_path || item.delete_id || index}`} className="session-conflict-item">
-                  <strong title={item.title || item.target || ''}>{item.title || item.target || t('冲突会话')}</strong>
-                  <span title={item.target || item.relative_path || item.delete_id || ''}>
-                    {item.target || item.relative_path || item.delete_id}
-                  </span>
-                </div>
-              ))}
-              {conflictConfirm.conflicts.length > 8 && (
-                <div className="session-conflict-item">
-                  <strong>{t('还有 {count} 个冲突', { count: conflictConfirm.conflicts.length - 8 })}</strong>
-                </div>
-              )}
-            </div>
-            <div className="session-conflict-actions">
-              <button type="button" className="btn btn-secondary" onClick={() => resolveConflictDialog('skip')} disabled={actionLoading}>
-                {t('跳过')}
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => resolveConflictDialog('modify_id')} disabled={actionLoading}>
-                {t('修改 ID')}
-              </button>
-              <button type="button" className="btn btn-danger" onClick={() => resolveConflictDialog('overwrite')} disabled={actionLoading}>
-                {t('覆盖')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <SessionConflictDialog
+          actionLoading={actionLoading}
+          conflictConfirm={conflictConfirm}
+          resolveConflictDialog={resolveConflictDialog}
+        />
       )}
 
       {deleteConfirm && (

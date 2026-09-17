@@ -1,7 +1,8 @@
 import AccountsPage from './AccountsPage';
 import ApiModePage from './ApiModePage';
 import CodexPage from './CodexPage';
-import SessionManagerPage, { useSessionManagerState } from './SessionManagerPage';
+import { useSessionManagerState } from '../hooks/useSessionManagerState';
+import SessionManagerPage from './SessionManagerPage';
 import SettingsPage from './SettingsPage';
 
 export default function AppMainView({
