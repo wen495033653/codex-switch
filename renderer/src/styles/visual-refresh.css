@@ -167,11 +167,6 @@ html[data-theme="light"] .navbar {
   box-shadow: inset 0 0 0 1px var(--border-subtle), var(--shadow-sm);
 }
 
-.brand-mark-animation {
-  border-radius: 13px;
-  transform-origin: center;
-}
-
 .brand-copy {
   min-width: 0;
   display: grid;
@@ -263,29 +258,9 @@ html[data-theme="light"] .current-mode-pill {
   box-shadow: none;
 }
 
-.current-mode-dot {
-  width: 7px;
-  height: 7px;
-}
-
 .current-mode-pill.api .current-mode-dot,
 .current-mode-pill.subscription .current-mode-dot {
   box-shadow: 0 0 0 4px var(--accent-soft);
-}
-
-.current-mode-label {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.current-mode-detail {
-  font-size: 11px;
-}
-
-.dev-build-chip {
-  height: 34px;
-  border-radius: 10px;
-  box-shadow: none;
 }
 
 .main-content {
@@ -399,12 +374,6 @@ html[data-theme="light"] .api-mode-input:focus {
   border-color: var(--accent-border);
   background: var(--surface-panel);
   box-shadow: var(--focus-ring);
-}
-
-.search-icon {
-  width: 16px;
-  height: 16px;
-  left: 14px;
 }
 
 .btn {
@@ -580,10 +549,6 @@ html[data-theme="light"] .settings-tab.active {
   box-shadow: none;
 }
 
-html[data-theme="light"] .nav-item.active .account-filter-count {
-  color: var(--text-secondary);
-}
-
 /* Resource grids and cards */
 
 .list-panel,
@@ -642,15 +607,6 @@ html[data-theme="light"] .account-card-name {
   font-weight: 700;
 }
 
-.account-card-footer {
-  border-top-style: solid;
-  border-top-color: var(--border-subtle);
-}
-
-.icon-btn {
-  border-radius: 9px;
-}
-
 .current-badge,
 .codex-app-running-badge,
 .plan-badge,
@@ -696,11 +652,6 @@ html[data-theme="light"] .quota-item-card .quota-header {
   color: var(--text-secondary);
 }
 
-.usage-stats-summary {
-  border-top-style: solid;
-  border-top-color: var(--border-subtle);
-}
-
 .usage-stats-title,
 .usage-stats-metric-label,
 .usage-stats-empty-text {
@@ -725,10 +676,6 @@ html[data-theme="light"] .panel-footer {
   border-top-color: var(--border-subtle);
   background: color-mix(in srgb, var(--surface-raised) 72%, var(--surface-panel));
   color: var(--text-tertiary);
-}
-
-html[data-theme="light"] .panel-footer {
-  font-weight: 500;
 }
 
 .page-btn.active,
@@ -767,23 +714,6 @@ html[data-theme="light"] .empty-state-card {
   transform: none;
 }
 
-.api-profile-card-info-row {
-  border-color: var(--border-subtle);
-  background: var(--surface-raised);
-}
-
-.api-profile-card-label {
-  color: var(--text-tertiary);
-}
-
-.api-profile-card-value {
-  color: var(--text-primary);
-}
-
-.api-profile-card-test-button {
-  border-radius: 9px;
-}
-
 .api-check-model-trigger,
 .api-check-model-menu,
 .api-test-response-block,
@@ -819,11 +749,6 @@ html[data-theme="light"] .empty-state-card {
 
 .settings-tabs {
   width: fit-content;
-}
-
-.settings-tab {
-  min-width: 82px;
-  height: 32px;
 }
 
 .settings-theme-options {
@@ -869,10 +794,6 @@ html[data-theme="light"] .settings-codex-app-pid-card {
 .codex-model-instructions-section {
   padding-block: 10px;
   gap: 0;
-}
-
-.codex-model-instructions-head {
-  min-height: 38px;
 }
 
 .codex-page .settings-modal {
@@ -965,14 +886,6 @@ html[data-theme="light"] .settings-codex-app-pid-card {
 
 .settings-proxy-field .settings-inline-field-label {
   white-space: nowrap;
-}
-
-.settings-proxy-switch-button {
-  justify-self: end;
-}
-
-.settings-remote-control-section {
-  gap: 12px;
 }
 
 .settings-section-title,
@@ -1073,12 +986,6 @@ html[data-theme="light"] .settings-remote-control-switch.active {
   background: var(--accent-soft);
 }
 
-.settings-about-card-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-}
-
 .settings-about-card-title,
 html[data-theme="light"] .settings-about-card-title {
   color: var(--text-heading);
@@ -1087,10 +994,6 @@ html[data-theme="light"] .settings-about-card-title {
 }
 
 /* Sessions */
-
-.session-manager-page {
-  gap: 10px;
-}
 
 .session-filterbar {
   padding: 9px 11px;
@@ -1136,12 +1039,6 @@ html[data-theme="light"] .session-status-tabs {
   box-shadow: none;
 }
 
-.session-status-count {
-  margin: 0;
-  color: var(--text-secondary);
-  opacity: 0.72;
-}
-
 .session-status-tab.active .session-status-count {
   color: currentColor;
   opacity: 1;
@@ -1151,11 +1048,6 @@ html[data-theme="light"] .session-status-tab.active {
   background: rgba(26, 28, 31, 0.05);
   color: var(--text-primary);
   box-shadow: none;
-}
-
-.session-workspace {
-  gap: 10px;
-  grid-template-columns: minmax(430px, 0.9fr) minmax(380px, 1.1fr);
 }
 
 .session-list-panel,
@@ -1221,14 +1113,6 @@ html[data-theme="light"] .session-row.active {
 html[data-theme="light"] .session-title-cell strong,
 html[data-theme="light"] .session-preview-head h2 {
   color: var(--text-heading);
-  font-weight: 600;
-}
-
-.session-status-pill {
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 7px;
-  font-size: 10px;
   font-weight: 600;
 }
 
@@ -1305,12 +1189,6 @@ html[data-theme="light"] .modal-content {
   background: var(--surface-raised);
   color: var(--text-primary);
   box-shadow: var(--shadow-md);
-}
-
-.usage-detail-drawer {
-  border-left-color: var(--border-default);
-  background: var(--surface-panel);
-  box-shadow: var(--shadow-overlay);
 }
 
 .usage-detail-close,
@@ -1407,10 +1285,6 @@ html[data-theme="light"] .modal-content {
     width: min(300px, 34vw);
     max-width: 300px;
     flex: 0 1 280px;
-  }
-
-  .session-workspace {
-    grid-template-columns: minmax(390px, 0.95fr) minmax(320px, 1.05fr);
   }
 
   .session-list-header,

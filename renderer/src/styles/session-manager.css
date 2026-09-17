@@ -3,7 +3,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .session-filterbar {
@@ -112,6 +112,8 @@
   font-variant-numeric: tabular-nums;
   line-height: 1;
   opacity: 0.72;
+  margin: 0;
+  color: var(--text-secondary);
 }
 
 .session-contextual-toolbar {
@@ -161,8 +163,8 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(430px, 0.92fr) minmax(360px, 1.08fr);
-  gap: 12px;
+  grid-template-columns: minmax(430px, 0.9fr) minmax(380px, 1.1fr);
+  gap: 10px;
 }
 
 .session-list-panel,
@@ -269,17 +271,18 @@
 
 .session-status-pill {
   width: fit-content;
-  height: 24px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 9px;
-  border-radius: 999px;
+  padding: 0 8px;
+  border-radius: 7px;
   border: 1px solid var(--border-app);
-  font-size: 12px;
+  font-size: 10px;
   color: var(--text-secondary);
   background: var(--bg-subtle);
   white-space: nowrap;
+  font-weight: 600;
 }
 
 .session-status-pill.active {
@@ -804,6 +807,6 @@ html[data-theme="light"] .session-conflict-list {
   }
 
   .session-workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(390px, 0.95fr) minmax(320px, 1.05fr);
   }
 }

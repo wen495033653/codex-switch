@@ -229,6 +229,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  min-height: 38px;
 }
 
 .codex-model-instructions-switch {

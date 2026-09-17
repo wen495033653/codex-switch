@@ -41,15 +41,14 @@
   gap: 7px;
   flex: 0 0 auto;
   border: 1px solid rgba(54, 211, 153, 0.72);
-  border-radius: 8px;
+  border-radius: 10px;
   background: rgba(54, 211, 153, 0.15);
   color: #d8fff1;
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 10px 24px rgba(54, 211, 153, 0.12);
+    none;
 }
 
 .dev-build-chip:hover {

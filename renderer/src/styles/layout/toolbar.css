@@ -83,11 +83,13 @@
 
 .search-icon {
   position: absolute;
-  left: 16px;
+  left: 14px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-tertiary);
   pointer-events: none;
+  width: 16px;
+  height: 16px;
 }
 
 .btn {

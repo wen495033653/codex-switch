@@ -22,6 +22,7 @@ html[data-theme="light"] .panel-footer {
   background: rgba(241, 245, 249, 0.92);
   border-top-color: var(--border-app);
   color: #64748b;
+  font-weight: 500;
 }
 
 html[data-theme="light"] .page-btn {

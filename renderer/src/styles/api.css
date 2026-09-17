@@ -88,8 +88,9 @@
   gap: 2px;
   padding: 6px 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface-raised);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  border-color: var(--border-subtle);
 }
 
 .api-profile-card-label {

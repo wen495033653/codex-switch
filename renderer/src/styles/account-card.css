@@ -88,6 +88,8 @@
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
+  border-top-style: solid;
+  border-top-color: var(--border-subtle);
 }
 
 .account-card .action-btns {
