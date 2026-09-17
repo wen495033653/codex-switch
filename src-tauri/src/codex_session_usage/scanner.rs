@@ -1,24 +1,223 @@
-mod date_dirs;
-mod home;
-mod recent;
-mod recursive;
-
 use std::{
+    cmp::Reverse,
+    env, fs,
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
-pub(super) use home::codex_home_dir;
-
 pub(super) fn collect_recent_files(
     sessions_dir: &Path,
 ) -> Result<Vec<(SystemTime, PathBuf)>, String> {
-    let mut files = recent::RecentRolloutFiles::new();
-    date_dirs::collect_recent_files(sessions_dir, &mut files)?;
-    if files.len() < recent::SESSION_FILE_LIMIT {
-        recursive::collect_recent_files(sessions_dir, &mut files)?;
+    let mut files = RecentRolloutFiles::new();
+    collect_recent_files_from_date_dirs(sessions_dir, &mut files)?;
+    if files.len() < SESSION_FILE_LIMIT {
+        collect_recent_files_recursive(sessions_dir, &mut files)?;
     }
     Ok(files.into_vec())
+}
+
+const SESSION_DATE_DIR_SCAN_LIMIT: usize = 7;
+
+fn collect_recent_files_from_date_dirs(
+    sessions_dir: &Path,
+    files: &mut RecentRolloutFiles,
+) -> Result<(), String> {
+    let mut scanned_date_dirs = 0;
+    for (_, year_dir) in read_child_dirs(sessions_dir, 4)? {
+        let month_dirs = match read_child_dirs(&year_dir, 2) {
+            Ok(month_dirs) => month_dirs,
+            Err(err) => {
+                eprintln!("{err}");
+                continue;
+            }
+        };
+        for (_, month_dir) in month_dirs {
+            let day_dirs = match read_child_dirs(&month_dir, 2) {
+                Ok(day_dirs) => day_dirs,
+                Err(err) => {
+                    eprintln!("{err}");
+                    continue;
+                }
+            };
+            for (_, day_dir) in day_dirs {
+                if let Err(err) = collect_files_from_date_dir(&day_dir, files) {
+                    eprintln!("{err}");
+                }
+                scanned_date_dirs += 1;
+                if scanned_date_dirs >= SESSION_DATE_DIR_SCAN_LIMIT {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_fixed_width_digits(value: &str, width: usize) -> bool {
+    value.len() == width && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn read_child_dirs(dir: &Path, name_width: usize) -> Result<Vec<(String, PathBuf)>, String> {
+    let entries = fs::read_dir(dir)
+        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", dir.display()))?;
+    let mut dirs = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!("读取 Codex session 目录条目失败: {err}");
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                eprintln!("读取 Codex session 目录类型失败 {}: {err}", path.display());
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if is_fixed_width_digits(name, name_width) {
+            dirs.push((name.to_string(), path));
+        }
+    }
+    dirs.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    Ok(dirs)
+}
+
+fn collect_files_from_date_dir(
+    date_dir: &Path,
+    files: &mut RecentRolloutFiles,
+) -> Result<(), String> {
+    let entries = fs::read_dir(date_dir)
+        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", date_dir.display()))?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!("读取 Codex session 条目失败: {err}");
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                eprintln!("读取 Codex session 文件类型失败 {}: {err}", path.display());
+                continue;
+            }
+        };
+        if file_type.is_file() {
+            files.push_from_entry(&entry, &path);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn codex_home_dir() -> PathBuf {
+    if let Some(value) = env::var_os("CODEX_HOME") {
+        return PathBuf::from(value);
+    }
+    #[cfg(windows)]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    if let Some(value) = home {
+        return PathBuf::from(value).join(".codex");
+    }
+    PathBuf::from(".codex")
+}
+
+const SESSION_FILE_LIMIT: usize = 24;
+
+struct RecentRolloutFiles {
+    files: Vec<(SystemTime, PathBuf)>,
+}
+
+impl RecentRolloutFiles {
+    pub(super) fn new() -> Self {
+        Self { files: Vec::new() }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    pub(super) fn push_from_entry(&mut self, entry: &fs::DirEntry, path: &Path) {
+        if !is_rollout_jsonl(path) {
+            return;
+        }
+        if self.files.iter().any(|(_, existing)| existing == path) {
+            return;
+        }
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(err) => {
+                eprintln!(
+                    "读取 Codex session 文件修改时间失败 {}: {err}",
+                    path.display()
+                );
+                return;
+            }
+        };
+        self.files.push((modified, path.to_path_buf()));
+        self.files
+            .sort_unstable_by_key(|(modified, _)| Reverse(*modified));
+        self.files.truncate(SESSION_FILE_LIMIT);
+    }
+
+    pub(super) fn into_vec(self) -> Vec<(SystemTime, PathBuf)> {
+        self.files
+    }
+}
+
+fn is_rollout_jsonl(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|file_name| file_name.starts_with("rollout-"))
+        && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+}
+
+fn collect_recent_files_recursive(
+    dir: &Path,
+    files: &mut RecentRolloutFiles,
+) -> Result<(), String> {
+    let entries = fs::read_dir(dir)
+        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", dir.display()))?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!("读取 Codex session 条目失败: {err}");
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                eprintln!("读取 Codex session 文件类型失败 {}: {err}", path.display());
+                continue;
+            }
+        };
+        if file_type.is_dir() {
+            if let Err(err) = collect_recent_files_recursive(&path, files) {
+                eprintln!("{err}");
+            }
+            continue;
+        }
+        if file_type.is_file() {
+            files.push_from_entry(&entry, &path);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
