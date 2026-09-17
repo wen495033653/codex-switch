@@ -11,17 +11,13 @@ import {
   OAUTH_TIMEOUT_HINT
 } from './utils/appState';
 import {
-  getCodexAppInstanceKey,
-  markCodexAppInstanceRunning,
-  normalizeCodexAppInstanceStatus
-} from './utils/codexAppInstances';
-import {
   useAddAccountFlow,
   useAccountOperations,
   useAccountPagination,
   useAppBootstrap,
   useApiModeDraft,
   useAsyncPolling,
+  useCodexAppInstances,
   useCodexSessionSync,
   useCurrentModeSummary,
   useDevDiagnostics,
@@ -35,18 +31,6 @@ import {
 } from './hooks';
 
 const IS_DEV_BUILD = import.meta.env.DEV;
-const CODEX_APP_INSTANCE_REOPEN_ERRORS = [
-  '独立 Codex 窗口未运行',
-  '未找到独立 Codex 的可见窗口'
-];
-
-function shouldReopenCodexAppInstanceAfterShowError(err) {
-  const message = typeof err === 'string'
-    ? err
-    : String((err && (err.message || err.error)) || '');
-  return CODEX_APP_INSTANCE_REOPEN_ERRORS.some(text => message.includes(text));
-}
-
 export default function App() {
   if (IS_DEV_BUILD && isDevLogWindow()) {
     return (
@@ -108,29 +92,20 @@ function MainApp() {
   const [dataDir, setDataDir] = useState('');
   const [usageStats, setUsageStats] = useState({ subscriptions: {}, api_profiles: {}, warnings: [] });
   const [usageStatsDetail, setUsageStatsDetail] = useState(null);
-  const [codexAppInstanceStatus, setCodexAppInstanceStatus] = useState(() => normalizeCodexAppInstanceStatus(null));
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
+  const {
+    codexAppInstanceStatus,
+    openCodexAppInstance,
+    openingCodexAppTarget,
+    refreshCodexAppInstanceStatus
+  } = useCodexAppInstances({ toast, toastError });
   const [remoteControlNotice, setRemoteControlNotice] = useState({
     visible: false,
     message: ''
   });
-  const refreshCodexAppInstanceStatus = async ({ silent = true } = {}) => {
-    if (!window.api || typeof window.api.getCodexAppInstanceStatus !== 'function') {
-      setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(null));
-      return null;
-    }
-    try {
-      const res = await window.api.getCodexAppInstanceStatus();
-      setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(res));
-      return res;
-    } catch (err) {
-      if (!silent) toastError(err, '加载 Codex 多开状态失败', 7000);
-      return null;
-    }
-  };
   const refreshUsageStats = async ({ silent = false } = {}) => {
     if (!window.api || typeof window.api.getUsageStats !== 'function') return null;
     try {
@@ -460,46 +435,7 @@ function MainApp() {
     toastError
   });
 
-  const [openingCodexAppTarget, setOpeningCodexAppTarget] = useState('');
 
-  const openCodexAppInstance = async (kind, id) => {
-    const targetId = String(id || '').trim();
-    if (!kind || !targetId || openingCodexAppTarget) return;
-    const targetKey = `${kind}:${targetId}`;
-    const instanceKey = getCodexAppInstanceKey(kind, targetId);
-    const instanceRunning = Boolean(
-      instanceKey && codexAppInstanceStatus.runningByKey[instanceKey]
-    );
-    setOpeningCodexAppTarget(targetKey);
-    try {
-      let usedOpenCommand = false;
-      const openTargetInstance = async () => {
-        usedOpenCommand = true;
-        return window.api.openCodexAppInstance({ kind, id: targetId });
-      };
-
-      let res;
-      if (instanceRunning && typeof window.api.showCodexAppInstance === 'function') {
-        try {
-          res = await window.api.showCodexAppInstance({ kind, id: targetId });
-        } catch (err) {
-          if (!shouldReopenCodexAppInstanceAfterShowError(err)) throw err;
-          res = await openTargetInstance();
-        }
-      } else {
-        res = await openTargetInstance();
-      }
-      if (usedOpenCommand) {
-        setCodexAppInstanceStatus(prev => markCodexAppInstanceRunning(prev, res));
-      }
-      toast((res && res.message) || (usedOpenCommand ? '已打开 Codex' : '已打开 Codex 窗口'));
-      window.setTimeout(() => refreshCodexAppInstanceStatus({ silent: true }), 1200);
-    } catch (err) {
-      toastError(err, '打开 Codex 失败', 7000);
-    } finally {
-      setOpeningCodexAppTarget(prev => (prev === targetKey ? '' : prev));
-    }
-  };
 
   useAppBootstrap({
     applyOauthUpdate,

@@ -5,6 +5,7 @@ export { useAppBootstrap } from './useAppBootstrap';
 export { useApiModeDraft } from './useApiModeDraft';
 export { useAsyncPolling } from './useAsyncPolling';
 export { useApiProfilePagination } from './useApiProfilePagination';
+export { useCodexAppInstances } from './useCodexAppInstances';
 export { useCodexSessionSync } from './useCodexSessionSync';
 export { useCurrentModeSummary } from './useCurrentModeSummary';
 export { useDevDiagnostics } from './useDevDiagnostics';
