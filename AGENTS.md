@@ -3,6 +3,7 @@
 - 开始修改本项目代码、文档、Git branch、PR、release 或验证流程前，先读取并遵守 `CONTRIBUTING.md`。
 - `CONTRIBUTING.md` 中的项目级规则优先于全局 `git-flow` skill。
 - 本文件记录维护者本地开发、合并外部 PR、以及把外部 PR 和自己的 feature 分支做整合的流程；对外贡献规则写在 `CONTRIBUTING.md`。
+- 新增或移动代码前，先读 `docs/development/module-structure.md`：模块分层、依赖方向与导入约定。
 
 ## Codex Switch 维护者流程
 
