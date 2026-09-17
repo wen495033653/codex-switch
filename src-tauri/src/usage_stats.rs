@@ -1,24 +1,6 @@
-use crate::{
-    accounts::get_codex_state_value,
-    json_util::{raw_string_field, string_field},
-    paths::{app_data_dir, codex_dir, ensure_parent_dir},
-    settings::read_settings_value,
-    time_util::{now_string, parse_rfc3339_seconds},
-};
-use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::{json, Map, Value};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    fs,
-    io::{BufRead, BufReader},
-    path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
-    time::SystemTime,
-};
-use time::{OffsetDateTime, UtcOffset};
-
 mod aggregate;
 mod db;
+mod model;
 mod parse;
 mod pricing;
 mod scan;
@@ -26,218 +8,34 @@ mod sources;
 #[cfg(test)]
 mod tests;
 
-use aggregate::*;
-use db::*;
-use parse::*;
-use pricing::*;
-use scan::*;
-use sources::*;
-
-const OWNER_TYPE_SUBSCRIPTION: &str = "subscription";
-const OWNER_TYPE_API_PROFILE: &str = "api_profile";
-const PROVIDER_SUBSCRIPTION: &str = "openai";
-const PROVIDER_API: &str = "api";
-const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
-const CODEX_APP_INSTANCE_MARKER_FILE: &str = "codex-switch-instance.json";
-const META_STATS_STARTED_AT: &str = "stats_started_at";
-const META_PRICING_UPDATED_AT: &str = "pricing_updated_at";
-const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
-const PRICING_UPDATED_AT: &str = "2026-07-10";
-const LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 270_000;
-const PRICING_CONTEXT_STANDARD_SHORT: &str = "standard_short_context";
-const PRICING_CONTEXT_STANDARD_LONG: &str = "standard_long_context";
-const UNPRICED_REASON_MISSING_MODEL_PRICE: &str = "missing_model_price";
-const UNPRICED_REASON_MISSING_CACHED_INPUT_PRICE: &str = "missing_cached_input_price";
-const SCAN_OUTCOME_INDEXED: &str = "indexed";
-const SCAN_OUTCOME_IGNORED: &str = "ignored";
-const SCAN_OUTCOME_DUPLICATE: &str = "duplicate";
-const SCAN_OUTCOME_MISSING_ATTRIBUTION: &str = "missing_attribution";
-const SCAN_OUTCOME_BEFORE_START: &str = "before_start";
+use crate::{
+    accounts::get_codex_state_value,
+    json_util::{raw_string_field, string_field},
+    paths::codex_dir,
+    settings::read_settings_value,
+    time_util::{now_string, parse_rfc3339_seconds},
+};
+use serde_json::Value;
+use std::{
+    path::Path,
+    sync::{Mutex, OnceLock},
+};
+use {
+    aggregate::{aggregate_usage, usage_window_starts},
+    db::{
+        meta_value, open_usage_connection, record_attribution_at, usage_db_path,
+        META_STATS_STARTED_AT,
+    },
+    model::{
+        ScanWarnings, UsageScanSource, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION,
+        PROVIDER_API, PROVIDER_SUBSCRIPTION,
+    },
+    pricing::{count_unpriced_sessions, recompute_existing_costs_if_needed},
+    scan::{load_session_scan_states, scan_codex_sessions},
+    sources::default_usage_scan_sources,
+};
 
 static USAGE_STATS_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-#[derive(Clone, Copy)]
-struct TokenPrices {
-    input_per_million: f64,
-    cached_input_per_million: Option<f64>,
-    output_per_million: f64,
-}
-
-#[derive(Clone, Copy)]
-struct ModelPrice {
-    model: &'static str,
-    short_context: TokenPrices,
-    long_context: Option<TokenPrices>,
-    long_context_threshold: Option<u64>,
-}
-
-#[derive(Default)]
-struct ScanWarnings {
-    missing_attribution: u64,
-    missing_price: u64,
-    skipped_before_start: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SessionFileStamp {
-    modified_nanos: i64,
-    size: u64,
-}
-
-#[derive(Clone, Debug)]
-struct SessionScanState {
-    stamp: SessionFileStamp,
-    scan_scope: String,
-    session_id: String,
-    outcome: String,
-}
-
-#[derive(Clone, Default)]
-struct TokenUsage {
-    input_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_output_tokens: u64,
-    total_tokens: u64,
-}
-
-impl TokenUsage {
-    fn has_tokens(&self) -> bool {
-        self.total_tokens > 0
-    }
-
-    fn add_assign(&mut self, other: &TokenUsage) {
-        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
-        self.cached_input_tokens = self
-            .cached_input_tokens
-            .saturating_add(other.cached_input_tokens);
-        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
-        self.reasoning_output_tokens = self
-            .reasoning_output_tokens
-            .saturating_add(other.reasoning_output_tokens);
-        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
-    }
-
-    fn saturating_delta(&self, previous: &TokenUsage) -> TokenUsage {
-        TokenUsage {
-            input_tokens: self.input_tokens.saturating_sub(previous.input_tokens),
-            cached_input_tokens: self
-                .cached_input_tokens
-                .saturating_sub(previous.cached_input_tokens),
-            output_tokens: self.output_tokens.saturating_sub(previous.output_tokens),
-            reasoning_output_tokens: self
-                .reasoning_output_tokens
-                .saturating_sub(previous.reasoning_output_tokens),
-            total_tokens: self.total_tokens.saturating_sub(previous.total_tokens),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct UsageWindowStarts {
-    today: i64,
-    days_7: i64,
-    days_30: i64,
-}
-
-#[derive(Default)]
-struct TokenUsageWindows {
-    today: TokenUsage,
-    days_7: TokenUsage,
-    days_30: TokenUsage,
-}
-
-struct TokenUsageEvent {
-    timestamp_seconds: i64,
-    usage: TokenUsage,
-}
-
-#[derive(Clone)]
-struct TimestampValue {
-    raw: String,
-    seconds: i64,
-}
-
-#[derive(Default)]
-struct ParsedSession {
-    session_id: String,
-    provider: String,
-    model: String,
-    started_at: Option<TimestampValue>,
-    updated_at: Option<TimestampValue>,
-    usage: Option<TokenUsage>,
-    model_context_window: Option<u64>,
-    previous_event_usage: Option<TokenUsage>,
-    window_usage: TokenUsageWindows,
-    token_events: Vec<TokenUsageEvent>,
-}
-
-#[derive(Clone)]
-struct OwnerAttribution {
-    owner_type: String,
-    owner_id: String,
-}
-
-struct UsageScanSource {
-    codex_home: PathBuf,
-    attribution_override: Option<OwnerAttribution>,
-}
-
-struct EstimatedCost {
-    cost_usd: Option<f64>,
-    priced: bool,
-    pricing_context: Option<&'static str>,
-    unpriced_reason: Option<&'static str>,
-}
-
-#[derive(Default)]
-struct UsageWindow {
-    input_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_output_tokens: u64,
-    total_tokens: u64,
-    session_count: u64,
-    estimated_cost_usd: f64,
-    has_unpriced: bool,
-    pricing_contexts: BTreeMap<String, u64>,
-    unpriced_reasons: BTreeMap<String, u64>,
-    last_used: String,
-    last_used_seconds: i64,
-}
-
-#[derive(Default)]
-struct OwnerUsage {
-    today: UsageWindow,
-    today_by_model: BTreeMap<String, UsageWindow>,
-    days_7: UsageWindow,
-    days_7_by_model: BTreeMap<String, UsageWindow>,
-    days_30: UsageWindow,
-    days_30_by_model: BTreeMap<String, UsageWindow>,
-    all: UsageWindow,
-    all_by_model: BTreeMap<String, UsageWindow>,
-}
-
-struct UsageRow {
-    owner_type: String,
-    owner_id: String,
-    model: String,
-    updated_at: String,
-    updated_at_seconds: i64,
-    input_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_output_tokens: u64,
-    total_tokens: u64,
-    today_usage: TokenUsage,
-    days_7_usage: TokenUsage,
-    days_30_usage: TokenUsage,
-    model_context_window: Option<u64>,
-    estimated_cost_usd: Option<f64>,
-    priced: bool,
-    pricing_context: String,
-    unpriced_reason: String,
-}
 
 #[tauri::command]
 pub(crate) async fn usage_stats_get() -> Result<Value, String> {
@@ -296,7 +94,7 @@ fn usage_stats_get_for_paths(
     codex_home: &Path,
     now: &str,
 ) -> Result<Value, String> {
-    usage_stats_get_for_scan_sources(db_path, &[main_usage_scan_source(codex_home)], now)
+    usage_stats_get_for_scan_sources(db_path, &[sources::main_usage_scan_source(codex_home)], now)
 }
 
 fn usage_stats_get_for_scan_sources(

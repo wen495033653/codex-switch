@@ -1,4 +1,30 @@
-use super::*;
+use super::model::{
+    EstimatedCost, OwnerAttribution, ParsedSession, TokenUsage, TokenUsageEvent,
+    OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API, PROVIDER_SUBSCRIPTION,
+};
+use crate::{
+    paths::{app_data_dir, ensure_parent_dir},
+    time_util::parse_rfc3339_seconds,
+};
+use rusqlite::OptionalExtension;
+use rusqlite::{params, Connection};
+use std::path::{Path, PathBuf};
+
+pub(super) const META_STATS_STARTED_AT: &str = "stats_started_at";
+
+pub(super) const SCAN_OUTCOME_INDEXED: &str = "indexed";
+
+pub(super) const SCAN_OUTCOME_IGNORED: &str = "ignored";
+
+pub(super) const SCAN_OUTCOME_DUPLICATE: &str = "duplicate";
+
+pub(super) const SCAN_OUTCOME_MISSING_ATTRIBUTION: &str = "missing_attribution";
+
+pub(super) const SCAN_OUTCOME_BEFORE_START: &str = "before_start";
+
+pub(super) fn sql_i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
 
 pub(super) fn usage_db_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("usage-stats.sqlite"))
@@ -16,7 +42,7 @@ pub(super) fn open_usage_connection(path: &Path, now: &str) -> Result<Connection
     Ok(connection)
 }
 
-pub(super) fn ensure_database(connection: &Connection, now: &str) -> Result<(), String> {
+fn ensure_database(connection: &Connection, now: &str) -> Result<(), String> {
     connection
         .execute_batch(
             r#"
@@ -106,7 +132,7 @@ pub(super) fn ensure_database(connection: &Connection, now: &str) -> Result<(), 
     Ok(())
 }
 
-pub(super) fn ensure_session_usage_columns(connection: &Connection) -> Result<(), String> {
+fn ensure_session_usage_columns(connection: &Connection) -> Result<(), String> {
     ensure_table_column(
         connection,
         "session_usage",
@@ -125,10 +151,7 @@ pub(super) fn ensure_session_usage_columns(connection: &Connection) -> Result<()
     Ok(())
 }
 
-pub(super) fn ensure_window_usage_columns(
-    connection: &Connection,
-    prefix: &str,
-) -> Result<(), String> {
+fn ensure_window_usage_columns(connection: &Connection, prefix: &str) -> Result<(), String> {
     for (name, definition) in [
         ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("cached_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
@@ -147,7 +170,7 @@ pub(super) fn ensure_window_usage_columns(
     Ok(())
 }
 
-pub(super) fn ensure_table_column(
+fn ensure_table_column(
     connection: &Connection,
     table: &str,
     column: &str,
@@ -398,7 +421,7 @@ pub(super) fn upsert_session_usage(
     Ok(())
 }
 
-pub(super) fn replace_session_token_events(
+fn replace_session_token_events(
     connection: &Connection,
     path: &Path,
     events: &[TokenUsageEvent],

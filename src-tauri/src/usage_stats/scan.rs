@@ -1,4 +1,34 @@
-use super::*;
+use super::{
+    db::{
+        db_error, find_owner_attribution, upsert_session_usage, SCAN_OUTCOME_BEFORE_START,
+        SCAN_OUTCOME_DUPLICATE, SCAN_OUTCOME_IGNORED, SCAN_OUTCOME_INDEXED,
+        SCAN_OUTCOME_MISSING_ATTRIBUTION,
+    },
+    model::{ScanWarnings, UsageScanSource, UsageWindowStarts},
+    parse::parse_session_file,
+    pricing::estimate_cost,
+};
+use rusqlite::{params, Connection};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SessionFileStamp {
+    modified_nanos: i64,
+    size: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SessionScanState {
+    stamp: SessionFileStamp,
+    scan_scope: String,
+    session_id: String,
+    outcome: String,
+}
 
 pub(super) fn scan_codex_sessions(
     connection: &Connection,
@@ -128,10 +158,7 @@ pub(super) fn scan_codex_sessions(
     Ok(())
 }
 
-pub(super) fn session_scan_scope(
-    source: &UsageScanSource,
-    stats_started_at_seconds: i64,
-) -> String {
+fn session_scan_scope(source: &UsageScanSource, stats_started_at_seconds: i64) -> String {
     match source.attribution_override.as_ref() {
         Some(attribution) => format!(
             "{stats_started_at_seconds}:{}:{}",
@@ -141,7 +168,7 @@ pub(super) fn session_scan_scope(
     }
 }
 
-pub(super) fn session_file_stamp(path: &Path) -> Result<SessionFileStamp, String> {
+fn session_file_stamp(path: &Path) -> Result<SessionFileStamp, String> {
     let metadata = fs::metadata(path).map_err(|err| {
         format!(
             "读取 Codex session 文件元数据失败 {}: {err}",
@@ -194,7 +221,7 @@ pub(super) fn load_session_scan_states(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn upsert_session_scan_state(
+fn upsert_session_scan_state(
     connection: &Connection,
     scan_states: &mut HashMap<String, SessionScanState>,
     source_path: &str,
@@ -243,7 +270,7 @@ pub(super) fn upsert_session_scan_state(
     Ok(())
 }
 
-pub(super) fn apply_cached_scan_state(
+fn apply_cached_scan_state(
     state: &SessionScanState,
     warnings: &mut ScanWarnings,
     seen_session_ids: &mut HashSet<String>,
@@ -258,7 +285,7 @@ pub(super) fn apply_cached_scan_state(
     }
 }
 
-pub(super) fn collect_session_files(codex_home: &Path) -> Result<Vec<PathBuf>, String> {
+fn collect_session_files(codex_home: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     collect_jsonl_files_recursive(&codex_home.join("sessions"), &mut files)?;
     collect_jsonl_files_recursive(&codex_home.join("archived_sessions"), &mut files)?;
@@ -266,10 +293,7 @@ pub(super) fn collect_session_files(codex_home: &Path) -> Result<Vec<PathBuf>, S
     Ok(files)
 }
 
-pub(super) fn collect_jsonl_files_recursive(
-    dir: &Path,
-    files: &mut Vec<PathBuf>,
-) -> Result<(), String> {
+fn collect_jsonl_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     if !dir.exists() {
         return Ok(());
     }

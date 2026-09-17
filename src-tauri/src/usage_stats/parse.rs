@@ -1,4 +1,14 @@
-use super::*;
+use super::model::{ParsedSession, TimestampValue, TokenUsage, TokenUsageEvent, UsageWindowStarts};
+use crate::{
+    json_util::{raw_string_field, string_field},
+    time_util::parse_rfc3339_seconds,
+};
+use serde_json::Value;
+use std::{
+    fs,
+    io::{BufRead, BufReader},
+    path::Path,
+};
 
 pub(super) fn parse_session_file(
     path: &Path,
@@ -38,7 +48,7 @@ pub(super) fn parse_session_line(
     }
 }
 
-pub(super) fn parse_session_meta_line(value: &Value, parsed: &mut ParsedSession) {
+fn parse_session_meta_line(value: &Value, parsed: &mut ParsedSession) {
     let payload = value.get("payload").unwrap_or(&Value::Null);
     let session_id = string_field(payload, "id");
     if !session_id.is_empty() {
@@ -54,12 +64,12 @@ pub(super) fn parse_session_meta_line(value: &Value, parsed: &mut ParsedSession)
     }
 }
 
-pub(super) fn parse_turn_context_line(value: &Value, parsed: &mut ParsedSession) {
+fn parse_turn_context_line(value: &Value, parsed: &mut ParsedSession) {
     let payload = value.get("payload").unwrap_or(&Value::Null);
     update_model_from_payload(payload, parsed);
 }
 
-pub(super) fn parse_event_msg_line(
+fn parse_event_msg_line(
     value: &Value,
     parsed: &mut ParsedSession,
     window_starts: Option<&UsageWindowStarts>,
@@ -100,7 +110,7 @@ pub(super) fn parse_event_msg_line(
     }
 }
 
-pub(super) fn apply_token_count_delta_to_windows(
+fn apply_token_count_delta_to_windows(
     parsed: &mut ParsedSession,
     usage: &TokenUsage,
     timestamp_seconds: i64,
@@ -141,7 +151,7 @@ pub(super) fn apply_token_count_delta_to_windows(
     }
 }
 
-pub(super) fn timestamp_from_payload(root: &Value, payload: &Value) -> Option<TimestampValue> {
+fn timestamp_from_payload(root: &Value, payload: &Value) -> Option<TimestampValue> {
     let raw = string_field(payload, "timestamp");
     let raw = if raw.is_empty() {
         string_field(root, "timestamp")
@@ -151,7 +161,7 @@ pub(super) fn timestamp_from_payload(root: &Value, payload: &Value) -> Option<Ti
     parse_rfc3339_seconds(&raw).map(|seconds| TimestampValue { raw, seconds })
 }
 
-pub(super) fn update_model_from_payload(payload: &Value, parsed: &mut ParsedSession) {
+fn update_model_from_payload(payload: &Value, parsed: &mut ParsedSession) {
     for key in ["model", "model_slug", "selected_model", "current_model"] {
         let model = string_field(payload, key);
         if !model.is_empty() {
@@ -161,11 +171,11 @@ pub(super) fn update_model_from_payload(payload: &Value, parsed: &mut ParsedSess
     }
 }
 
-pub(super) fn u64_field(value: &Value, key: &str) -> u64 {
+fn u64_field(value: &Value, key: &str) -> u64 {
     optional_u64_field(value, key).unwrap_or(0)
 }
 
-pub(super) fn optional_u64_field(value: &Value, key: &str) -> Option<u64> {
+fn optional_u64_field(value: &Value, key: &str) -> Option<u64> {
     value.get(key).and_then(|raw| {
         raw.as_u64()
             .or_else(|| raw.as_i64().and_then(|number| u64::try_from(number).ok()))

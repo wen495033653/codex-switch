@@ -1,4 +1,64 @@
-use super::*;
+use super::{
+    db::{db_error, sql_i64_to_u64},
+    model::{
+        ScanWarnings, TokenUsage, UsageWindowStarts, OWNER_TYPE_API_PROFILE,
+        OWNER_TYPE_SUBSCRIPTION,
+    },
+    pricing::{estimate_cost, PRICING_SOURCE, PRICING_UPDATED_AT},
+};
+use rusqlite::{params, Connection};
+use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
+use time::{OffsetDateTime, UtcOffset};
+
+#[derive(Default)]
+struct UsageWindow {
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    output_tokens: u64,
+    reasoning_output_tokens: u64,
+    total_tokens: u64,
+    session_count: u64,
+    estimated_cost_usd: f64,
+    has_unpriced: bool,
+    pricing_contexts: BTreeMap<String, u64>,
+    unpriced_reasons: BTreeMap<String, u64>,
+    last_used: String,
+    last_used_seconds: i64,
+}
+
+#[derive(Default)]
+struct OwnerUsage {
+    today: UsageWindow,
+    today_by_model: BTreeMap<String, UsageWindow>,
+    days_7: UsageWindow,
+    days_7_by_model: BTreeMap<String, UsageWindow>,
+    days_30: UsageWindow,
+    days_30_by_model: BTreeMap<String, UsageWindow>,
+    all: UsageWindow,
+    all_by_model: BTreeMap<String, UsageWindow>,
+}
+
+struct UsageRow {
+    owner_type: String,
+    owner_id: String,
+    model: String,
+    updated_at: String,
+    updated_at_seconds: i64,
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    output_tokens: u64,
+    reasoning_output_tokens: u64,
+    total_tokens: u64,
+    today_usage: TokenUsage,
+    days_7_usage: TokenUsage,
+    days_30_usage: TokenUsage,
+    model_context_window: Option<u64>,
+    estimated_cost_usd: Option<f64>,
+    priced: bool,
+    pricing_context: String,
+    unpriced_reason: String,
+}
 
 pub(super) fn aggregate_usage(
     connection: &Connection,
@@ -157,11 +217,7 @@ pub(super) fn aggregate_usage(
     }))
 }
 
-pub(super) fn sql_i64_to_u64(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0)
-}
-
-pub(super) fn token_usage_from_row(
+fn token_usage_from_row(
     row: &rusqlite::Row<'_>,
     start_index: usize,
 ) -> rusqlite::Result<TokenUsage> {
@@ -182,7 +238,7 @@ pub(super) fn usage_window_starts(now_seconds: i64) -> UsageWindowStarts {
     }
 }
 
-pub(super) fn today_start_seconds(now_seconds: i64) -> i64 {
+fn today_start_seconds(now_seconds: i64) -> i64 {
     let Ok(now_utc) = OffsetDateTime::from_unix_timestamp(now_seconds) else {
         return now_seconds;
     };
@@ -195,7 +251,7 @@ pub(super) fn today_start_seconds(now_seconds: i64) -> i64 {
         .unix_timestamp()
 }
 
-pub(super) fn apply_row_to_window(window: &mut UsageWindow, row: &UsageRow) {
+fn apply_row_to_window(window: &mut UsageWindow, row: &UsageRow) {
     let usage = TokenUsage {
         input_tokens: row.input_tokens,
         cached_input_tokens: row.cached_input_tokens,
@@ -217,11 +273,7 @@ pub(super) fn apply_row_to_window(window: &mut UsageWindow, row: &UsageRow) {
     }
 }
 
-pub(super) fn apply_window_usage_to_window(
-    window: &mut UsageWindow,
-    row: &UsageRow,
-    usage: &TokenUsage,
-) {
+fn apply_window_usage_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
     apply_tokens_to_window(window, row, usage);
     let estimated = estimate_cost(&row.model, usage, row.model_context_window);
     if estimated.priced {
@@ -237,7 +289,7 @@ pub(super) fn apply_window_usage_to_window(
     }
 }
 
-pub(super) fn apply_tokens_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
+fn apply_tokens_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
     window.input_tokens = window.input_tokens.saturating_add(usage.input_tokens);
     window.cached_input_tokens = window
         .cached_input_tokens
@@ -254,16 +306,13 @@ pub(super) fn apply_tokens_to_window(window: &mut UsageWindow, row: &UsageRow, u
     }
 }
 
-pub(super) fn apply_row_to_model_window(
-    windows: &mut BTreeMap<String, UsageWindow>,
-    row: &UsageRow,
-) {
+fn apply_row_to_model_window(windows: &mut BTreeMap<String, UsageWindow>, row: &UsageRow) {
     let model = display_model_id(&row.model);
     let window = windows.entry(model).or_default();
     apply_row_to_window(window, row);
 }
 
-pub(super) fn apply_window_usage_to_model_window(
+fn apply_window_usage_to_model_window(
     windows: &mut BTreeMap<String, UsageWindow>,
     row: &UsageRow,
     usage: &TokenUsage,
@@ -273,11 +322,11 @@ pub(super) fn apply_window_usage_to_model_window(
     apply_window_usage_to_window(window, row, usage);
 }
 
-pub(super) fn increment_count(counts: &mut BTreeMap<String, u64>, key: &str) {
+fn increment_count(counts: &mut BTreeMap<String, u64>, key: &str) {
     *counts.entry(key.to_string()).or_insert(0) += 1;
 }
 
-pub(super) fn display_model_id(model: &str) -> String {
+fn display_model_id(model: &str) -> String {
     let model = model.trim();
     if model.is_empty() {
         "unknown".to_string()
@@ -286,7 +335,7 @@ pub(super) fn display_model_id(model: &str) -> String {
     }
 }
 
-pub(super) fn owner_usage_map_to_json(source: BTreeMap<String, OwnerUsage>) -> Value {
+fn owner_usage_map_to_json(source: BTreeMap<String, OwnerUsage>) -> Value {
     let mut output = Map::new();
     for (owner_id, usage) in source {
         output.insert(owner_id, owner_usage_to_json(&usage));
@@ -294,7 +343,7 @@ pub(super) fn owner_usage_map_to_json(source: BTreeMap<String, OwnerUsage>) -> V
     Value::Object(output)
 }
 
-pub(super) fn owner_usage_to_json(usage: &OwnerUsage) -> Value {
+fn owner_usage_to_json(usage: &OwnerUsage) -> Value {
     json!({
         "today": usage_window_to_json_with_models(&usage.today, &usage.today_by_model),
         "days_7": usage_window_to_json_with_models(&usage.days_7, &usage.days_7_by_model),
@@ -303,7 +352,7 @@ pub(super) fn owner_usage_to_json(usage: &OwnerUsage) -> Value {
     })
 }
 
-pub(super) fn usage_window_to_json(window: &UsageWindow) -> Value {
+fn usage_window_to_json(window: &UsageWindow) -> Value {
     let cost = if window.has_unpriced {
         Value::Null
     } else {
@@ -324,7 +373,7 @@ pub(super) fn usage_window_to_json(window: &UsageWindow) -> Value {
     })
 }
 
-pub(super) fn usage_window_to_json_with_models(
+fn usage_window_to_json_with_models(
     window: &UsageWindow,
     by_model: &BTreeMap<String, UsageWindow>,
 ) -> Value {
@@ -335,7 +384,7 @@ pub(super) fn usage_window_to_json_with_models(
     output
 }
 
-pub(super) fn usage_model_map_to_json(source: &BTreeMap<String, UsageWindow>) -> Value {
+fn usage_model_map_to_json(source: &BTreeMap<String, UsageWindow>) -> Value {
     let mut output = Map::new();
     for (model, window) in source {
         output.insert(model.clone(), usage_window_to_json(window));
@@ -343,7 +392,7 @@ pub(super) fn usage_model_map_to_json(source: &BTreeMap<String, UsageWindow>) ->
     Value::Object(output)
 }
 
-pub(super) fn map_counts_to_json(source: &BTreeMap<String, u64>) -> Value {
+fn map_counts_to_json(source: &BTreeMap<String, u64>) -> Value {
     let mut output = Map::new();
     for (key, value) in source {
         output.insert(key.clone(), json!(value));
@@ -351,7 +400,7 @@ pub(super) fn map_counts_to_json(source: &BTreeMap<String, u64>) -> Value {
     Value::Object(output)
 }
 
-pub(super) fn warnings_to_json(warnings: &ScanWarnings) -> Vec<String> {
+fn warnings_to_json(warnings: &ScanWarnings) -> Vec<String> {
     let mut output = Vec::new();
     if warnings.missing_attribution > 0 {
         output.push(format!(

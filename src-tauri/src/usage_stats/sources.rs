@@ -1,4 +1,13 @@
-use super::*;
+use super::model::{
+    OwnerAttribution, UsageScanSource, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION,
+};
+use crate::{json_util::string_field, paths::app_data_dir};
+use serde_json::Value;
+use std::{fs, path::Path};
+
+const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
+
+pub(super) const CODEX_APP_INSTANCE_MARKER_FILE: &str = "codex-switch-instance.json";
 
 pub(super) fn main_usage_scan_source(codex_home: &Path) -> UsageScanSource {
     UsageScanSource {
@@ -48,9 +57,7 @@ pub(super) fn managed_instance_usage_scan_sources(
     Ok(sources)
 }
 
-pub(super) fn read_instance_owner_attribution(
-    root: &Path,
-) -> Result<Option<OwnerAttribution>, String> {
+fn read_instance_owner_attribution(root: &Path) -> Result<Option<OwnerAttribution>, String> {
     let marker_path = root.join(CODEX_APP_INSTANCE_MARKER_FILE);
     if !marker_path.exists() {
         return Ok(None);

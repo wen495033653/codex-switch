@@ -1,6 +1,27 @@
-use super::*;
+use super::{
+    db::{db_error, sql_i64_to_u64},
+    model::{EstimatedCost, TokenUsage},
+};
+use rusqlite::OptionalExtension;
+use rusqlite::{params, Connection};
 
-pub(super) const MODEL_PRICES: &[ModelPrice] = &[
+const META_PRICING_UPDATED_AT: &str = "pricing_updated_at";
+
+pub(super) const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
+
+pub(super) const PRICING_UPDATED_AT: &str = "2026-07-10";
+
+pub(super) const LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 270_000;
+
+pub(super) const PRICING_CONTEXT_STANDARD_SHORT: &str = "standard_short_context";
+
+pub(super) const PRICING_CONTEXT_STANDARD_LONG: &str = "standard_long_context";
+
+pub(super) const UNPRICED_REASON_MISSING_MODEL_PRICE: &str = "missing_model_price";
+
+const UNPRICED_REASON_MISSING_CACHED_INPUT_PRICE: &str = "missing_cached_input_price";
+
+const MODEL_PRICES: &[ModelPrice] = &[
     ModelPrice {
         model: "gpt-5.6-sol",
         short_context: TokenPrices {
@@ -71,6 +92,21 @@ pub(super) const MODEL_PRICES: &[ModelPrice] = &[
     },
 ];
 
+#[derive(Clone, Copy)]
+struct TokenPrices {
+    input_per_million: f64,
+    cached_input_per_million: Option<f64>,
+    output_per_million: f64,
+}
+
+#[derive(Clone, Copy)]
+struct ModelPrice {
+    model: &'static str,
+    short_context: TokenPrices,
+    long_context: Option<TokenPrices>,
+    long_context_threshold: Option<u64>,
+}
+
 pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Result<(), String> {
     let existing: Option<String> = connection
         .query_row(
@@ -96,7 +132,7 @@ pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Res
     Ok(())
 }
 
-pub(super) fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {
+fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {
     struct ExistingUsageRow {
         session_id: String,
         model: String,
@@ -220,7 +256,7 @@ pub(super) fn estimate_cost(
     }
 }
 
-pub(super) fn token_prices_for_context(
+fn token_prices_for_context(
     price: &ModelPrice,
     model_context_window: Option<u64>,
 ) -> (&TokenPrices, &'static str) {
@@ -234,7 +270,7 @@ pub(super) fn token_prices_for_context(
     (&price.short_context, PRICING_CONTEXT_STANDARD_SHORT)
 }
 
-pub(super) fn normalize_model_id(model: &str) -> String {
+fn normalize_model_id(model: &str) -> String {
     let normalized = model
         .trim()
         .to_ascii_lowercase()
