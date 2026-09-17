@@ -8,6 +8,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+// TODO(verify): only the 50 most recently active rollouts are rewritten, while the state DB is synced in
+// full. Two syncs with different "recent 50" windows leave rollouts whose first line still names the old
+// provider (16 such files on 2026-09-17). Whether Codex reads that value when resuming is unknown; the
+// trigger, pass criteria and where to continue are in docs/development/codex-restart.md ("待验证").
 pub(super) const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 50;
 
 const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
