@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     codex_launcher::{
-        preview_remote_control_runtime_for_current_settings, remote_control_enabled_from_settings,
+        preview_remote_control_runtime_for_current_settings,
         sync_remote_control_runtime_for_current_settings,
     },
     codex_sessions::{
@@ -14,7 +14,7 @@ use crate::{
     },
     session_manager::migrate_legacy_codex_data_for_current_home,
     session_sync_diagnostics::log_session_sync_event,
-    settings::read_settings_value,
+    settings::{read_settings_value, remote_control_enabled_from_settings},
 };
 use serde_json::{json, Value};
 use std::{path::Path, thread, time::Duration as StdDuration};

@@ -3,8 +3,8 @@ use crate::accounts::{
     account_with_custom, build_error_state, get_codex_state_value, set_auth_state,
     write_account_auth,
 };
-use crate::codex_launcher::remote_control_enabled_from_settings;
 use crate::json_util::raw_string_field;
+use crate::settings::remote_control_enabled_from_settings;
 use crate::settings::{read_settings_value, update_settings_value};
 use serde_json::{json, Value};
 

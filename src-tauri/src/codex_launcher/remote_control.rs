@@ -13,16 +13,18 @@ use crate::{
         read_root_config, read_table_config, remove_config_values, remove_remote_control_config,
         remove_table_config, set_config_values, set_table_config,
     },
-    json_util::{bool_field, string_field},
+    json_util::string_field,
     paths::app_data_dir,
     session_sync_diagnostics::log_session_sync_event,
-    settings::{default_api_mode, read_settings_value, update_settings_value},
+    settings::{
+        default_api_mode, read_settings_value, remote_control_config_enabled_from_settings,
+        remote_control_enabled_from_settings, remote_control_suspended_by_subscription,
+        update_settings_value, REMOTE_CONTROL_ENABLED_SETTING_KEY,
+    },
 };
 use serde_json::{json, Value};
 use std::{fs, time::Duration as StdDuration};
 
-const REMOTE_CONTROL_ENABLED_SETTING_KEY: &str = "codex_remote_control_enabled";
-const LEGACY_REMOTE_CONTROL_HOOK_SETTING_KEY: &str = "codex_remote_control_hook_enabled";
 const REMOTE_CONTROL_ACCOUNT_SETTING_KEY: &str = "codex_remote_control_account_id";
 const API_WIRE: &str = "responses";
 const REMOTE_CONTROL_ENVIRONMENTS_ENDPOINT: &str =
@@ -35,25 +37,11 @@ const REMOTE_CONTROL_ACCOUNT_INVALID_AUTO_DISABLE_MESSAGE: &str =
 const REMOTE_CONTROL_MISSING_ACCOUNT_AUTO_DISABLE_MESSAGE: &str =
     "远程控制账号不存在，已关闭远程控制并切换到 API 模式";
 
-fn remote_control_config_enabled_from_settings(settings: &Value) -> bool {
-    bool_field(settings, REMOTE_CONTROL_ENABLED_SETTING_KEY)
-        || bool_field(settings, LEGACY_REMOTE_CONTROL_HOOK_SETTING_KEY)
-}
-
-fn remote_control_suspended_by_subscription(settings: &Value) -> bool {
-    string_field(settings, "codex_active_mode") == "chatgpt"
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RemoteControlRuntimeTarget {
     MixedApi,
     Subscription,
     Api,
-}
-
-pub(crate) fn remote_control_enabled_from_settings(settings: &Value) -> bool {
-    remote_control_config_enabled_from_settings(settings)
-        && !remote_control_suspended_by_subscription(settings)
 }
 
 fn remote_control_runtime_target(settings: &Value) -> RemoteControlRuntimeTarget {

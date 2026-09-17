@@ -1,5 +1,8 @@
 use super::*;
-use crate::session_sync_diagnostics::log_session_sync_event;
+use crate::{
+    session_sync_diagnostics::log_session_sync_event,
+    settings::remote_control_enabled_from_settings,
+};
 
 const CODEX_PROXY_ENV_NAMES: [&str; 4] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 const CODEX_NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1";
