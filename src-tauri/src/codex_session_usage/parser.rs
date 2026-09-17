@@ -5,7 +5,7 @@ mod normalize;
 use crate::{json_util::string_field, time_util::parse_rfc3339_seconds};
 use serde_json::Value;
 
-pub(super) use file::usage_info_from_file;
+pub(super) use file::{fold_usage_info_from_file, FileUsageProgress};
 pub(crate) use normalize::inherit_stored_usage_fields;
 pub(super) use normalize::newer_usage_info;
 
@@ -66,7 +66,8 @@ mod tests {
         let older = token_count_line("2026-05-05T01:00:00Z", 12.0);
         fs::write(&path, format!("{newer}\n{older}\n")).unwrap();
 
-        let usage_info = usage_info_from_file(&path).unwrap().unwrap();
+        let (_, usage_info) = fold_usage_info_from_file(&path, None).unwrap();
+        let usage_info = usage_info.unwrap();
         fs::remove_file(&path).unwrap();
 
         assert_eq!(
@@ -74,6 +75,122 @@ mod tests {
             "2026-05-05T02:00:00Z"
         );
         assert_eq!(primary_used_percent(&usage_info), 42.0);
+    }
+
+    fn unique_temp_rollout_path(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("codex-switch-{name}-{stamp}.jsonl"))
+    }
+
+    #[test]
+    fn resumed_fold_reads_only_appended_lines_and_matches_a_full_read() {
+        let path = unique_temp_rollout_path("session-resume");
+        let first = token_count_line("2026-05-05T01:00:00Z", 10.0);
+        fs::write(
+            &path,
+            format!(
+                "{first}
+"
+            ),
+        )
+        .unwrap();
+        let (progress, _) = fold_usage_info_from_file(&path, None).unwrap();
+
+        // Overwrite the already folded line with same-length filler that keeps the bytes the
+        // resume check compares. A resumed fold must not look at it again.
+        let second = token_count_line("2026-05-05T02:00:00Z", 20.0);
+        let filler = format!(
+            "{}{}",
+            " ".repeat(first.len() - 64),
+            &first[first.len() - 64..]
+        );
+        fs::write(
+            &path,
+            format!(
+                "{filler}
+{second}
+"
+            ),
+        )
+        .unwrap();
+        let (_, resumed) = fold_usage_info_from_file(&path, Some(progress)).unwrap();
+        let (_, full) = fold_usage_info_from_file(&path, None).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(primary_used_percent(resumed.as_ref().unwrap()), 20.0);
+        assert_eq!(resumed, full);
+    }
+
+    #[test]
+    fn rewritten_file_is_folded_from_the_start() {
+        let path = unique_temp_rollout_path("session-rewrite");
+        let stale = token_count_line("2026-05-05T09:00:00Z", 90.0);
+        fs::write(
+            &path,
+            format!(
+                "{stale}
+"
+            ),
+        )
+        .unwrap();
+        let (progress, _) = fold_usage_info_from_file(&path, None).unwrap();
+
+        let rewritten = token_count_line("2026-05-05T03:00:00Z", 30.0);
+        let padding = json!({"type": "padding", "text": "x".repeat(stale.len())}).to_string();
+        fs::write(
+            &path,
+            format!(
+                "{rewritten}
+{padding}
+"
+            ),
+        )
+        .unwrap();
+        let (_, usage_info) = fold_usage_info_from_file(&path, Some(progress)).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        // The stale 09:00 reading would win if the old progress had been kept.
+        let usage_info = usage_info.unwrap();
+        assert_eq!(
+            string_field(&usage_info, "fetched_at"),
+            "2026-05-05T03:00:00Z"
+        );
+        assert_eq!(primary_used_percent(&usage_info), 30.0);
+    }
+
+    #[test]
+    fn half_written_line_is_read_again_once_complete() {
+        let path = unique_temp_rollout_path("session-partial");
+        let first = token_count_line("2026-05-05T01:00:00Z", 10.0);
+        let second = token_count_line("2026-05-05T02:00:00Z", 20.0);
+        let (head, tail) = second.split_at(second.len() / 2);
+        fs::write(
+            &path,
+            format!(
+                "{first}
+{head}"
+            ),
+        )
+        .unwrap();
+        let (progress, partial) = fold_usage_info_from_file(&path, None).unwrap();
+
+        fs::write(
+            &path,
+            format!(
+                "{first}
+{head}{tail}
+"
+            ),
+        )
+        .unwrap();
+        let (_, complete) = fold_usage_info_from_file(&path, Some(progress)).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(primary_used_percent(partial.as_ref().unwrap()), 10.0);
+        assert_eq!(primary_used_percent(complete.as_ref().unwrap()), 20.0);
     }
 
     #[test]
