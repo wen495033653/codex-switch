@@ -1,13 +1,26 @@
 use crate::time_util::now_string;
 use serde_json::{json, Map, Value};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Mutex, OnceLock,
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, OnceLock,
+    },
 };
 use tauri::{AppHandle, Emitter};
 
 const DEV_LOG_EVENT: &str = "dev-log";
 const MAX_DEV_LOG_BUFFER: usize = 300;
+const ERROR_LOG_DIR_NAME: &str = "logs";
+const ERROR_LOG_FILE_NAME: &str = "codex-switch-errors.jsonl";
+const ERROR_LOG_ROTATED_FILE_NAME: &str = "codex-switch-errors.1.jsonl";
+// A watcher retry loop can log one error every few seconds; one rotated generation bounds the
+// log at twice this size.
+const ERROR_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+static ERROR_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 static DEV_LOG_APP: OnceLock<AppHandle> = OnceLock::new();
 static DEV_LOG_BUFFER: OnceLock<Mutex<Vec<Value>>> = OnceLock::new();
@@ -515,11 +528,72 @@ fn dev_log_event_visible(event: &str) -> bool {
     )
 }
 
+#[cfg(not(test))]
+fn error_log_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::app_data_dir()?
+        .join(ERROR_LOG_DIR_NAME)
+        .join(ERROR_LOG_FILE_NAME))
+}
+
+// Release builds keep the dev log in memory only, so an error was gone once the app exited.
+// Error events are appended here with their full details, before the dev log summarizes them
+// or drops events it has no summary for.
+fn append_error_log(path: &Path, event: &str, details: &Value) -> Result<(), String> {
+    let _guard = ERROR_LOG_WRITE_LOCK
+        .lock()
+        .map_err(|_| "错误日志写入锁异常".to_string())?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("错误日志路径无父目录: {}", path.display()))?;
+    fs::create_dir_all(dir)
+        .map_err(|err| format!("创建错误日志目录失败 {}: {err}", dir.display()))?;
+    if fs::metadata(path).is_ok_and(|metadata| metadata.len() >= ERROR_LOG_MAX_BYTES) {
+        let rotated = dir.join(ERROR_LOG_ROTATED_FILE_NAME);
+        fs::rename(path, &rotated).map_err(|err| {
+            format!(
+                "轮转错误日志失败 {} -> {}: {err}",
+                path.display(),
+                rotated.display()
+            )
+        })?;
+    }
+    let mut line = json!({
+        "timestamp": now_string(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+        "event": event,
+        "details": details
+    })
+    .to_string();
+    line.push('\n');
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+        .map_err(|err| format!("写入错误日志失败 {}: {err}", path.display()))
+}
+
 pub(crate) fn init_session_sync_diagnostics(app: AppHandle) {
     let _ = DEV_LOG_APP.set(app);
 }
 
 pub(crate) fn log_session_sync_event(event: &str, details: Value) {
+    // Unit tests exercise error paths; they must not write into the user's real data directory.
+    // TODO(verify): the disk write is unit-tested through append_error_log only; this call site has
+    // not run in a built app yet, because starting a second Codex Switch takes over the user's
+    // running Codex. Trigger: the first `*_error` event after installing a build with this change.
+    // Check `<app data dir>/logs/codex-switch-errors.jsonl`: one JSON line per error carrying
+    // timestamp, version, pid, event and the full details. Pass: the line exists and its details
+    // match the dev-log entry. Fail: look for the eprintln below in the app's stderr, then at
+    // error_log_path() / directory permissions. Remove this TODO once a real line is confirmed.
+    #[cfg(not(test))]
+    if is_error_event(event) {
+        if let Err(err) = error_log_path().and_then(|path| append_error_log(&path, event, &details))
+        {
+            eprintln!("{err}");
+        }
+    }
     if !cfg!(debug_assertions) && !is_error_event(event) {
         return;
     }
@@ -563,4 +637,66 @@ pub(crate) fn get_dev_log_entries() -> Value {
         .map(|buffer| buffer.clone())
         .unwrap_or_default();
     Value::Array(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    fn unique_temp_log_path(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir()
+            .join(format!("codex-switch-{name}-{stamp}"))
+            .join(ERROR_LOG_DIR_NAME)
+            .join(ERROR_LOG_FILE_NAME)
+    }
+
+    #[test]
+    fn error_log_appends_one_json_line_per_event_with_full_details() {
+        let path = unique_temp_log_path("error-log");
+        append_error_log(
+            &path,
+            "codex_app_process_kill_error",
+            &json!({"pid": 42, "error": "taskkill /F /T /PID 42: exit code 128"}),
+        )
+        .unwrap();
+        append_error_log(&path, "session_sync_error", &json!({"error": "second"})).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        let first: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["event"], "codex_app_process_kill_error");
+        assert_eq!(first["details"]["pid"], 42);
+        assert_eq!(
+            first["details"]["error"],
+            "taskkill /F /T /PID 42: exit code 128"
+        );
+        assert_eq!(first["version"], env!("CARGO_PKG_VERSION"));
+        assert!(!first["timestamp"].as_str().unwrap().is_empty());
+        let second: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["event"], "session_sync_error");
+    }
+
+    #[test]
+    fn error_log_rotates_once_the_size_limit_is_reached() {
+        let path = unique_temp_log_path("error-log-rotate");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, vec![b'x'; ERROR_LOG_MAX_BYTES as usize]).unwrap();
+
+        append_error_log(&path, "session_sync_error", &json!({"error": "after"})).unwrap();
+
+        let rotated = path.parent().unwrap().join(ERROR_LOG_ROTATED_FILE_NAME);
+        let rotated_len = fs::metadata(&rotated).unwrap().len();
+        let current = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+        assert_eq!(rotated_len, ERROR_LOG_MAX_BYTES);
+        assert_eq!(current.lines().count(), 1);
+        assert!(current.contains("\"after\""));
+    }
 }
