@@ -58,11 +58,11 @@
   - `App.jsx` 只做装配。Codex 多实例的状态与打开操作在 `hooks/useCodexAppInstances.js`，3 秒轮询仍由 `App.jsx` 发起。
 - 视图区块自己调用 `useI18n()`，不通过 props 传 `t`。其余依赖一律走 props，不在区块里直接调用后端。
 - `styles/visual-refresh.css` 是最后加载的改版层。其中 26 条规则已并回所属文件，做法和验证方式见提交 `ef77759` 的说明。其余规则留在原处：41 条并回后会改变计算样式，5 条在可渲染的界面里没有出现过无法验证，158 条在其他文件里没有相同作用域的同名规则。
-- 前端没有自动化测试。改样式前后要在真实渲染下对比计算样式，不能只看构建通过。
+- 前端的自动化测试是 `scripts/test-*.mjs`（`node:test`，2026-09-18 时 25 项）：账号卡片的订阅标识、代理设置页的远程控制提示（两者用 Vite SSR 真实渲染组件）、模型指令确认弹窗与原生插件设置的 hook 行为、设置状态文案。`npm test` 运行它们，`npm run check` 和 CI 的 `Check renderer` 也会运行。它们不覆盖样式，也不覆盖会话管理、API 模式等页面的交互，所以改样式前后仍要在真实渲染下对比计算样式，不能只看构建和测试通过。
 
 ## 验证方式
 
 - 每一步：`cargo fmt --check`、`cargo test`、`cargo clippy --all-targets -- -D warnings`（在 `src-tauri/` 下）。
 - 跨平台：macOS 分支本地编不了，以 CI 的 `Check Tauri (macos-latest)` 为准。
-- 前端：`npm run check`。它只证明能构建。拆分组件时另外做了行为对比（2026-09-17，提交 `59d1044`、`eaa61f4`、`da9a065`）：用假的 Tauri 后端（`window.__TAURI_INTERNALS__`）和固定时钟，把改动前后的代码分别加载进两个 iframe，执行同一段操作脚本，每一步比较 `#root.outerHTML` 和后端调用序列。结果：会话管理 53 步、API 模式 34 步、多实例 40 步，DOM 逐字节相同，后端调用相同（两个定时轮询按总次数比较）。这是离线对比，不等于在真实应用里点过一遍。
+- 前端：`npm run check`（语法与敏感信息检查、i18n 检查、`npm test`、构建）。拆分组件时，测试没有覆盖到的页面另外做了行为对比（2026-09-17，提交 `59d1044`、`eaa61f4`、`da9a065`）：用假的 Tauri 后端（`window.__TAURI_INTERNALS__`）和固定时钟，把改动前后的代码分别加载进两个 iframe，执行同一段操作脚本，每一步比较 `#root.outerHTML` 和后端调用序列。结果：会话管理 53 步、API 模式 34 步、多实例 40 步，DOM 逐字节相同，后端调用相同（两个定时轮询按总次数比较）。这是离线对比，不等于在真实应用里点过一遍。
 - 拆出子组件时用 TypeScript 检查器（`checkJs`，不加载 DOM 类型库）找未定义的名字，避免 `status`、`name` 这类浏览器全局变量掩盖漏传的 prop。

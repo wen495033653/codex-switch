@@ -26,7 +26,8 @@
     "tauri:build": "tauri build",
     "check:tauri": "node scripts/check-tauri.mjs",
     "build:renderer": "vite build --config vite.config.mjs",
-    "check": "node scripts/check.mjs && npm run build:renderer",
+    "test": "node --experimental-vm-modules --test \"scripts/test-*.mjs\"",
+    "check": "node scripts/check.mjs && npm test && npm run build:renderer",
     "dist": "npm run tauri:build"
   },
   "dependencies": {

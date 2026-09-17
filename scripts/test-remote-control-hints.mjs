@@ -12,7 +12,7 @@ let I18nProvider;
 before(async () => {
   server = await createServer({
     configFile: fileURLToPath(new URL('../vite.config.mjs', import.meta.url)),
-    server: { middlewareMode: true, hmr: false, watch: null },
+    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
     appType: 'custom',
     logLevel: 'error'
   });
