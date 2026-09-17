@@ -1,14 +1,8 @@
-use super::remote_control::restart_remote_control_runtime_for_current_settings;
 use crate::{
     paths::codex_dir,
     proxy_config::{normalize_proxy_display_url, normalize_proxy_url},
-    settings::update_settings_value,
 };
-use crate::{
-    session_sync_diagnostics::log_session_sync_event,
-    settings::remote_control_enabled_from_settings,
-};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -22,7 +16,7 @@ struct CodexProxyEnvState {
     proxy_url: String,
 }
 
-fn codex_env_path() -> Result<PathBuf, String> {
+pub(super) fn codex_env_path() -> Result<PathBuf, String> {
     Ok(codex_dir()?.join(".env"))
 }
 
@@ -74,7 +68,10 @@ fn write_codex_env_content(path: &Path, content: &str) -> Result<(), String> {
         .map_err(|err| format!("保存 Codex 代理配置失败 {}: {err}", path.display()))
 }
 
-fn set_codex_proxy_env_file_enabled(enabled: bool, proxy_url: &str) -> Result<String, String> {
+pub(super) fn set_codex_proxy_env_file_enabled(
+    enabled: bool,
+    proxy_url: &str,
+) -> Result<String, String> {
     let path = codex_env_path()?;
     let existing = read_codex_env_content(&path)?;
     if enabled {
@@ -159,91 +156,4 @@ pub(crate) fn apply_codex_proxy_env_state_to_settings(
         );
     }
     Ok(Value::Object(settings.clone()))
-}
-
-#[tauri::command]
-pub(crate) fn set_codex_proxy_env_enabled(
-    enabled: bool,
-    proxy_url: String,
-) -> Result<Value, String> {
-    let proxy_url = set_codex_proxy_env_file_enabled(enabled, &proxy_url)?;
-    let mut patch = json!({
-        "codex_proxy_env_enabled": enabled
-    });
-    if enabled {
-        patch["codex_proxy_url"] = Value::String(proxy_url.clone());
-    }
-    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
-    let remote_control_runtime = sync_remote_control_runtime_after_proxy_change(&settings);
-
-    Ok(json!({
-        "ok": true,
-        "message": if enabled {
-            "Codex 代理配置已启用，重启 Codex 后生效。"
-        } else {
-            "Codex 代理配置已关闭，重启 Codex 后生效。"
-        },
-        "restartRequired": true,
-        "settings": settings,
-        "env_path": codex_env_path()?.to_string_lossy().to_string(),
-        "proxy_url": proxy_url,
-        "remoteControl": remote_control_runtime
-    }))
-}
-
-fn sync_remote_control_runtime_after_proxy_change(settings: &Value) -> Value {
-    if !remote_control_enabled_from_settings(settings) {
-        return json!({ "changed": false });
-    }
-
-    match restart_remote_control_runtime_for_current_settings("set_codex_proxy_env_enabled") {
-        Ok(changed) => json!({ "changed": changed }),
-        Err(err) => {
-            let error = err.clone();
-            log_session_sync_event(
-                "codex_remote_control_helper_error",
-                json!({
-                    "context": "set_codex_proxy_env_enabled",
-                    "error": error
-                }),
-            );
-            json!({ "changed": false, "error": err })
-        }
-    }
-}
-
-#[cfg(test)]
-mod proxy_settings_tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "requires isolated USERPROFILE and APPDATA"]
-    fn proxy_save_reports_restart_and_preserves_other_env_values() {
-        let test_home = PathBuf::from(
-            std::env::var("CODEX_SWITCH_TEST_HOME").expect("explicit fixture home required"),
-        );
-        assert_eq!(crate::paths::home_dir().unwrap(), test_home);
-        assert!(crate::paths::app_data_dir()
-            .unwrap()
-            .starts_with(&test_home));
-        let path = codex_env_path().unwrap();
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "FIXTURE_VALUE=preserved\n").unwrap();
-        update_settings_value(&json!({"codex_remote_control_enabled": false})).unwrap();
-        let enabled = set_codex_proxy_env_enabled(true, "127.0.0.1:10808".into()).unwrap();
-        assert_eq!(enabled["restartRequired"], true);
-        assert!(enabled["message"].as_str().unwrap().contains("重启 Codex"));
-        let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("FIXTURE_VALUE=preserved"));
-        assert!(content.contains("HTTP_PROXY=http://127.0.0.1:10808"));
-        let disabled = set_codex_proxy_env_enabled(false, String::new()).unwrap();
-        assert_eq!(disabled["restartRequired"], true);
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "FIXTURE_VALUE=preserved\n"
-        );
-        assert!(set_codex_proxy_env_enabled(true, String::new())
-            .unwrap_err()
-            .contains("代理地址不能为空"));
-    }
 }

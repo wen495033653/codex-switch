@@ -489,7 +489,7 @@ where
     }
 }
 
-fn codex_processes_log_value(processes: &[CodexProcess]) -> Value {
+pub(super) fn codex_processes_log_value(processes: &[CodexProcess]) -> Value {
     Value::Array(
         processes
             .iter()

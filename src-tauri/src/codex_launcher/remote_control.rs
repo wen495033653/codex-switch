@@ -887,7 +887,7 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
     let settings = update_settings_value(&json!({
         REMOTE_CONTROL_ENABLED_SETTING_KEY: false
     }))?;
-    let settings = super::codex_app::apply_codex_proxy_env_state_to_settings(settings)?;
+    let settings = super::proxy_env::apply_codex_proxy_env_state_to_settings(settings)?;
     let changed = sync_remote_control_runtime_for_current_settings("remote_control_login_expired")?;
     Ok((settings, changed))
 }
@@ -1056,7 +1056,7 @@ pub(crate) fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, S
         })
     };
     let settings = update_settings_value(&settings_patch)?;
-    let settings = super::codex_app::apply_codex_proxy_env_state_to_settings(settings)?;
+    let settings = super::proxy_env::apply_codex_proxy_env_state_to_settings(settings)?;
     let changed =
         sync_remote_control_runtime_for_current_settings("set_codex_remote_control_enabled")?;
     let restart_required = codex_app_running && changed;
@@ -1091,7 +1091,7 @@ pub(crate) fn set_codex_remote_control_account_id(id: String) -> Result<Value, S
     let settings = update_settings_value(&json!({
         REMOTE_CONTROL_ACCOUNT_SETTING_KEY: account_id
     }))?;
-    let settings = super::codex_app::apply_codex_proxy_env_state_to_settings(settings)?;
+    let settings = super::proxy_env::apply_codex_proxy_env_state_to_settings(settings)?;
     let changed = if remote_control_enabled_from_settings(&settings) {
         sync_remote_control_runtime_for_current_settings("set_codex_remote_control_account_id")?
     } else {

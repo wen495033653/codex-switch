@@ -153,7 +153,7 @@ fn main() {
             commands::delete_account,
             commands::switch_account,
             commands::switch_api_mode,
-            codex_launcher::codex_app::set_codex_proxy_env_enabled,
+            codex_launcher::set_codex_proxy_env_enabled,
             codex_launcher::remote_control::set_codex_remote_control_account_id,
             codex_launcher::remote_control::set_codex_remote_control_enabled,
             codex_launcher::remote_control::get_codex_remote_control_status,

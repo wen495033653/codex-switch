@@ -7,7 +7,7 @@ use super::{
         codex_processes_have_cdp_launch, inject_codex_mobile_no_replace_hook,
         launch_codex_with_cdp_hooks, CodexCdpLaunchHooks,
     },
-    codex_app_watcher::{CodexAppOpenOutcome, CodexProcess},
+    codex_app_watcher::{codex_processes_log_value, CodexAppOpenOutcome, CodexProcess},
     process_control::{
         kill_root_process_trees, launch_codex_process_with_options, root_pids, wait_for_pids_exit,
     },
@@ -716,20 +716,6 @@ fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Resul
         }
         CodexRelaunchMode::Normal => launch_codex_process_with_options(executable, &[], &[]),
     }
-}
-
-fn codex_processes_log_value(processes: &[CodexProcess]) -> Value {
-    Value::Array(
-        processes
-            .iter()
-            .map(|process| {
-                json!({
-                    "pid": process.pid,
-                    "executablePath": process.executable_path.as_str()
-                })
-            })
-            .collect(),
-    )
 }
 
 #[cfg(test)]

@@ -1,4 +1,3 @@
-use super::IdeRuntime;
 use crate::{
     accounts::store_payload,
     json_util::{bool_field, string_field, value_u64_field},
@@ -10,8 +9,21 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::{collections::HashMap, sync::Mutex};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tauri::State;
+
+pub(crate) struct IdePending {
+    snapshot: Value,
+    account_id: String,
+    api_mode: bool,
+    session_sync_provider: Option<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct IdeRuntime {
+    snapshots: Mutex<HashMap<String, IdePending>>,
+}
 
 mod detect;
 mod pending;

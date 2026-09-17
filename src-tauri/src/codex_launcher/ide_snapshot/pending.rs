@@ -1,8 +1,6 @@
 use super::capture_open_ide_snapshot;
-use crate::{
-    accounts::random_urlsafe,
-    codex_launcher::{IdePending, IdeRuntime},
-};
+use super::{IdePending, IdeRuntime};
+use crate::accounts::random_urlsafe;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
