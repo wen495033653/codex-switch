@@ -1,8 +1,6 @@
+use super::usage::parse_endpoint_error;
 use crate::{
-    accounts::{
-        parse_endpoint_error, OAUTH_AUTHORIZE_ENDPOINT, OAUTH_CLIENT_ID, OAUTH_SCOPE,
-        OAUTH_TOKEN_ENDPOINT,
-    },
+    accounts::{OAUTH_AUTHORIZE_ENDPOINT, OAUTH_CLIENT_ID, OAUTH_SCOPE, OAUTH_TOKEN_ENDPOINT},
     json_util::string_field,
     time_util::now_string,
 };

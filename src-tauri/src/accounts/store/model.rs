@@ -2,10 +2,8 @@ mod account;
 mod store;
 mod tokens;
 
-use crate::{
-    accounts::{decode_jwt_payload, STORE_VERSION},
-    json_util::{raw_string_field, string_field},
-};
+use super::super::oauth_tokens::decode_jwt_payload;
+use crate::json_util::{raw_string_field, string_field};
 use serde_json::{json, Value};
 
 use account::StoreAccount;
@@ -106,6 +104,7 @@ pub(crate) fn sort_accounts_by_last_used(accounts: &mut [Value]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounts::STORE_VERSION;
 
     fn account(account_id: &str, last_used_at: &str, refresh_token: &str) -> Value {
         json!({

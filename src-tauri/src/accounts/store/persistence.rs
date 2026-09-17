@@ -1,6 +1,6 @@
+use super::super::api_mode::get_codex_state_value;
 use super::model::{empty_store, normalize_store_data, profile_id_from_account};
 use crate::{
-    accounts::get_codex_state_value,
     json_file::{read_json_file, write_json_file},
     json_util::raw_string_field,
     paths::accounts_path,

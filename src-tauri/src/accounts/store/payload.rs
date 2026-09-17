@@ -1,5 +1,5 @@
+use super::super::api_mode::get_codex_state_value;
 use super::persistence::read_store_with_active_sync;
-use crate::accounts::get_codex_state_value;
 use serde_json::{Map, Value};
 
 pub(crate) fn store_payload(message: Option<&str>) -> Result<Value, String> {

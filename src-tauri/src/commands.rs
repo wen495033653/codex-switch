@@ -1,26 +1,13 @@
 use crate::{
-    accounts::*,
-    codex_config::ensure_config_file,
-    codex_launcher::{
-        apply_codex_proxy_env_state_to_settings, attach_ide_reopen, build_ide_reopen_payload,
-        sync_remote_control_runtime_for_current_settings, IdeRuntime,
-    },
-    desktop::{sync_system_auto_start, validate_system_auto_start},
-    json_util::{bool_field, has_key, raw_string_field, string_field},
-    paths::app_data_dir,
-    quota::*,
-    settings::{default_api_mode, read_settings_value, update_settings_value},
+    accounts::{read_api_key_from_auth, set_api_mode},
+    json_util::string_field,
+    settings::default_api_mode,
 };
-use serde_json::{json, Value};
-use std::{collections::HashSet, fs, sync::Arc};
-use tauri::{AppHandle, State};
-use tauri_plugin_dialog::{
-    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-};
+use serde_json::Value;
 
-mod account;
-mod general;
-mod quota;
+pub(crate) mod account;
+pub(crate) mod general;
+pub(crate) mod quota;
 
 fn apply_complete_api_mode_profile_if_active(settings: &Value) -> Result<(), String> {
     if string_field(settings, "codex_active_mode") != "api" {
@@ -41,6 +28,4 @@ fn apply_complete_api_mode_profile_if_active(settings: &Value) -> Result<(), Str
     set_api_mode(&profile)
 }
 
-pub(crate) use account::*;
-pub(crate) use general::*;
-pub(crate) use quota::*;
+pub(crate) use general::sync_codex_model_instructions_config_for_current_settings;

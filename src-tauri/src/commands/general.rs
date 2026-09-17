@@ -1,4 +1,13 @@
-use super::*;
+use super::apply_complete_api_mode_profile_if_active;
+use crate::{
+    accounts::store_payload,
+    codex_config::ensure_config_file,
+    codex_launcher::apply_codex_proxy_env_state_to_settings,
+    desktop::{sync_system_auto_start, validate_system_auto_start},
+    json_util::{bool_field, has_key},
+    paths::app_data_dir,
+    settings::{read_settings_value, update_settings_value},
+};
 use crate::{
     codex_config::{remove_config_values, set_config_values},
     model_instructions::{
@@ -7,7 +16,10 @@ use crate::{
         SETTING_KEY as MODEL_INSTRUCTIONS_SETTING_KEY,
     },
 };
+use serde_json::{json, Value};
+use std::fs;
 use std::path::Path;
+use tauri::AppHandle;
 use tauri::{path::BaseDirectory, Manager};
 
 #[tauri::command]
