@@ -1,27 +1,26 @@
-# Codex Switch 优化整合验收（2026-09-06）
+# 2026-09-06 整合验收记录
 
-## 最终变更
+一次性记录，对应整合版本 `087a306`。各功能现在的行为看对应文档，这里只保留当时的结论和验证边界。
 
-1. 默认 API 测试模型：前端和 Rust 统一为 `gpt-6-astra`，保留显式指定的模型。
-2. 本地模型指令：启动保留已有 `gpt-unrestricted.md`；手动开启时确认保留或覆盖，覆盖前备份。详见 `local-model-instructions.md`。
-3. Plugin：移除额外开关、注入及专用重启命令，使用原生目录；保留会话同步、mobile no-replace 所需 CDP。详见 `plugin-cdp.md`。
-4. 重启：统一 async command、后台阻塞调度、结束命令超时、完整错误传播及 1500ms 新进程存活确认。详见 `codex-restart.md`。
-5. 设置：代理区分已保存配置与实际连接，远控区分模式限制、账号缺失及登录过期。详见 `settings-status.md`。
-6. Dev：显式 Debug 预览使用隔离目录，不自动同步自启动、账号、配置或会话。详见 `dev-preview.md`。
+## 包含的变更
 
-## 已观察证据
+1. 默认 API 测试模型：前端和 Rust 统一为 `gpt-6-astra`，显式填写的模型不受影响。验证：`cargo test api_test_model_tests`，以及前端 normalize 函数的缺省、空白、自定义三种输入；没有向账号 API 发送计费请求。
+2. 模型指令文件的保留与覆盖确认、改用原生插件、设置状态反馈：见 [codex-settings.md](codex-settings.md)。
+3. Codex 重启流程（异步调度、结束超时、错误传播、1500ms 存活确认）：见 [codex-restart.md](codex-restart.md)。
+4. 隔离的 Dev 预览：见 [dev-preview.md](dev-preview.md)。
 
-- 整合版本 `087a306`：本地 Windows `cargo test` 为 229 passed、1 ignored，`cargo fmt --check`、`cargo clippy -- -D warnings`、`npm run check` 通过。
-- CI run [34031186378](https://github.com/wen495033653/codex-switch/actions/runs/34031186378)：renderer 和 Windows 通过；macOS 为 226 passed、1 failed、1 ignored。失败定位为退出状态 Debug 格式的平台差异，修复及回归入口见 `codex-restart.md`；不能将该 run 记为通过。
-- 修复后的本地 Windows：`cargo test` 为 229 passed、1 ignored（含 8 项 process_control 测试）；`cargo fmt --check`、`cargo clippy -- -D warnings`、`npm run check` 通过。三个 Node 行为回归脚本共 11 passed，显式验证退出码、确认选择、错误传播及设置状态。
-- Dev 预览真实启动并加载 UI，进程 Responding=true；启动前后正式版 settings.json、本机 Codex config.toml 和 gpt-unrestricted.md 逐字节一致，正式安装文件未改动。
-- 当前订阅模式原生 `plugin/list` 成功，旧 Hook 的 `patched=false`，marketplaceLoadErrors=[]。没有据此声称已完成 API 模式安装、调用的端到端验证。
+## 证据
 
-## 验证边界
+- 本地 Windows：`cargo test` 229 passed、1 ignored；`cargo fmt --check`、`cargo clippy -- -D warnings`、`npm run check` 通过；三个 Node 回归脚本共 11 passed。
+- CI run [34031186378](https://github.com/wen495033653/codex-switch/actions/runs/34031186378)：renderer 和 Windows 通过，macOS 有 1 项失败（退出状态 Debug 格式的平台差异）。这个 run 不能记为通过，修复见 codex-restart.md。
+- Dev 预览真实启动并加载了界面；启动前后正式版 `settings.json`、本机 Codex `config.toml` 和 `gpt-unrestricted.md` 逐字节一致，正式安装文件未改动。
+- 订阅模式下原生 `plugin/list` 成功，`marketplaceLoadErrors=[]`。
 
-- 重启测试使用独立子进程；没有结束或重启承载本任务的 Codex。1500ms 确认仅证明进程存活，不证明窗口或业务请求就绪。
-- MD 文件操作和确认分支已有临时目录及 hook 回归；未覆盖真实用户 MD，未执行真实界面的覆盖点击。
-- 代理验证覆盖隔离文件写入与反馈，不代表代理外网连接；远控未重新登录或实际建连。
-- Dev 使用独立空账号库，未复制登录 token；Debug 预览空闲采样不代表正式版性能 A/B 测试。
-- 历史 Application Hang 没有 dump；本次修复已证实的阻塞调用，不声称确定了那一次卡死的全部原因。
-- 正式版本构建、签名和发布结果以对应 tag 的 Release Workflow 及发布资产为准；本地构建和旧版本进程不代表新版本安装验收。
+## 没有验证的
+
+- 重启测试用的是独立子进程，没有重启真实的 Codex；1500ms 确认只证明进程存活，不代表窗口或业务就绪。
+- 没有在真实界面点击“覆盖”，没有动过用户真实的指令文件。
+- 代理只验证了文件写入和界面反馈，不代表网络连通；远控没有重新登录或建连。
+- API 模式下插件的安装与调用没有端到端验证。
+- 历史上的一次 Application Hang 没有 dump。本次只修复了已证实的阻塞调用，不声称找到了那次卡死的全部原因。
+- 正式版的构建、签名和发布，以对应 tag 的 Release Workflow 和发布资产为准。

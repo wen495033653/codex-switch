@@ -2,54 +2,37 @@
 
 [English](./README.en.md)
 
-Codex Switch 是一个本地桌面工具，用来管理多个 Codex 订阅账号，并在订阅账号和 OpenAI-compatible API 模式之间快速切换。
-
-它把常用的账号切换、API 配置、会话同步、代理开关和更新检查放在同一个界面里，减少手动修改配置的操作。
+Codex Switch 是一个本地桌面工具：管理多个 Codex 订阅账号，并在订阅账号和 OpenAI-compatible API 模式之间一键切换。支持 Windows 和 macOS。
 
 ![Codex Switch 首页](./docs/images/home.png)
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/wen495033653/codex-switch/releases) 下载最新版本。发布签名说明见 [Code signing policy](./CODE_SIGNING.md)。
+从 [GitHub Releases](https://github.com/wen495033653/codex-switch/releases) 下载最新版本，之后可以在应用内更新。发布签名说明见 [Code signing policy](./CODE_SIGNING.md)。
 
 ## 功能
 
-### 账号管理
+- **账号管理**：通过 OAuth、`refresh_token` 或 JSON 文件添加账号；查看额度、订阅到期时间和刷新时间；支持定时刷新、导入导出。
+- **API 模式**：保存多套 OpenAI-compatible API 配置，Base URL 自动规范化，可一键测试连通性，与订阅账号一键互切。
+- **会话同步**：订阅模式和 API 模式共用同一份会话列表，切换后仍能继续原来的会话。
+- **会话管理**：浏览和预览本机会话，归档、删除（可恢复）、导入和导出。
+- **用量统计**：按账号和 API 配置统计 token 用量，并估算费用。
+- **Codex 代理**：为 Codex app 配置本地 HTTP/HTTPS 代理，关闭后自动清理配置。
+- **其他**：应用内更新、浅色/深色主题、中英文界面、开机启动、赞助入口。
 
-- 管理多个 Codex 订阅账号，方便在不同账号之间切换。
-- 支持通过 OAuth、`refresh_token` 或 JSON 文件导入账号。
-- 展示账号状态、额度信息和刷新时间，便于判断当前账号是否可用。
-- 支持导入、导出、删除和重命名账号，适合长期维护多个账号。
+所有账号数据和设置都只保存在本机。
 
-### API 模式
+## 参与开发
 
-- 支持配置 OpenAI-compatible API。
-- Base URL 支持多种常见输入形式，并会自动规范化为可用地址。
-- API Key 支持隐藏和显示，避免在日常使用时直接暴露明文。
-- 订阅账号和 API 模式可以一键切换。
+项目基于 Tauri 2 + React + Rust。
 
-### 会话同步
+```bash
+npm ci
+npm run dev
+```
 
-- 支持订阅/API 模式沿用同一份会话列表。
-- 切换模式后，可以继续查看原来的会话记录。
-- 会话同步会在后台处理，避免开启时长时间阻塞界面。
+环境要求、项目结构和提交流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。欢迎提交 Issue 和 PR。
 
-### Codex app 代理
+## License
 
-- 支持为 Codex app 配置本地 HTTP/HTTPS 代理。
-- 代理地址可以填写 `127.0.0.1:10808` 或 `http://127.0.0.1:10808` 这类形式。
-- 开关关闭后会清理代理配置，不影响继续使用 Codex。
-
-### 更新与体验
-
-- 支持在应用内检查新版本。
-- 支持浅色和深色模式。
-- 提供紧凑的设置界面，常用操作尽量集中在少量页面内。
-- 提供赞助入口，方便用户支持项目维护。
-
-## 适合场景
-
-- 需要频繁切换多个 Codex 订阅账号。
-- 同时使用 Codex 订阅账号和 OpenAI-compatible API。
-- 希望订阅/API 模式下的会话列表保持一致。
-- 希望通过图形界面管理 Codex 相关配置，减少手动操作。
+[MIT](./LICENSE)

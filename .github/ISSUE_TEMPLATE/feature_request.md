@@ -15,10 +15,5 @@ assignees: ""
 ## Proposed Behavior
 
 
-## Impact
-
-- Windows:
-- macOS:
-- Codex account/API/session/proxy/update behavior:
-
 ## Additional Context
+

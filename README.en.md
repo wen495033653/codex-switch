@@ -2,54 +2,37 @@
 
 [简体中文](./README.md)
 
-Codex Switch is a local desktop tool for managing multiple Codex subscription accounts and switching between subscription accounts and OpenAI-compatible API mode.
-
-It brings account switching, API configuration, session sync, proxy controls, and update checks into one interface, reducing the need to edit settings manually.
+Codex Switch is a local desktop tool for managing multiple Codex subscription accounts and switching between subscription accounts and OpenAI-compatible API mode with one click. It runs on Windows and macOS.
 
 ![Codex Switch home screen](./docs/images/home.png)
 
 ## Download
 
-Download the latest version from [GitHub Releases](https://github.com/wen495033653/codex-switch/releases). See the [code signing policy](./CODE_SIGNING.md) for release signing details.
+Download the latest version from [GitHub Releases](https://github.com/wen495033653/codex-switch/releases); later versions can be installed from inside the app. See the [code signing policy](./CODE_SIGNING.md) for release signing details.
 
 ## Features
 
-### Account Management
+- **Accounts**: add accounts with OAuth, a `refresh_token`, or a JSON file; see quota, subscription expiry and refresh time; scheduled refresh, import and export.
+- **API mode**: keep several OpenAI-compatible API profiles, normalize the Base URL automatically, test the connection, and switch to and from subscription accounts with one click.
+- **Session sync**: subscription mode and API mode share one session list, so earlier conversations stay usable after switching.
+- **Session manager**: browse and preview local sessions; archive, delete (restorable), import and export them.
+- **Usage statistics**: token usage per account and API profile, with an estimated cost.
+- **Codex proxy**: set a local HTTP/HTTPS proxy for the Codex app; turning it off removes the configuration.
+- **Also**: in-app updates, light and dark themes, Chinese and English UI, start at login, a support entry.
 
-- Manage multiple Codex subscription accounts and switch between them quickly.
-- Import accounts with OAuth, `refresh_token`, or JSON files.
-- View account status, usage information, and refresh time.
-- Import, export, delete, and rename accounts for long-term account maintenance.
+All account data and settings stay on your device.
 
-### API Mode
+## Contributing
 
-- Configure an OpenAI-compatible API profile.
-- Accept common Base URL input formats and normalize them into a usable endpoint.
-- Hide or reveal the API Key when needed.
-- Switch between subscription accounts and API mode with one action.
+The project is built with Tauri 2, React and Rust.
 
-### Session Sync
+```bash
+npm ci
+npm run dev
+```
 
-- Share the same local session list between subscription/API mode.
-- Keep previous conversations visible after switching modes.
-- Process session sync in the background to avoid blocking the interface.
+Requirements, project layout and the pull request flow are in [CONTRIBUTING.md](./CONTRIBUTING.md) (Chinese). Issues and pull requests are welcome.
 
-### Codex app proxy
+## License
 
-- Configure a local HTTP/HTTPS proxy for Codex app traffic.
-- Accept proxy inputs such as `127.0.0.1:10808` and `http://127.0.0.1:10808`.
-- Remove the proxy configuration when the switch is turned off.
-
-### Updates and Experience
-
-- Check for new versions inside the app.
-- Support light and dark mode.
-- Keep common settings and actions in a compact interface.
-- Include a support entry for users who want to support maintenance.
-
-## Use Cases
-
-- Frequently switching between multiple Codex subscription accounts.
-- Using both Codex subscription accounts and an OpenAI-compatible API.
-- Keeping the session list consistent across subscription/API mode.
-- Managing Codex-related settings through a graphical interface instead of manual edits.
+[MIT](./LICENSE)

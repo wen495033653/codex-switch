@@ -3,15 +3,8 @@
 
 ## Validation
 
-- [ ] I ran the relevant local checks.
-- [ ] I updated docs or UI text if behavior changed.
-
-## Risk
-
-- Account/auth files:
-- API config:
-- Session sync:
-- Proxy/desktop shortcut:
-- Updater/release:
+- [ ] I ran the relevant local checks (see CONTRIBUTING.md), or explained below why not.
 
 ## Notes
+
+<!-- Optional. If this touches account/auth files, API config, session data, the updater, or files on the user's machine, say what is affected and how to roll back. -->
