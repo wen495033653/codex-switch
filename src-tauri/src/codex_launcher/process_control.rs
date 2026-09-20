@@ -17,12 +17,16 @@ const LAUNCH_CONFIRM_MS: u64 = 1_500;
 
 pub(crate) fn kill_process_tree(pid: u64) -> Result<bool, String> {
     let started = Instant::now();
+    let mut termination_attempted = false;
     let result = if pid == 0 || u32::try_from(pid).is_err() {
         Err(format!("无效的进程 PID: {pid}"))
     } else if get_alive_pids(&[pid]).is_empty() {
         Ok(false)
     } else {
-        kill_process_tree_impl(pid)
+        check_process_kill_permission(pid).and_then(|()| {
+            termination_attempted = true;
+            kill_process_tree_impl(pid)
+        })
     };
     log_session_sync_event(
         if result.is_err() {
@@ -31,6 +35,7 @@ pub(crate) fn kill_process_tree(pid: u64) -> Result<bool, String> {
             "codex_app_process_kill_finish"
         },
         json!({"pid": pid, "elapsedMs": started.elapsed().as_millis(), "timeoutMs": PROCESS_KILL_TIMEOUT_MS,
+            "terminationAttempted": termination_attempted,
             "terminated": result.as_ref().ok(), "error": result.as_ref().err()}),
     );
     result
@@ -56,8 +61,44 @@ pub(crate) fn root_pids(processes: &[(u64, u64)]) -> Vec<u64> {
 /// Ends the app by its roots only; each root's tree takes its helpers with it. Killing Electron
 /// helpers one by one makes the main process respawn them before the root is reached.
 pub(crate) fn kill_root_process_trees(processes: &[(u64, u64)]) -> Result<(), String> {
-    for pid in root_pids(processes) {
-        kill_process_tree(pid)?;
+    kill_roots_after_preflight(
+        &root_pids(processes),
+        check_process_kill_permission,
+        kill_process_tree,
+    )
+}
+
+fn check_process_kill_permission(pid: u64) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        super::process_permissions::ensure_termination_elevation(u64::from(std::process::id()), pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        Ok(())
+    }
+}
+
+fn kill_roots_after_preflight(
+    roots: &[u64],
+    mut preflight: impl FnMut(u64) -> Result<(), String>,
+    mut terminate: impl FnMut(u64) -> Result<bool, String>,
+) -> Result<(), String> {
+    // Check every root before touching any tree, including when several Codex instances exist.
+    for &pid in roots {
+        if let Err(error) = preflight(pid) {
+            log_session_sync_event(
+                "codex_app_process_kill_error",
+                json!({"pid": pid, "callerPid": std::process::id(),
+                    "stage": "permission_preflight", "terminationAttempted": false,
+                    "error": error}),
+            );
+            return Err(error);
+        }
+    }
+    for &pid in roots {
+        terminate(pid)?;
     }
     Ok(())
 }
@@ -375,6 +416,68 @@ pub(crate) fn relaunch_executable_with_retry(executable_path: &str) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_preflight_failure_never_starts_any_root_termination() {
+        let mut checked = Vec::new();
+        let mut terminated = Vec::new();
+        let error = kill_roots_after_preflight(
+            &[41, 42],
+            |pid| {
+                checked.push(pid);
+                if pid == 42 {
+                    Err("callerElevated=false, targetElevated=true".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            |pid| {
+                terminated.push(pid);
+                Ok(true)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(checked, [41, 42]);
+        assert!(terminated.is_empty());
+        assert!(error.contains("targetElevated=true"));
+        let entries = crate::session_sync_diagnostics::get_dev_log_entries();
+        assert!(
+            entries.as_array().unwrap().iter().any(|entry| {
+                entry["details"]["event"] == "codex_app_process_kill_error"
+                    && entry["details"]["details"]["pid"] == 42
+                    && entry["details"]["details"]["terminationAttempted"] == false
+                    && entry["details"]["details"]["stage"] == "permission_preflight"
+            }),
+            "{entries}"
+        );
+    }
+
+    #[test]
+    fn successful_permission_preflight_precedes_all_root_terminations() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::new());
+        kill_roots_after_preflight(
+            &[41, 42],
+            |pid| {
+                calls.borrow_mut().push(("check", pid));
+                Ok(())
+            },
+            |pid| {
+                calls.borrow_mut().push(("terminate", pid));
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            *calls.borrow(),
+            [
+                ("check", 41),
+                ("check", 42),
+                ("terminate", 41),
+                ("terminate", 42)
+            ]
+        );
+    }
 
     fn fixture_command(mode: &str) -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());

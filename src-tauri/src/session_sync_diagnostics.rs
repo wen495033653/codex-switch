@@ -12,6 +12,8 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 const DEV_LOG_EVENT: &str = "dev-log";
+// Stable code survives the String-based command/watcher error chain.
+pub(crate) const PROCESS_ELEVATION_WARNING: &str = "[PROCESS_ELEVATION_MISMATCH]";
 const MAX_DEV_LOG_BUFFER: usize = 300;
 const ERROR_LOG_DIR_NAME: &str = "logs";
 const ERROR_LOG_FILE_NAME: &str = "codex-switch-errors.jsonl";
@@ -30,8 +32,14 @@ fn dev_log_buffer() -> &'static Mutex<Vec<Value>> {
     DEV_LOG_BUFFER.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn event_level(event: &str) -> &'static str {
-    if is_error_event(event) {
+fn event_level(event: &str, details: &Value) -> &'static str {
+    if details
+        .get("error")
+        .and_then(Value::as_str)
+        .is_some_and(|error| error.contains(PROCESS_ELEVATION_WARNING))
+    {
+        "warn"
+    } else if is_error_event(event) {
         "error"
     } else if event.ends_with("_skip") {
         "warn"
@@ -562,6 +570,7 @@ fn append_error_log(path: &Path, event: &str, details: &Value) -> Result<(), Str
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
         "event": event,
+        "level": event_level(event, details),
         "details": details
     })
     .to_string();
@@ -595,13 +604,14 @@ pub(crate) fn log_session_sync_event(event: &str, details: Value) {
         return;
     }
 
+    let level = event_level(event, &details);
     let Some(details) = dev_log_details(event, &details) else {
         return;
     };
 
     let payload = json!({
         "sequence": DEV_LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-        "level": event_level(event),
+        "level": level,
         "source": dev_log_source(event),
         "message": dev_log_message(event),
         "details": {
@@ -637,6 +647,34 @@ pub(crate) fn get_dev_log_entries() -> Value {
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn permission_warning_stays_warn_through_disk_and_watcher_error_chain() {
+        let path = unique_temp_log_path("permission-warning");
+        let details = json!({"error": format!("{PROCESS_ELEVATION_WARNING} callerElevated=false, targetElevated=true"),
+            "terminationAttempted": false, "retry": false});
+        for event in [
+            "codex_app_process_kill_error",
+            "codex_app_watcher_on_open_error",
+        ] {
+            assert_eq!(event_level(event, &details), "warn");
+            append_error_log(&path, event, &details).unwrap();
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        for line in text.lines() {
+            let entry: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(entry["level"], "warn");
+            assert_eq!(entry["details"], details);
+        }
+        assert_eq!(
+            event_level(
+                "codex_app_process_kill_error",
+                &json!({"error": "access denied"})
+            ),
+            "error"
+        );
+    }
 
     fn unique_temp_log_path(name: &str) -> PathBuf {
         let stamp = std::time::SystemTime::now()

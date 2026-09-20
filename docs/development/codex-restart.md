@@ -10,6 +10,7 @@
 - 相关日志事件：`codex_app_process_kill_error` / `_finish`、`codex_app_process_kill_tree_exited`、`codex_app_launch_confirmation_error` / `_finish`、`codex_app_restart_command_error`、`codex_app_watcher_on_open_error`。`*_error` 事件从 v5.4.12 起会写入数据目录下的 `logs/codex-switch-errors.jsonl`。
 - 自动处理失败后，本次 Codex Switch 运行期间不再调用自动打开处理，即使 Codex PID 改变、周期检查到期或 watcher 线程恢复也不重试；继续更新进程状态，手动“重启 Codex”不受此标记限制。停用标记只在重启 Codex Switch 后重置。
 - 同步预检查失败直接返回错误，不结束 Codex；若 Codex 已关闭后同步失败，仍完成这一次重新打开，再返回同步错误，禁止 watcher 将它当成成功而再次重启。
+- Windows 在执行任何终止命令前先只读查询调用者和所有根进程的 `TokenElevation`。普通权限 SW 遇到管理员进程时返回 `PROCESS_ELEVATION_MISMATCH`，不调用 taskkill，也不先结束可访问的子进程或其他根进程；权限查询失败同样停止，不假定可以终止。权限不匹配沿调用链记为 `warn`，记录双方 PID / elevated 值、`terminationAttempted=false`；watcher 仍沿用本次运行不重试的处理。
 
 ## 结束进程树：只看“是否全部退出”（2026-09-17）
 
@@ -27,6 +28,14 @@
 - watcher 识别根进程和上面的调用共用 `root_pids`。
 
 ## 验证记录
+
+### 2026-09-20：关闭前权限预检查
+
+- 前提已证实：正式 SW 的进程 Token 为非 elevated，Codex 主进程为 elevated；旧日志中 taskkill 先结束部分子进程，之后因主进程拒绝访问而失败。
+- 定向测试：`cargo test permission -- --nocapture` 6 项通过、1 项按设计忽略，覆盖四种权限组合、真实 Token 查询、原生查询错误、所有根进程先检查再终止、第二个根进程被拒绝时零次终止、原始诊断日志与 watcher 传播后均为 WARN 的真实 JSONL 写入读回。
+- 只读现场验证：显式传入当前 SW / Codex PID 执行 `live_medium_caller_elevated_target_is_rejected_without_termination`，实际读取两者 Token 后得到 `callerElevated=false, targetElevated=true` 并返回预检查拒绝。该测试没有调用终止函数。
+- 未替换已安装 SW，也没有结束或重启真实 Codex。完整自动同步仍受下面既有验证边界约束。
+- 本地完整检查：Rust 261 passed / 4 ignored、Clippy all-targets、fmt、前端 25 项测试及生产构建通过。仓库迁移后旧 target 缓存含过期绝对路径，验证改用临时目录中的独立 CARGO_TARGET_DIR，未改业务代码规避构建错误。
 
 ### 2026-09-20：自动处理失败后停止重试
 

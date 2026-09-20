@@ -12,6 +12,8 @@ mod codex_app_open;
 mod codex_app_watcher;
 pub(crate) mod ide_snapshot;
 mod process_control;
+#[cfg(windows)]
+mod process_permissions;
 mod proxy_env;
 pub(crate) mod remote_control;
 mod shell;
