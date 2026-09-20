@@ -179,6 +179,7 @@ fn dev_log_message(event: &str) -> &'static str {
         "ide_reopen_discard_without_config_apply" => "忽略 IDE 重开",
         "codex_app_watcher_scan_error" => "Codex App Watcher 扫描失败",
         "codex_app_watcher_on_open_error" => "Codex App Watcher 打开处理失败",
+        "codex_app_relaunch_processes_close_error" => "Codex 关闭失败，已停止重启流程",
         "codex_app_watcher_on_open_panic_error" => "Codex App Watcher 打开处理异常",
         "codex_app_watcher_panic_error" => "Codex App Watcher 异常退出",
         "codex_desktop_data_migration_error" => "Codex Desktop 数据迁移失败",
@@ -500,6 +501,7 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
             &[("codexHome", "Codex home"), ("error", "错误")],
         )),
         "codex_app_process_kill_error"
+        | "codex_app_relaunch_processes_close_error"
         | "codex_app_process_kill_finish"
         | "codex_app_process_kill_tree_exited"
         | "codex_app_launch_confirmation_error"
@@ -685,6 +687,35 @@ mod tests {
             .join(format!("codex-switch-{name}-{stamp}"))
             .join(ERROR_LOG_DIR_NAME)
             .join(ERROR_LOG_FILE_NAME)
+    }
+
+    #[test]
+    fn close_failure_sync_outcome_is_persisted_without_hiding_sync_errors() {
+        let path = unique_temp_log_path("close-failure-sync");
+        let close_error = format!("{PROCESS_ELEVATION_WARNING} fixture permission mismatch");
+        for (error, sync_error, level) in [
+            (
+                format!("{close_error}；已直接同步会话文件"),
+                Value::Null,
+                "warn",
+            ),
+            (
+                "直接同步会话文件失败：database is locked (code 5)".into(),
+                json!("database is locked (code 5)"),
+                "error",
+            ),
+        ] {
+            let details = json!({"pids": [42], "trigger": "codex_app_close_failed_watcher",
+                "closeError": close_error, "error": error, "sessionSyncError": sync_error,
+                "sessionSyncAttempted": true, "sessionSyncSucceeded": sync_error.is_null(),
+                "retry": false, "restarted": false});
+            append_error_log(&path, "codex_app_relaunch_processes_close_error", &details).unwrap();
+            let content = fs::read_to_string(&path).unwrap();
+            let saved: Value = serde_json::from_str(content.lines().last().unwrap()).unwrap();
+            assert_eq!(saved["level"], level);
+            assert_eq!(saved["details"], details);
+        }
+        println!("close failure sync log fixture: {}", path.display());
     }
 
     #[test]

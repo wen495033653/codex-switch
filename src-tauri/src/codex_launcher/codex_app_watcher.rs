@@ -9,7 +9,10 @@ use std::{
     collections::HashSet,
     panic::{catch_unwind, AssertUnwindSafe},
     path::Path,
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
     thread,
     time::{Duration as StdDuration, Instant},
 };
@@ -66,6 +69,11 @@ struct SuppressedCodexAppOpen {
 static CURRENT_CODEX_APP_PROCESSES: OnceLock<Mutex<CodexAppWatcherSnapshot>> = OnceLock::new();
 static EXPECTED_CODEX_APP_OPEN: OnceLock<Mutex<ExpectedCodexAppOpen>> = OnceLock::new();
 static SUPPRESSED_CODEX_APP_OPENS: OnceLock<Mutex<SuppressedCodexAppOpen>> = OnceLock::new();
+static AUTOMATIC_OPEN_DISABLED: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn disable_automatic_codex_app_open() {
+    AUTOMATIC_OPEN_DISABLED.store(true, Ordering::SeqCst);
+}
 
 fn current_codex_app_processes_state() -> &'static Mutex<CodexAppWatcherSnapshot> {
     CURRENT_CODEX_APP_PROCESSES.get_or_init(|| Mutex::new(CodexAppWatcherSnapshot::default()))
@@ -225,13 +233,12 @@ where
 
     log_session_sync_event("codex_app_watcher_started", json!({}));
     thread::spawn(move || {
-        // Keep the failure latch across watcher recovery; only restarting Switch resets it.
-        let mut automatic_open_disabled = false;
+        // Shared with manual close failures; only restarting Codex Switch resets this latch.
         loop {
             let result = catch_unwind(AssertUnwindSafe(|| {
-                watch_codex_app(&on_open, &mut automatic_open_disabled)
+                watch_codex_app(&on_open, &AUTOMATIC_OPEN_DISABLED)
             }));
-            automatic_open_disabled = true;
+            disable_automatic_codex_app_open();
             let panic = result
                 .err()
                 .map(panic_payload_message)
@@ -251,7 +258,7 @@ where
     });
 }
 
-fn watch_codex_app<F>(on_open: &F, automatic_open_disabled: &mut bool)
+fn watch_codex_app<F>(on_open: &F, automatic_open_disabled: &AtomicBool)
 where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String>,
 {
@@ -287,7 +294,7 @@ where
         };
         update_current_codex_app_processes(processes.clone(), None);
 
-        if *automatic_open_disabled {
+        if automatic_open_disabled.load(Ordering::SeqCst) {
             sleep_interval();
             continue;
         }
@@ -484,12 +491,12 @@ where
 fn run_automatic_open_handler<F>(
     on_open: &F,
     processes: &[CodexProcess],
-    disabled: &mut bool,
+    disabled: &AtomicBool,
 ) -> Option<CodexAppOpenOutcome>
 where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String>,
 {
-    if *disabled {
+    if disabled.load(Ordering::SeqCst) {
         return None;
     }
     let (event, error) = match catch_unwind(AssertUnwindSafe(|| on_open(processes))) {
@@ -500,7 +507,7 @@ where
             panic_payload_message(payload),
         ),
     };
-    *disabled = true;
+    disabled.store(true, Ordering::SeqCst);
     eprintln!("Codex 自动处理失败，本次 Switch 运行期间不再自动重启 Codex: {error}");
     log_session_sync_event(
         event,
@@ -786,22 +793,33 @@ mod tests {
     }
 
     #[test]
+    fn externally_disabled_automatic_open_never_invokes_handler() {
+        disable_automatic_codex_app_open();
+        for pid in [44, 44, 45] {
+            assert!(run_automatic_open_handler(
+                &|_| panic!("manual close failure must also stop automatic close attempts"),
+                &[watcher_test_process(pid)],
+                &AUTOMATIC_OPEN_DISABLED,
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
     fn automatic_open_error_disables_all_later_attempts_and_logs() {
         let calls = Cell::new(0);
         let on_open = |_: &[CodexProcess]| {
             calls.set(calls.get() + 1);
             Err("test watcher termination failed: exitCode=128; access denied".to_string())
         };
-        let mut disabled = false;
+        let disabled = AtomicBool::new(false);
         for pid in [42, 42, 43] {
-            assert!(run_automatic_open_handler(
-                &on_open,
-                &[watcher_test_process(pid)],
-                &mut disabled,
-            )
-            .is_none());
+            assert!(
+                run_automatic_open_handler(&on_open, &[watcher_test_process(pid)], &disabled,)
+                    .is_none()
+            );
         }
-        assert!(disabled);
+        assert!(disabled.load(Ordering::SeqCst));
         assert_eq!(calls.get(), 1);
         let logs = crate::session_sync_diagnostics::get_dev_log_entries();
         let entry = logs
@@ -824,11 +842,11 @@ mod tests {
             calls.set(calls.get() + 1);
             panic!("test watcher handler panic");
         };
-        let mut disabled = false;
+        let disabled = AtomicBool::new(false);
         for _ in 0..2 {
-            assert!(run_automatic_open_handler(&on_open, &[], &mut disabled).is_none());
+            assert!(run_automatic_open_handler(&on_open, &[], &disabled).is_none());
         }
-        assert!(disabled);
+        assert!(disabled.load(Ordering::SeqCst));
         assert_eq!(calls.get(), 1);
         let logs = crate::session_sync_diagnostics::get_dev_log_entries();
         let entry = logs
@@ -853,18 +871,18 @@ mod tests {
                 relaunch_expected: calls.get() == 2,
             })
         };
-        let mut disabled = false;
+        let disabled = AtomicBool::new(false);
         assert!(
-            !run_automatic_open_handler(&on_open, &[], &mut disabled)
+            !run_automatic_open_handler(&on_open, &[], &disabled)
                 .unwrap()
                 .relaunch_expected
         );
         assert!(
-            run_automatic_open_handler(&on_open, &[], &mut disabled)
+            run_automatic_open_handler(&on_open, &[], &disabled)
                 .unwrap()
                 .relaunch_expected
         );
-        assert!(!disabled);
+        assert!(!disabled.load(Ordering::SeqCst));
         assert_eq!(calls.get(), 2);
     }
 

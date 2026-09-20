@@ -7,7 +7,10 @@ use super::{
         codex_processes_have_cdp_launch, inject_codex_mobile_no_replace_hook,
         launch_codex_with_cdp_hooks, CodexCdpLaunchHooks,
     },
-    codex_app_watcher::{codex_processes_log_value, CodexAppOpenOutcome, CodexProcess},
+    codex_app_watcher::{
+        codex_processes_log_value, disable_automatic_codex_app_open, CodexAppOpenOutcome,
+        CodexProcess,
+    },
     process_control::{
         kill_root_process_trees, launch_codex_process_with_options, root_pids, wait_for_pids_exit,
     },
@@ -538,14 +541,85 @@ fn relaunch_running_codex_processes(
         }),
     );
 
-    kill_root_process_trees(&process_tree)?;
-    let alive = wait_for_pids_exit(&pids, 12_000);
-    if !alive.is_empty() {
-        return Err(format!(
-            "Codex 进程未能在 12000ms 内退出，存活 PID: {alive:?}"
-        ));
-    }
+    close_then_sync_or_relaunch(
+        origin,
+        &pids,
+        post_exit_session_sync,
+        || {
+            kill_root_process_trees(&process_tree)?;
+            let alive = wait_for_pids_exit(&pids, 12_000);
+            if !alive.is_empty() {
+                return Err(format!(
+                    "Codex 进程未能在 12000ms 内退出，存活 PID: {alive:?}"
+                ));
+            }
+            Ok(())
+        },
+        sync_codex_sessions_to_current_mode_now_from,
+        || {
+            relaunch_codex_after_exit(
+                &executables,
+                mode,
+                origin,
+                post_exit_session_sync,
+                post_exit_remote_control_runtime_sync,
+            )
+        },
+    )
+}
 
+fn close_then_sync_or_relaunch(
+    origin: CodexRelaunchOrigin,
+    pids: &[u64],
+    session_sync_pending: bool,
+    close: impl FnOnce() -> Result<(), String>,
+    sync: impl FnOnce(&str) -> Result<usize, String>,
+    after_exit: impl FnOnce() -> Result<usize, String>,
+) -> Result<usize, String> {
+    let close_error = match close() {
+        Ok(()) => return after_exit(),
+        Err(error) => error,
+    };
+    disable_automatic_codex_app_open();
+    let trigger = match origin {
+        CodexRelaunchOrigin::Watcher => "codex_app_close_failed_watcher",
+        CodexRelaunchOrigin::AppCommand => "codex_app_close_failed_app_command",
+    };
+    // A failed close permits one file sync, never post-exit config/CDP/launch operations.
+    let sync_result = session_sync_pending.then(|| sync(trigger));
+    let error = match &sync_result {
+        Some(Ok(updated)) => format!(
+            "{close_error}；已直接同步会话文件（更新 {updated} 项）；未重启，不再自动尝试关闭"
+        ),
+        Some(Err(sync_error)) => {
+            format!("Codex 未关闭，直接同步会话文件失败：{sync_error}；未重启，不再自动尝试关闭")
+        }
+        None => format!("{close_error}；没有待同步的会话数据；未重启，不再自动尝试关闭"),
+    };
+    log_session_sync_event(
+        "codex_app_relaunch_processes_close_error",
+        json!({
+            "origin": format!("{origin:?}"), "trigger": trigger, "pids": pids,
+            "closeError": close_error, "error": error,
+            "sessionSyncAttempted": session_sync_pending,
+            "sessionSyncSucceeded": sync_result.as_ref().map(Result::is_ok),
+            "updated": sync_result.as_ref().and_then(|result| result.as_ref().ok()),
+            "sessionSyncError": sync_result.as_ref().and_then(|result| result.as_ref().err()),
+            "restarted": false, "retry": false
+        }),
+    );
+    // Even when files synced, closing failed: propagate the terminal result so the watcher
+    // disables later attempts. A file write does not prove the running app reloaded its data.
+    Err(error)
+}
+
+fn relaunch_codex_after_exit(
+    executables: &[String],
+    mode: CodexRelaunchMode,
+    origin: CodexRelaunchOrigin,
+    post_exit_session_sync: bool,
+    post_exit_remote_control_runtime_sync: bool,
+) -> Result<usize, String> {
     apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;
 
     let session_sync_result = if post_exit_session_sync {
@@ -561,21 +635,21 @@ fn relaunch_running_codex_processes(
             "codex_app_relaunch_processes_expect_open",
             json!({
                 "origin": format!("{origin:?}"),
-                "executables": executables.clone()
+                "executables": executables
             }),
         );
-        super::codex_app_watcher::expect_app_command_codex_app_open_for_executables(&executables);
+        super::codex_app_watcher::expect_app_command_codex_app_open_for_executables(executables);
     }
 
     let mut restarted = 0usize;
-    for executable in &executables {
+    for executable in executables {
         match relaunch_codex_executable(executable, mode) {
             Ok(true) => restarted += 1,
             Ok(false) => {}
             Err(err) => {
                 if origin == CodexRelaunchOrigin::AppCommand {
                     super::codex_app_watcher::clear_expected_codex_app_open_for_executables(
-                        &executables,
+                        executables,
                     );
                 }
                 log_session_sync_event(
@@ -594,7 +668,7 @@ fn relaunch_running_codex_processes(
 
     if restarted == 0 {
         if origin == CodexRelaunchOrigin::AppCommand {
-            super::codex_app_watcher::clear_expected_codex_app_open_for_executables(&executables);
+            super::codex_app_watcher::clear_expected_codex_app_open_for_executables(executables);
         }
         return Err(format!("未能重新打开 Codex，可执行路径: {executables:?}"));
     }
@@ -731,6 +805,207 @@ fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    fn close_failure_log(pid: u64) -> Value {
+        crate::session_sync_diagnostics::get_dev_log_entries()
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry["details"]["event"] == "codex_app_relaunch_processes_close_error"
+                    && entry["details"]["details"]["pids"] == json!([pid])
+            })
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn close_failure_syncs_once_without_launch_for_both_origins() {
+        let failures = [
+            "[PROCESS_ELEVATION_MISMATCH] callerElevated=false, targetElevated=true",
+            "taskkill exitCode=128; access denied",
+            "Codex 进程未能在 12000ms 内退出，存活 PID: [42]",
+        ];
+        for (i, origin) in [
+            CodexRelaunchOrigin::Watcher,
+            CodexRelaunchOrigin::AppCommand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (j, failure) in failures.iter().enumerate() {
+                let pid = 910_000 + (i * failures.len() + j) as u64;
+                let calls = RefCell::new(Vec::new());
+                let error = close_then_sync_or_relaunch(
+                    origin,
+                    &[pid],
+                    true,
+                    || {
+                        calls.borrow_mut().push("close");
+                        Err((*failure).into())
+                    },
+                    |trigger| {
+                        calls.borrow_mut().push("sync");
+                        assert_eq!(
+                            trigger,
+                            if i == 0 {
+                                "codex_app_close_failed_watcher"
+                            } else {
+                                "codex_app_close_failed_app_command"
+                            }
+                        );
+                        Ok(j)
+                    },
+                    || panic!("must not configure, inject CDP or launch after close failure"),
+                )
+                .unwrap_err();
+                assert_eq!(*calls.borrow(), ["close", "sync"]);
+                assert!(error.contains(failure));
+                assert!(error.contains(&format!("更新 {j} 项")));
+                let entry = close_failure_log(pid);
+                assert_eq!(entry["level"], if j == 0 { "warn" } else { "error" });
+                let details = &entry["details"]["details"];
+                assert_eq!(details["closeError"], *failure);
+                assert_eq!(details["error"], error);
+                assert_eq!(details["updated"], j);
+                assert_eq!(details["sessionSyncAttempted"], true);
+                assert_eq!(details["sessionSyncSucceeded"], true);
+                assert!(details["sessionSyncError"].is_null());
+                assert_eq!(details["restarted"], false);
+                assert_eq!(details["retry"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn close_failure_with_sync_error_retains_both_causes_and_is_error_not_warn() {
+        let close_error = "[PROCESS_ELEVATION_MISMATCH] fixture permission mismatch";
+        let sync_error = "fixture SQLite error: database is locked (code 5)";
+        let error = close_then_sync_or_relaunch(
+            CodexRelaunchOrigin::Watcher,
+            &[910_010],
+            true,
+            || Err(close_error.into()),
+            |_| Err(sync_error.into()),
+            || panic!("must not launch after sync failure"),
+        )
+        .unwrap_err();
+        assert!(error.contains(sync_error));
+        assert!(!error.contains(crate::session_sync_diagnostics::PROCESS_ELEVATION_WARNING));
+        let entry = close_failure_log(910_010);
+        assert_eq!(entry["level"], "error");
+        let details = &entry["details"]["details"];
+        assert_eq!(details["closeError"], close_error);
+        assert_eq!(details["sessionSyncError"], sync_error);
+        assert_eq!(details["sessionSyncSucceeded"], false);
+        assert!(details["updated"].is_null());
+        assert_eq!(details["retry"], false);
+    }
+
+    #[test]
+    fn close_failure_without_pending_sync_does_not_write_or_launch() {
+        let error = close_then_sync_or_relaunch(
+            CodexRelaunchOrigin::AppCommand,
+            &[910_011],
+            false,
+            || Err("fixture close failed".into()),
+            |_| panic!("disabled or unchanged sessions must not be written"),
+            || panic!("must not launch"),
+        )
+        .unwrap_err();
+        assert!(error.contains("没有待同步"));
+        let entry = close_failure_log(910_011);
+        assert_eq!(entry["details"]["details"]["sessionSyncAttempted"], false);
+        assert!(entry["details"]["details"]["sessionSyncSucceeded"].is_null());
+    }
+
+    #[test]
+    fn successful_close_keeps_post_exit_flow_and_propagates_its_result() {
+        for result in [Ok(1), Err("fixture post-exit error".to_string())] {
+            let calls = RefCell::new(Vec::new());
+            let actual = close_then_sync_or_relaunch(
+                CodexRelaunchOrigin::Watcher,
+                &[910_012],
+                true,
+                || {
+                    calls.borrow_mut().push("close");
+                    Ok(())
+                },
+                |_| panic!("must not perform running-file sync when close succeeded"),
+                || {
+                    calls.borrow_mut().push("after_exit");
+                    result.clone()
+                },
+            );
+            assert_eq!(actual, result);
+            assert_eq!(*calls.borrow(), ["close", "after_exit"]);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an explicit isolated Codex fixture home; never uses the real home"]
+    fn isolated_close_failure_syncs_real_files_without_relaunch() {
+        let fixture = std::env::var_os("CODEX_SWITCH_CLOSE_FAILURE_TEST_HOME")
+            .map(std::path::PathBuf::from)
+            .expect("set CODEX_SWITCH_CLOSE_FAILURE_TEST_HOME to the prepared sandbox .codex");
+        assert_eq!(crate::paths::codex_dir().unwrap(), fixture);
+        let error = close_then_sync_or_relaunch(
+            CodexRelaunchOrigin::Watcher,
+            &[910_013],
+            true,
+            || {
+                Err(
+                    "[PROCESS_ELEVATION_MISMATCH] isolated fixture, no termination attempted"
+                        .into(),
+                )
+            },
+            sync_codex_sessions_to_current_mode_now_from,
+            || panic!("must not launch"),
+        )
+        .unwrap_err();
+        assert!(error.contains("已直接同步会话文件"), "{error}");
+        let connection = rusqlite::Connection::open(fixture.join("state_5.sqlite")).unwrap();
+        let provider: String = connection
+            .query_row(
+                "SELECT model_provider FROM threads WHERE id='close-failure-fixture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(provider, "openai");
+        let rollout =
+            std::fs::read_to_string(fixture.join("sessions/rollout-fixture.jsonl")).unwrap();
+        let first: Value = serde_json::from_str(rollout.lines().next().unwrap()).unwrap();
+        assert_eq!(first["payload"]["model_provider"], "openai");
+        println!("{}", close_failure_log(910_013));
+
+        // An open Codex database may hold a writer lock. Exercise the real SQLite error,
+        // while the same failed-close branch must still never reach the launch callback.
+        connection
+            .execute("UPDATE threads SET model_provider='api'", [])
+            .unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let error = close_then_sync_or_relaunch(
+            CodexRelaunchOrigin::Watcher,
+            &[910_014],
+            true,
+            || Err("[PROCESS_ELEVATION_MISMATCH] isolated busy fixture".into()),
+            sync_codex_sessions_to_current_mode_now_from,
+            || panic!("must not launch after a locked database error"),
+        )
+        .unwrap_err();
+        connection.execute_batch("ROLLBACK").unwrap();
+        assert!(error.contains("database is locked"), "{error}");
+        let entry = close_failure_log(910_014);
+        assert_eq!(entry["level"], "error");
+        assert_eq!(entry["details"]["details"]["sessionSyncSucceeded"], false);
+        assert_eq!(entry["details"]["details"]["restarted"], false);
+        assert_eq!(entry["details"]["details"]["retry"], false);
+        println!("{entry}");
+    }
+
     #[test]
     fn retired_plugin_flag_never_triggers_restart_or_cdp() {
         for enabled in [false, true] {

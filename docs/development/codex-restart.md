@@ -8,9 +8,10 @@
 - 失败时返回 PID、退出状态、单独的 `exitCode`、`elapsedMs`、两路输出和清理结果，非 UTF-8 输出用 `rawBase64` 保留原字节。所有调用方都向上传递 `Result`，不忽略错误。
 - 普通模式启动后，确认同一个子进程句柄持续存活 1500ms；提前退出（包括 `exitCode=0`）按失败返回，不重试、不伪装成功。这只证明进程存活，不代表窗口或业务就绪。CDP 模式用实际的 CDP 注入来确认。
 - 相关日志事件：`codex_app_process_kill_error` / `_finish`、`codex_app_process_kill_tree_exited`、`codex_app_launch_confirmation_error` / `_finish`、`codex_app_restart_command_error`、`codex_app_watcher_on_open_error`。`*_error` 事件从 v5.4.12 起会写入数据目录下的 `logs/codex-switch-errors.jsonl`。
-- 自动处理失败后，本次 Codex Switch 运行期间不再调用自动打开处理，即使 Codex PID 改变、周期检查到期或 watcher 线程恢复也不重试；继续更新进程状态，手动“重启 Codex”不受此标记限制。停用标记只在重启 Codex Switch 后重置。
+- 自动处理失败后，本次 Codex Switch 运行期间不再调用自动打开处理，即使 Codex PID 改变、周期检查到期或 watcher 线程恢复也不重试；继续更新进程状态。手动“重启 Codex”仍可主动触发，但其关闭失败同样设置这个共享停用标记，阻止后台再次尝试。标记只在重启 Codex Switch 后重置。
 - 同步预检查失败直接返回错误，不结束 Codex；若 Codex 已关闭后同步失败，仍完成这一次重新打开，再返回同步错误，禁止 watcher 将它当成成功而再次重启。
-- Windows 在执行任何终止命令前先只读查询调用者和所有根进程的 `TokenElevation`。普通权限 Codex Switch 遇到管理员进程时返回 `PROCESS_ELEVATION_MISMATCH`，不调用 taskkill，也不先结束可访问的子进程或其他根进程；权限查询失败同样停止，不假定可以终止。权限不匹配沿调用链记为 `warn`，记录双方 PID / elevated 值、`terminationAttempted=false`；watcher 仍沿用本次运行不重试的处理。
+- 关闭失败（权限预检查拒绝、终止失败或退出等待超时）时，停止后续关闭和重新打开操作；若设置开启且预检查发现会话差异，只直接同步文件一次。复用现有会话 I/O 锁与同步入口，不执行要求进程退出的配置应用、CDP 或启动操作。同步失败显式返回错误，不再重试；文件写入完成不代表正在运行的 Codex 已重新加载。
+- Windows 在执行任何终止命令前先只读查询调用者和所有根进程的 `TokenElevation`。普通权限 Codex Switch 遇到管理员进程时返回 `PROCESS_ELEVATION_MISMATCH`，不调用 taskkill，也不先结束可访问的子进程或其他根进程；权限查询失败同样停止终止操作，不假定可以终止。随后按上一条执行直接同步。权限不匹配记为 `warn`，记录双方 PID / elevated 值、`terminationAttempted=false`；若后续文件同步也失败，该同步终态及向上传播的错误记为 `error`，原权限原因单独保留。
 
 ## 结束进程树：只看“是否全部退出”（2026-09-17）
 
@@ -28,6 +29,14 @@
 - watcher 识别根进程和上面的调用共用 `root_pids`。
 
 ## 验证记录
+
+### 2026-09-20：关闭失败后直接同步文件，不再重启
+
+- 已确认旧分支：`kill_root_process_trees(...)?` 或退出等待错误直接返回，阻断其后的会话同步。修改为关闭成功仍走原流程；关闭失败只执行一次待处理的会话同步，并返回明确的未重启终态。复用原有自动停用标记，改为线程共享的 `AtomicBool`，手动关闭失败也会阻止后续 watcher 处理。
+- 诊断沿用 `logs/codex-switch-errors.jsonl`，没有恢复日志界面。`codex_app_relaunch_processes_close_error` 记录时间/进程标识、触发来源、目标 PID、`closeError`、是否尝试同步、`sessionSyncSucceeded`、更新数量、`sessionSyncError`、`restarted=false` 与 `retry=false`。关闭原因和同步错误分开保存，避免 SQLite 错误被权限 WARN 降级。
+- 定向逻辑验证：两种调用来源 × 权限拒绝/终止失败/退出超时，均只关闭一次、同步一次、不调用退出后操作；覆盖更新零项、同步错误、无需同步、关闭成功，以及手动停用后重复检查/新 PID 不执行 handler。原有真实 JSONL 写入读回测试新增终态字段与 WARN/ERROR 分级检查。
+- 隔离真实文件验证：独立用户目录，模拟关闭被拒绝，调用真实当前模式同步入口；SQLite 与 rollout 的 provider 均从 `api` 更新为 `openai`，日志记录更新 2 项、WARN、未重启。随后用 `BEGIN IMMEDIATE` 持有真实 SQLite 写锁，得到 `database is locked`，返回并记录 ERROR、`sessionSyncSucceeded=false`、`retry=false`；两种场景的启动回调均未调用。证据：临时目录 `codex-switch-close-failure-qa/result.log` 和其 `sandbox`。可重跑的 Rust 用例为 `isolated_close_failure_syncs_real_files_without_relaunch`，仅在显式隔离目录参数下运行。
+- 完整本地检查：Rust 267 passed / 5 ignored（上述隔离用例另行显式运行通过）、fmt、Clippy all-targets、前端 25 项测试及生产构建通过。未替换安装版，未关闭或重启正式 Codex；没有把模拟关闭错误与真实文件 I/O 验证描述为正式 Codex 的运行验证。
 
 ### 2026-09-20：移除运行日志界面
 
