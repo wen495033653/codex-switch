@@ -14,7 +14,6 @@ export function RuntimeLogView({ entries, loading, error, writeError, refresh, o
     const { t, language } = useI18n();
     const [filter, setFilter] = useState('all');
     const visible = entries.filter(entry => filter === 'all' || entry.level === filter);
-    const formatValue = value => typeof value === 'boolean' ? t(value ? '是' : '否') : String(value);
 
     return (
         <Modal title={t('Codex 运行日志')} onClose={onClose} width="760px">
@@ -51,22 +50,14 @@ export function RuntimeLogView({ entries, loading, error, writeError, refresh, o
                             <p className="runtime-log-summary">{entry.summary}</p>
                             {entry.action && <p className="runtime-log-action">{entry.action}</p>}
                             <details className="runtime-log-details">
-                                <summary>{t('技术详情')}</summary>
-                                <dl>
-                                    {entry.fields.map((field, index) => (
-                                        <div key={`${field.label}-${index}`}>
-                                            <dt>{t(field.label)}</dt><dd>{formatValue(field.value)}{field.truncated && <small> {t('（已截短，完整内容保留在本机日志）')}</small>}</dd>
-                                        </div>
-                                    ))}
-                                    <div><dt>{t('事件')}</dt><dd>{entry.event}</dd></div>
-                                    <div><dt>{t('SW 版本')}</dt><dd>{entry.version || '—'}</dd></div>
-                                </dl>
+                                <summary>{t('详情')}</summary>
+                                <pre className="runtime-log-raw"><code>{entry.rawLog}</code></pre>
                             </details>
                         </article>
                     ))}
                 </div>
                 <div className="runtime-log-footer">
-                    <span>{t('日志保存在本机，重开 SW 后仍可查看。')}</span>
+                    <span>{t('日志保存在本机，重开 Codex Switch 后仍可查看。')}</span>
                     <button type="button" className="btn btn-secondary" autoFocus onClick={onClose}>{t('关闭')}</button>
                 </div>
             </div>

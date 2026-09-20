@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 // User-facing results only. Debug steps, scans and normal "disabled" skips stay out of this view.
-// The diagnostic file retains the full original evidence; this projection exposes a small allowlist.
+// This projection supplies the brief result; the reader attaches the original log line separately.
 pub(super) fn project(event: &str, details: &Value, level: &str, message: &str) -> Option<Value> {
     let permission_warning = level == "warn" && event.ends_with("_error");
     let updated = details.get("updated").and_then(Value::as_u64).unwrap_or(0);
@@ -13,7 +13,7 @@ pub(super) fn project(event: &str, details: &Value, level: &str, message: &str) 
             } else {
                 "已保留 Codex 进程"
             },
-            "SW 为普通权限，目标进程为管理员权限。本次关闭已跳过，未结束主进程或子进程。"
+            "Codex Switch 为普通权限，目标进程为管理员权限。本次关闭已跳过，未结束主进程或子进程。"
                 .to_string(),
             "无需现在退出 Codex；请在当前任务结束后再处理权限差异。",
         )
@@ -30,7 +30,7 @@ pub(super) fn project(event: &str, details: &Value, level: &str, message: &str) 
                 _ => message,
             },
             if details.get("retry") == Some(&Value::Bool(false)) {
-                "自动处理已停止，本次 SW 运行期间不会再次自动重启 Codex。".to_string()
+                "自动处理已停止，本次 Codex Switch 运行期间不会再次自动重启 Codex。".to_string()
             } else {
                 "该步骤未完成；展开详情查看失败依据。".to_string()
             },
@@ -38,7 +38,12 @@ pub(super) fn project(event: &str, details: &Value, level: &str, message: &str) 
         )
     } else {
         match event {
-            "app_start" => ("success", "SW 已启动", "运行日志已启用。".to_string(), ""),
+            "app_start" => (
+                "success",
+                "Codex Switch 已启动",
+                "运行日志已启用。".to_string(),
+                "",
+            ),
             "session_sync_preflight_finish" if updated > 0 => (
                 "warn",
                 "发现待同步数据",
@@ -127,41 +132,8 @@ pub(super) fn project(event: &str, details: &Value, level: &str, message: &str) 
         }
     };
 
-    let mut fields = Vec::new();
-    if permission_warning {
-        fields.push(json!({"label": "SW 权限", "value": "普通权限（Medium）"}));
-        fields.push(json!({"label": "目标权限", "value": "管理员权限（High）"}));
-    }
-    for (key, label) in [
-        ("trigger", "触发来源"),
-        ("origin", "操作来源"),
-        ("targetProvider", "目标 provider"),
-        ("stateDbUpdated", "会话数据库条目"),
-        ("rolloutFilesUpdated", "会话文件"),
-        ("globalStateUpdated", "工作区状态项"),
-        ("updated", "合计"),
-        ("pid", "目标 PID"),
-        ("callerPid", "SW PID"),
-        ("terminationAttempted", "已尝试关闭"),
-        ("retry", "将自动重试"),
-        ("elapsedMs", "耗时（ms）"),
-        ("confirmationMs", "启动观察时间（ms）"),
-        ("restartedCount", "重新打开数量"),
-        ("stage", "阶段"),
-    ] {
-        if let Some(value) = details.get(key).filter(|v| !v.is_null()) {
-            fields.push(json!({"label": label, "value": value}));
-        }
-    }
-    if let Some(error) = details.get("error").and_then(Value::as_str) {
-        // Do not flood the UI with taskkill's encoded output. Full evidence remains in JSONL.
-        let head = error.split("rawBase64=").next().unwrap_or(error);
-        let excerpt: String = head.chars().take(1200).collect();
-        fields.push(json!({"label": "诊断依据", "value": excerpt,
-            "truncated": head.len() < error.len() || head.chars().count() > 1200}));
-    }
     Some(json!({"level": level, "title": title, "summary": summary,
-        "action": action, "event": event, "fields": fields}))
+        "action": action}))
 }
 
 #[cfg(test)]
@@ -180,14 +152,14 @@ mod tests {
         .unwrap();
         assert_eq!(entry["level"], "warn");
         assert!(entry["summary"].as_str().unwrap().contains("数据尚未修改"));
-        assert_eq!(entry["fields"].as_array().unwrap().len(), 4);
+        assert!(entry.get("fields").is_none());
         let sync = project("session_sync_finish", &json!({"updated": 7}), "debug", "").unwrap();
         assert_eq!(sync["level"], "success");
         assert_eq!(sync["title"], "会话同步完成");
     }
 
     #[test]
-    fn view_omits_noise_and_large_encoded_output() {
+    fn summary_does_not_duplicate_raw_diagnostics() {
         assert!(project("session_sync_start", &json!({}), "debug", "").is_none());
         let entry = project(
             "codex_app_process_kill_error",
@@ -198,10 +170,10 @@ mod tests {
         )
         .unwrap();
         let text = entry.to_string();
-        assert!(text.contains("exitCode=128"));
+        assert!(!text.contains("exitCode=128"));
         assert!(!text.contains("AAAA"));
         assert!(!text.contains("fixture-private"));
-        assert_eq!(entry["fields"][0]["truncated"], true);
+        assert!(entry.get("fields").is_none());
     }
 
     #[test]

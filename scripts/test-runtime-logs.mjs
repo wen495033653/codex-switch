@@ -18,7 +18,7 @@ before(async () => {
 after(async () => { await server?.close(); });
 
 const entry = (level, id) => ({ id, level, title: 'fixture result', timestamp: '2026-09-20T03:00:00Z',
-  event: 'fixture_event', version: '6.0.2', summary: 'fixture summary', action: '', fields: [{ label: '将自动重试', value: false }] });
+  summary: 'fixture summary', action: '', rawLog: '{"event":"fixture_event","details":{"retry":false,"error":"exitCode=128"}}' });
 const render = (Component, props, language = 'zh-CN') => renderToStaticMarkup(createElement(I18nProvider, { preference: language }, createElement(Component, props)));
 
 test('settings exposes runtime logs in release builds at the toolbar right side', () => {
@@ -29,13 +29,25 @@ test('settings exposes runtime logs in release builds at the toolbar right side'
   assert.ok(html.indexOf('settings-log-button') > html.indexOf('settings-tabs'));
 });
 
-test('runtime log view has three levels, human-readable evidence, and collapsed details', () => {
+test('runtime log view uses plain details with one raw log block and the full product name', () => {
   const html = render(RuntimeLogView, { entries: ['success', 'warn', 'error'].map(entry), loading: false });
   for (const level of ['success', 'warn', 'error']) assert.match(html, new RegExp(`runtime-log-level ${level}`));
-  assert.match(html, /技术详情/);
-  assert.match(html, /<dd>否/);
+  assert.match(html, /<summary>详情<\/summary>/);
+  assert.equal((html.match(/class="runtime-log-raw"/g) || []).length, 3);
+  assert.match(html, /fixture_event/);
+  assert.match(html, /exitCode=128/);
+  assert.match(html, /Codex Switch/);
+  assert.doesNotMatch(html, /技术详情|\bSW\b|<dl|<dt|<dd/);
   assert.doesNotMatch(html, /<details[^>]* open/);
-  assert.doesNotMatch(html, /rawBase64/);
+  assert.match(render(RuntimeLogView, { entries: [entry('error', 1)], loading: false }, 'en'), /<summary>Details<\/summary>/);
+});
+
+test('raw log renders as text without executing embedded markup', () => {
+  const record = {...entry('error', 1), rawLog: '<script>fixture()</script>\nrawBase64=AAAA'};
+  const html = render(RuntimeLogView, { entries: [record], loading: false });
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;fixture\(\)&lt;\/script&gt;/);
+  assert.match(html, /rawBase64=AAAA/);
 });
 
 test('read and write failures are visible instead of a misleading empty state', () => {

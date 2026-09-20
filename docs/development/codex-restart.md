@@ -10,7 +10,7 @@
 - 相关日志事件：`codex_app_process_kill_error` / `_finish`、`codex_app_process_kill_tree_exited`、`codex_app_launch_confirmation_error` / `_finish`、`codex_app_restart_command_error`、`codex_app_watcher_on_open_error`。`*_error` 事件从 v5.4.12 起会写入数据目录下的 `logs/codex-switch-errors.jsonl`。
 - 自动处理失败后，本次 Codex Switch 运行期间不再调用自动打开处理，即使 Codex PID 改变、周期检查到期或 watcher 线程恢复也不重试；继续更新进程状态，手动“重启 Codex”不受此标记限制。停用标记只在重启 Codex Switch 后重置。
 - 同步预检查失败直接返回错误，不结束 Codex；若 Codex 已关闭后同步失败，仍完成这一次重新打开，再返回同步错误，禁止 watcher 将它当成成功而再次重启。
-- Windows 在执行任何终止命令前先只读查询调用者和所有根进程的 `TokenElevation`。普通权限 SW 遇到管理员进程时返回 `PROCESS_ELEVATION_MISMATCH`，不调用 taskkill，也不先结束可访问的子进程或其他根进程；权限查询失败同样停止，不假定可以终止。权限不匹配沿调用链记为 `warn`，记录双方 PID / elevated 值、`terminationAttempted=false`；watcher 仍沿用本次运行不重试的处理。
+- Windows 在执行任何终止命令前先只读查询调用者和所有根进程的 `TokenElevation`。普通权限 Codex Switch 遇到管理员进程时返回 `PROCESS_ELEVATION_MISMATCH`，不调用 taskkill，也不先结束可访问的子进程或其他根进程；权限查询失败同样停止，不假定可以终止。权限不匹配沿调用链记为 `warn`，记录双方 PID / elevated 值、`terminationAttempted=false`；watcher 仍沿用本次运行不重试的处理。
 
 ## 结束进程树：只看“是否全部退出”（2026-09-17）
 
@@ -31,27 +31,33 @@
 
 ### 运行日志入口（2026-09-20）
 
-- 设置页标签栏右侧增加正式版可用的“日志”按钮，弹窗按时间倒序展示最近 500 条，支持成功 / WARN / ERROR 筛选和手动刷新。默认只看时间、结果、原因和必要提示；技术字段折叠展示，不显示大段 JSON 或 taskkill 的 Base64 输出。
+- 设置页标签栏右侧增加正式版可用的“日志”按钮，弹窗按时间倒序展示最近 500 条，支持成功 / WARN / ERROR 筛选和手动刷新。默认只看时间、结果、原因和必要提示；“详情”默认折叠；展开后仅用一个代码块显示该条原始 JSONL，不再拆分为中文 key 列表、版本栏或事件栏。长日志在代码块内换行并限高滚动。
 - 复用唯一的现有 JSONL 与 5 MiB × 2 轮转：`logs/codex-switch-errors.jsonl`。保留历史文件名是为了继续读取已经落盘的错误；现在 Release 也持久化选定的成功和警告结果，不依赖 DEV 内存日志。旧错误记录没有 `level` 时按事件与原始依据分类，不迁移、不改写历史记录。
-- 权限不匹配沿整条错误传播链均为 WARN：明确显示普通权限 SW / 管理员目标、未关闭主进程或子进程；watcher 的下一条 WARN 明确显示自动处理已暂停，不误报同步完成。其余真实失败仍为 ERROR。
+- 权限不匹配沿整条错误传播链均为 WARN：明确显示普通权限 Codex Switch / 管理员目标、未关闭主进程或子进程；watcher 的下一条 WARN 明确显示自动处理已暂停，不误报同步完成。其余真实失败仍为 ERROR。
 - 同步预检查按数据库、会话文件、工作区状态记录差异数量；有差异为 WARN，写明“数据尚未修改”。`session_sync_finish` 才显示实际同步完成。进程存活确认只写进程检查通过，不声称窗口或任务已就绪；`restarted=false` 不记成功。
 - 读取命令 `get_runtime_log_entries` 在后台线程读取当前和上一代日志；读取/解析失败返回明确错误，界面保留上次记录并显示错误；写入失败输出诊断并在日志窗口显示“部分日志未能保存”。不自动轮询、不自动重试、不引入配置开关。
-- 代码入口：`session_sync_diagnostics.rs` 管持久化和读取，`session_sync_diagnostics/runtime_log.rs` 管用户可读投影；前端 `useRuntimeLogs.js` 管请求，`RuntimeLogDialog.jsx` 管展示。
+- 代码入口：`session_sync_diagnostics.rs` 管持久化和读取，`session_sync_diagnostics/runtime_log.rs` 仅生成用户可读摘要，读取层把原始日志行作为 `rawLog` 返回；前端 `useRuntimeLogs.js` 管请求，`RuntimeLogDialog.jsx` 管展示。
 
 #### 验证层级
 
 - 离线/故障注入：JSONL 真正写入并重新读取，覆盖三级日志、旧历史、轮转合并、500 条上限、错误行定位和真实 I/O 失败；前端覆盖正式版按钮、默认折叠、错误提示、较早响应不覆盖新请求、关闭后忽略在途结果且不重试。
-- 隔离真实运行：隐藏 Tauri 窗口 + 真实 WebView2 + 真实 `get_runtime_log_entries`，独立 USERPROFILE / APPDATA / WebView 数据，`CODEX_SWITCH_DEV_PREVIEW=1` 禁止 watcher。种入四条标记为 fixture 的历史记录，真实后端另写一条 SW 启动成功日志。16 项 DOM / IPC / 计算样式断言通过，包括按钮在右侧（x=903, y=80）、1024×720 下弹窗不溢出、明暗主题、三级筛选、展开字段、损坏临时日志后显示真实读取错误、恢复刷新及关闭重开读回。
-- 隔离验证证据：临时目录 `codex-switch-runtime-log-qa/result.json`、`stdout.log`、`stderr.log` 和沙盒 JSONL；没有操作正式 SW 或 Codex。正式 Codex / SW 主进程启动时间未变，正式日志修改时间仍为 10:28:47（UTC+8）。
+- 隔离真实运行：隐藏 Tauri 窗口 + 真实 WebView2 + 真实 `get_runtime_log_entries`，独立 USERPROFILE / APPDATA / WebView 数据，`CODEX_Codex SwitchITCH_DEV_PREVIEW=1` 禁止 watcher。种入四条标记为 fixture 的历史记录，真实后端另写一条 Codex Switch 启动成功日志。16 项 DOM / IPC / 计算样式断言通过，包括按钮在右侧（x=903, y=80）、1024×720 下弹窗不溢出、明暗主题、三级筛选、展开字段、损坏临时日志后显示真实读取错误、恢复刷新及关闭重开读回。
+- 隔离验证证据：临时目录 `codex-switch-runtime-log-qa/result.json`、`stdout.log`、`stderr.log` 和沙盒 JSONL；没有操作正式 Codex Switch 或 Codex。正式 Codex / Codex Switch 主进程启动时间未变，正式日志修改时间仍为 10:28:47（UTC+8）。
 - 安装版尚未替换；完整 watcher 关闭 → 同步 → 再打开未在本轮触发，不把隔离日志 fixture 当成真实会话同步成功。回退方式仍为文末的 revert 对应 commit。
 - 完整本地检查：Rust 268 passed / 4 ignored，Clippy all-targets、fmt、前端 30 项测试及生产构建通过。
 
+#### 详情展示简化（2026-09-20）
+
+- 界面使用完整产品名 Codex Switch；折叠入口改为“详情”。移除二次生成的字段表格，直接展示原始 JSONL 文本，不重新命名 key、不截短错误依据，也不额外展示事件/版本栏；正文仍保留简明结果，原始记录只在详情中显示。
+- Rust 写入/读回测试逐行核对 `rawLog` 与磁盘原文完全相同。前端检查只有一个代码块、没有字段表格、默认折叠，并验证原文内的 HTML 被转义为文字。
+- 本地验证：Rust 268 passed / 4 ignored、Clippy all-targets、fmt、前端 31 项测试及生产构建通过。隐藏隔离 Tauri / WebView2 的 20 项断言通过，覆盖三个改动、原始日志相等、180px 限高滚动及原有筛选/错误路径。证据为临时目录 `codex-switch-runtime-log-qa/result.json`；没有重启正式 Codex 或正式 Codex Switch。
+
 ### 2026-09-20：关闭前权限预检查
 
-- 前提已证实：正式 SW 的进程 Token 为非 elevated，Codex 主进程为 elevated；旧日志中 taskkill 先结束部分子进程，之后因主进程拒绝访问而失败。
+- 前提已证实：正式 Codex Switch 的进程 Token 为非 elevated，Codex 主进程为 elevated；旧日志中 taskkill 先结束部分子进程，之后因主进程拒绝访问而失败。
 - 定向测试：`cargo test permission -- --nocapture` 6 项通过、1 项按设计忽略，覆盖四种权限组合、真实 Token 查询、原生查询错误、所有根进程先检查再终止、第二个根进程被拒绝时零次终止、原始诊断日志与 watcher 传播后均为 WARN 的真实 JSONL 写入读回。
-- 只读现场验证：显式传入当前 SW / Codex PID 执行 `live_medium_caller_elevated_target_is_rejected_without_termination`，实际读取两者 Token 后得到 `callerElevated=false, targetElevated=true` 并返回预检查拒绝。该测试没有调用终止函数。
-- 未替换已安装 SW，也没有结束或重启真实 Codex。完整自动同步仍受下面既有验证边界约束。
+- 只读现场验证：显式传入当前 Codex Switch / Codex PID 执行 `live_medium_caller_elevated_target_is_rejected_without_termination`，实际读取两者 Token 后得到 `callerElevated=false, targetElevated=true` 并返回预检查拒绝。该测试没有调用终止函数。
+- 未替换已安装 Codex Switch，也没有结束或重启真实 Codex。完整自动同步仍受下面既有验证边界约束。
 - 本地完整检查：Rust 261 passed / 4 ignored、Clippy all-targets、fmt、前端 25 项测试及生产构建通过。仓库迁移后旧 target 缓存含过期绝对路径，验证改用临时目录中的独立 CARGO_TARGET_DIR，未改业务代码规避构建错误。
 
 ### 2026-09-20：自动处理失败后停止重试

@@ -707,7 +707,8 @@ fn read_runtime_log_entries(path: &Path) -> Result<Vec<Value>, String> {
                     index
                 ));
                 entry["timestamp"] = json!(timestamp);
-                entry["version"] = raw["version"].clone();
+                // Preserve the original code-level record instead of rebuilding a labelled field table.
+                entry["rawLog"] = json!(line);
                 entries.push_back(entry);
                 if entries.len() > MAX_RUNTIME_LOG_ENTRIES {
                     entries.pop_front();
@@ -770,6 +771,10 @@ mod tests {
         let disk = fs::read_to_string(&path).unwrap();
         let preflight: Value = serde_json::from_str(disk.lines().nth(2).unwrap()).unwrap();
         assert_eq!(preflight["level"], "warn");
+        for (entry, line) in entries.iter().rev().zip(disk.lines()) {
+            assert_eq!(entry["rawLog"], line);
+            assert!(entry.get("fields").is_none());
+        }
         println!("runtime log fixture: {}", path.display());
     }
 
@@ -787,8 +792,10 @@ mod tests {
         append_error_log(&path, "session_sync_finish", &json!({"updated": 501})).unwrap();
         let entries = read_runtime_log_entries(&path).unwrap();
         assert_eq!(entries.len(), 500);
-        assert_eq!(entries[0]["fields"][0]["value"], 501);
-        assert_eq!(entries[499]["fields"][0]["value"], 2);
+        let newest: Value = serde_json::from_str(entries[0]["rawLog"].as_str().unwrap()).unwrap();
+        let oldest: Value = serde_json::from_str(entries[499]["rawLog"].as_str().unwrap()).unwrap();
+        assert_eq!(newest["details"]["updated"], 501);
+        assert_eq!(oldest["details"]["updated"], 2);
     }
 
     #[test]
