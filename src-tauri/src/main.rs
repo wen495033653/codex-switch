@@ -165,6 +165,7 @@ fn main() {
             codex_launcher::ide_snapshot::restart_open_ides,
             codex_launcher::ide_snapshot::discard_ide_snapshot,
             session_sync_diagnostics::get_dev_log_entries,
+            session_sync_diagnostics::get_runtime_log_entries,
             commands::account::import_accounts,
             commands::account::export_accounts,
             commands::quota::refresh_all_quotas,

@@ -51,12 +51,16 @@ pub(crate) async fn restart_current_codex_app_normal() -> Result<Value, String> 
 
 #[tauri::command]
 pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<Value, String> {
-    codex_app_instances::open_codex_app_instance(app, payload)
+    codex_app_instances::open_codex_app_instance(app, payload).inspect_err(|error| {
+        log_session_sync_event("codex_app_multi_open_error", json!({"error": error}));
+    })
 }
 
 #[tauri::command]
 pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
-    codex_app_instances::show_codex_app_instance(payload)
+    codex_app_instances::show_codex_app_instance(payload).inspect_err(|error| {
+        log_session_sync_event("codex_app_multi_open_show_error", json!({"error": error}));
+    })
 }
 
 #[tauri::command]
@@ -140,6 +144,22 @@ fn sync_remote_control_runtime_after_proxy_change(settings: &Value) -> Value {
 mod restart_tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn instance_show_validation_failure_returns_and_logs_the_error() {
+        let error = show_codex_app_instance(json!({"kind": "fixture-invalid", "id": "fixture"}))
+            .unwrap_err();
+        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        assert!(logs
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |entry| entry["details"]["event"] == "codex_app_multi_open_show_error"
+                    && entry["details"]["details"]["error"] == error
+                    && entry["level"] == "error"
+            ));
+    }
 
     #[test]
     fn restart_runs_off_calling_thread_and_returns_result() {

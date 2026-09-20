@@ -1,8 +1,9 @@
 use crate::time_util::now_string;
 use serde_json::{json, Map, Value};
 use std::{
+    collections::VecDeque,
     fs,
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -10,6 +11,8 @@ use std::{
     },
 };
 use tauri::{AppHandle, Emitter};
+
+mod runtime_log;
 
 const DEV_LOG_EVENT: &str = "dev-log";
 // Stable code survives the String-based command/watcher error chain.
@@ -23,6 +26,8 @@ const ERROR_LOG_ROTATED_FILE_NAME: &str = "codex-switch-errors.1.jsonl";
 const ERROR_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 
 static ERROR_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static LOG_WRITE_ERROR: Mutex<Option<String>> = Mutex::new(None);
+const MAX_RUNTIME_LOG_ENTRIES: usize = 500;
 
 static DEV_LOG_APP: OnceLock<AppHandle> = OnceLock::new();
 static DEV_LOG_BUFFER: OnceLock<Mutex<Vec<Value>>> = OnceLock::new();
@@ -181,6 +186,11 @@ fn dev_log_message(event: &str) -> &'static str {
         "codex_app_watcher_on_open_error" => "Codex App Watcher 打开处理失败",
         "codex_app_watcher_on_open_panic_error" => "Codex App Watcher 打开处理异常",
         "codex_app_watcher_panic_error" => "Codex App Watcher 异常退出",
+        "codex_app_process_kill_error" => "进程关闭失败",
+        "codex_app_launch_confirmation_error" => "Codex 启动检查失败",
+        "codex_app_restart_command_error" => "Codex 重启失败",
+        "codex_app_multi_open_error" => "独立 Codex 启动失败",
+        "codex_app_multi_open_show_error" => "显示 Codex 窗口失败",
         "codex_desktop_data_migration_error" => "Codex Desktop 数据迁移失败",
         "codex_app_instance_data_migration_error" => "Codex 多开数据迁移失败",
         _ => "未知调试事件",
@@ -500,6 +510,9 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
             &[("codexHome", "Codex home"), ("error", "错误")],
         )),
         "codex_app_process_kill_error"
+        | "codex_app_multi_open_error"
+        | "codex_app_multi_open_show_error"
+        | "codex_app_restart_command_error"
         | "codex_app_process_kill_finish"
         | "codex_app_process_kill_tree_exited"
         | "codex_app_launch_confirmation_error"
@@ -536,16 +549,14 @@ fn dev_log_event_visible(event: &str) -> bool {
     )
 }
 
-#[cfg(not(test))]
 fn error_log_path() -> Result<PathBuf, String> {
     Ok(crate::paths::app_data_dir()?
         .join(ERROR_LOG_DIR_NAME)
         .join(ERROR_LOG_FILE_NAME))
 }
 
-// Release builds keep the dev log in memory only, so an error was gone once the app exited.
-// Error events are appended here with their full details, before the dev log summarizes them
-// or drops events it has no summary for.
+// Keep the established filename and rotation so existing error history remains readable.
+// It now also contains selected success/warning results, including in release builds.
 fn append_error_log(path: &Path, event: &str, details: &Value) -> Result<(), String> {
     let _guard = ERROR_LOG_WRITE_LOCK
         .lock()
@@ -570,7 +581,8 @@ fn append_error_log(path: &Path, event: &str, details: &Value) -> Result<(), Str
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
         "event": event,
-        "level": event_level(event, details),
+        "level": runtime_log_view(event, details).map(|entry| entry["level"].clone())
+            .unwrap_or_else(|| json!(event_level(event, details))),
         "details": details
     })
     .to_string();
@@ -591,10 +603,13 @@ pub(crate) fn log_session_sync_event(event: &str, details: Value) {
     // Unit tests exercise error paths; they must not write into the user's real data directory.
     // Production disk logging was confirmed on 2026-09-20; see docs/development/codex-restart.md.
     #[cfg(not(test))]
-    if is_error_event(event) {
+    if runtime_log_view(event, &details).is_some() {
         if let Err(err) = error_log_path().and_then(|path| append_error_log(&path, event, &details))
         {
-            eprintln!("{err}");
+            eprintln!("{} event={event}: {err}", now_string());
+            if let Ok(mut failure) = LOG_WRITE_ERROR.lock() {
+                *failure = Some(err);
+            }
         }
     }
     if !cfg!(debug_assertions) && !is_error_event(event) {
@@ -634,6 +649,89 @@ pub(crate) fn log_session_sync_event(event: &str, details: Value) {
     }
 }
 
+fn runtime_log_view(event: &str, details: &Value) -> Option<Value> {
+    runtime_log::project(
+        event,
+        details,
+        event_level(event, details),
+        dev_log_message(event),
+    )
+}
+
+fn read_runtime_log_entries(path: &Path) -> Result<Vec<Value>, String> {
+    let _guard = ERROR_LOG_WRITE_LOCK
+        .lock()
+        .map_err(|_| "日志读取锁异常".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "日志路径无父目录".to_string())?;
+    let mut entries = VecDeque::new();
+    for file_path in [parent.join(ERROR_LOG_ROTATED_FILE_NAME), path.to_path_buf()] {
+        let file = match fs::File::open(&file_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("读取日志失败 {}: {error}", file_path.display())),
+        };
+        for (index, line) in BufReader::new(file).lines().enumerate() {
+            let line = line.map_err(|error| {
+                format!(
+                    "读取日志失败 {} 第 {} 行: {error}",
+                    file_path.display(),
+                    index + 1
+                )
+            })?;
+            let raw: Value = serde_json::from_str(&line).map_err(|error| {
+                format!(
+                    "日志格式错误 {} 第 {} 行: {error}",
+                    file_path.display(),
+                    index + 1
+                )
+            })?;
+            let event = raw.get("event").and_then(Value::as_str).ok_or_else(|| {
+                format!("日志缺少 event {} 第 {} 行", file_path.display(), index + 1)
+            })?;
+            let timestamp = raw
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "日志缺少 timestamp {} 第 {} 行",
+                        file_path.display(),
+                        index + 1
+                    )
+                })?;
+            if let Some(mut entry) = runtime_log_view(event, &raw["details"]) {
+                entry["id"] = json!(format!(
+                    "{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    index
+                ));
+                entry["timestamp"] = json!(timestamp);
+                entry["version"] = raw["version"].clone();
+                entries.push_back(entry);
+                if entries.len() > MAX_RUNTIME_LOG_ENTRIES {
+                    entries.pop_front();
+                }
+            }
+        }
+    }
+    Ok(entries.into_iter().rev().collect())
+}
+
+#[tauri::command]
+pub(crate) async fn get_runtime_log_entries() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let entries = read_runtime_log_entries(&error_log_path()?)?;
+        let write_error = LOG_WRITE_ERROR
+            .lock()
+            .map_err(|_| "日志状态锁异常".to_string())?
+            .clone();
+        Ok(json!({"entries": entries, "writeError": write_error}))
+    })
+    .await
+    .map_err(|error| format!("读取运行日志任务失败: {error}"))?
+}
+
 #[tauri::command]
 pub(crate) fn get_dev_log_entries() -> Value {
     let entries = dev_log_buffer()
@@ -647,6 +745,70 @@ pub(crate) fn get_dev_log_entries() -> Value {
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn runtime_log_reads_durable_success_warning_error_and_legacy_history_newest_first() {
+        let path = unique_temp_log_path("runtime-levels");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{\"timestamp\":\"2026-09-20T01:00:00Z\",\"event\":\"session_sync_error\",\"details\":{\"error\":\"legacy error\"}}\n").unwrap();
+        append_error_log(&path, "session_sync_finish", &json!({"updated": 3})).unwrap();
+        append_error_log(
+            &path,
+            "session_sync_preflight_finish",
+            &json!({"updated": 2, "rolloutFilesUpdated": 2}),
+        )
+        .unwrap();
+        append_error_log(&path, "codex_app_watcher_on_open_error", &json!({"retry": false,
+            "error": format!("{PROCESS_ELEVATION_WARNING} callerElevated=false, targetElevated=true")})).unwrap();
+        let entries = read_runtime_log_entries(&path).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0]["level"], "warn");
+        assert_eq!(entries[0]["title"], "自动处理已暂停");
+        assert_eq!(entries[1]["level"], "warn");
+        assert_eq!(entries[2]["level"], "success");
+        assert_eq!(entries[3]["level"], "error");
+        let disk = fs::read_to_string(&path).unwrap();
+        let preflight: Value = serde_json::from_str(disk.lines().nth(2).unwrap()).unwrap();
+        assert_eq!(preflight["level"], "warn");
+        println!("runtime log fixture: {}", path.display());
+    }
+
+    #[test]
+    fn runtime_log_reads_rotated_entries_and_limits_to_latest_500() {
+        let path = unique_temp_log_path("runtime-retention");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let rotated = path.parent().unwrap().join(ERROR_LOG_ROTATED_FILE_NAME);
+        let mut lines = String::new();
+        for i in 0..501 {
+            lines.push_str(&json!({"event": "session_sync_finish", "timestamp": "2026-09-20T01:00:00Z", "details": {"updated": i}}).to_string());
+            lines.push('\n');
+        }
+        fs::write(rotated, lines).unwrap();
+        append_error_log(&path, "session_sync_finish", &json!({"updated": 501})).unwrap();
+        let entries = read_runtime_log_entries(&path).unwrap();
+        assert_eq!(entries.len(), 500);
+        assert_eq!(entries[0]["fields"][0]["value"], 501);
+        assert_eq!(entries[499]["fields"][0]["value"], 2);
+    }
+
+    #[test]
+    fn runtime_log_io_and_parse_failures_are_not_reported_as_empty_success() {
+        let path = unique_temp_log_path("runtime-errors");
+        assert!(read_runtime_log_entries(&path).unwrap().is_empty());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "broken json\n").unwrap();
+        assert!(read_runtime_log_entries(&path)
+            .unwrap_err()
+            .contains("第 1 行"));
+        // A regular file used as the directory triggers a real write error, without permission assumptions.
+        let error = append_error_log(
+            &path.join("not-a-directory.jsonl"),
+            "session_sync_error",
+            &json!({"error": "test"}),
+        )
+        .unwrap_err();
+        assert!(error.contains("创建错误日志目录失败"));
+    }
 
     #[test]
     fn permission_warning_stays_warn_through_disk_and_watcher_error_chain() {

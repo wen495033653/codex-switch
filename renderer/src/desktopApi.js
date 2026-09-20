@@ -81,6 +81,7 @@ const COMMAND_BINDINGS = {
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
   getDevLogEntries: ['get_dev_log_entries'],
+  getRuntimeLogEntries: ['get_runtime_log_entries'],
   scanSessions: ['session_manager_scan', root => ({ root })],
   previewSession: ['session_manager_preview', payload => ({
     root: payload.root,

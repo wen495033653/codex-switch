@@ -29,6 +29,23 @@
 
 ## 验证记录
 
+### 运行日志入口（2026-09-20）
+
+- 设置页标签栏右侧增加正式版可用的“日志”按钮，弹窗按时间倒序展示最近 500 条，支持成功 / WARN / ERROR 筛选和手动刷新。默认只看时间、结果、原因和必要提示；技术字段折叠展示，不显示大段 JSON 或 taskkill 的 Base64 输出。
+- 复用唯一的现有 JSONL 与 5 MiB × 2 轮转：`logs/codex-switch-errors.jsonl`。保留历史文件名是为了继续读取已经落盘的错误；现在 Release 也持久化选定的成功和警告结果，不依赖 DEV 内存日志。旧错误记录没有 `level` 时按事件与原始依据分类，不迁移、不改写历史记录。
+- 权限不匹配沿整条错误传播链均为 WARN：明确显示普通权限 SW / 管理员目标、未关闭主进程或子进程；watcher 的下一条 WARN 明确显示自动处理已暂停，不误报同步完成。其余真实失败仍为 ERROR。
+- 同步预检查按数据库、会话文件、工作区状态记录差异数量；有差异为 WARN，写明“数据尚未修改”。`session_sync_finish` 才显示实际同步完成。进程存活确认只写进程检查通过，不声称窗口或任务已就绪；`restarted=false` 不记成功。
+- 读取命令 `get_runtime_log_entries` 在后台线程读取当前和上一代日志；读取/解析失败返回明确错误，界面保留上次记录并显示错误；写入失败输出诊断并在日志窗口显示“部分日志未能保存”。不自动轮询、不自动重试、不引入配置开关。
+- 代码入口：`session_sync_diagnostics.rs` 管持久化和读取，`session_sync_diagnostics/runtime_log.rs` 管用户可读投影；前端 `useRuntimeLogs.js` 管请求，`RuntimeLogDialog.jsx` 管展示。
+
+#### 验证层级
+
+- 离线/故障注入：JSONL 真正写入并重新读取，覆盖三级日志、旧历史、轮转合并、500 条上限、错误行定位和真实 I/O 失败；前端覆盖正式版按钮、默认折叠、错误提示、较早响应不覆盖新请求、关闭后忽略在途结果且不重试。
+- 隔离真实运行：隐藏 Tauri 窗口 + 真实 WebView2 + 真实 `get_runtime_log_entries`，独立 USERPROFILE / APPDATA / WebView 数据，`CODEX_SWITCH_DEV_PREVIEW=1` 禁止 watcher。种入四条标记为 fixture 的历史记录，真实后端另写一条 SW 启动成功日志。16 项 DOM / IPC / 计算样式断言通过，包括按钮在右侧（x=903, y=80）、1024×720 下弹窗不溢出、明暗主题、三级筛选、展开字段、损坏临时日志后显示真实读取错误、恢复刷新及关闭重开读回。
+- 隔离验证证据：临时目录 `codex-switch-runtime-log-qa/result.json`、`stdout.log`、`stderr.log` 和沙盒 JSONL；没有操作正式 SW 或 Codex。正式 Codex / SW 主进程启动时间未变，正式日志修改时间仍为 10:28:47（UTC+8）。
+- 安装版尚未替换；完整 watcher 关闭 → 同步 → 再打开未在本轮触发，不把隔离日志 fixture 当成真实会话同步成功。回退方式仍为文末的 revert 对应 commit。
+- 完整本地检查：Rust 268 passed / 4 ignored，Clippy all-targets、fmt、前端 30 项测试及生产构建通过。
+
 ### 2026-09-20：关闭前权限预检查
 
 - 前提已证实：正式 SW 的进程 Token 为非 elevated，Codex 主进程为 elevated；旧日志中 taskkill 先结束部分子进程，之后因主进程拒绝访问而失败。
