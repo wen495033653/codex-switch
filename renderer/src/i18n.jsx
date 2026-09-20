@@ -6,21 +6,6 @@ const LANGUAGE_STORAGE_KEY = 'codex-switch.ui-language';
 const SUPPORTED_LANGUAGE_PREFERENCES = new Set(['zh-CN', 'en']);
 
 const EN_TRANSLATIONS = {
-  '日志': 'Logs',
-  'Codex 运行日志': 'Codex runtime logs',
-  '成功': 'Success',
-  '警告': 'Warning',
-  '错误': 'Error',
-  '是': 'Yes',
-  '否': 'No',
-  '日志级别': 'Log level',
-  '读取日志失败': 'Could not read logs',
-  '部分日志未能保存': 'Some logs could not be saved',
-  '此级别暂无日志': 'No logs at this level',
-  '详情': 'Details',
-  '事件': 'Event',
-  '最近 500 条，时间倒序。只记录运行结果，不展示调试噪声。': 'Latest 500 entries, newest first. Runtime results only, without debug noise.',
-  '日志保存在本机，重开 Codex Switch 后仍可查看。': 'Logs are stored locally and remain available after Codex Switch restarts.',
   '已选控制账号不存在，请重新选择': 'The selected control account no longer exists. Select another account.',
   '已配置': 'Configured',
   '未配置': 'Not configured',

@@ -7,7 +7,7 @@
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 第一次参与：环境、项目结构、提交前检查、PR |
 | [module-structure.md](development/module-structure.md) | 要新增或移动代码：模块分层与导入约定 |
 | [dev-preview.md](development/dev-preview.md) | 想运行开发版又不影响正式数据；大改之后做真实运行检查 |
-| [codex-restart.md](development/codex-restart.md) | 改 Codex 的结束、重启、接管、会话同步流程和运行日志 |
+| [codex-restart.md](development/codex-restart.md) | 改 Codex 的结束、重启、接管和会话同步流程 |
 | [codex-settings.md](development/codex-settings.md) | 改 Codex 页：代理、远程控制、模型指令、原生插件 |
 | [subscription-refresh.md](development/subscription-refresh.md) | 改订阅到期日、套餐、重置次数的数据来源 |
 | [integration-20260906.md](development/integration-20260906.md) | 2026-09-06 整合验收的一次性记录 |

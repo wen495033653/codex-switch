@@ -1,6 +1,4 @@
-import { useState } from 'react';
 import AccountSettingsTab from './settings/AccountSettingsTab';
-import RuntimeLogDialog from './settings/RuntimeLogDialog';
 import AboutSettingsTab from './settings/AboutSettingsTab';
 import GeneralSettingsTab from './settings/GeneralSettingsTab';
 import { SETTINGS_TABS } from './settings/options';
@@ -23,7 +21,6 @@ export default function SettingsPage({
     onOpenGptPool
 }) {
     const { t } = useI18n();
-    const [logsVisible, setLogsVisible] = useState(false);
     const activeSettingsTab = SETTINGS_TABS.some(tab => tab.key === settingsTab)
         ? settingsTab
         : 'general';
@@ -44,13 +41,6 @@ export default function SettingsPage({
                             </button>
                         ))}
                     </div>
-                    <button type="button" className="btn btn-secondary settings-log-button" onClick={() => setLogsVisible(true)}>
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-                            <rect x="5" y="3" width="14" height="18" rx="2" />
-                            <path d="M9 8h6M9 12h6M9 16h4" />
-                        </svg>
-                        {t('日志')}
-                    </button>
                 </div>
 
                 <div className="settings-modal settings-page-content">
@@ -84,7 +74,6 @@ export default function SettingsPage({
                     )}
                 </div>
             </div>
-            {logsVisible && <RuntimeLogDialog onClose={() => setLogsVisible(false)} />}
         </div>
     );
 }
