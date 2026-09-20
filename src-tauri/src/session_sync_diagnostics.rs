@@ -580,13 +580,7 @@ pub(crate) fn init_session_sync_diagnostics(app: AppHandle) {
 
 pub(crate) fn log_session_sync_event(event: &str, details: Value) {
     // Unit tests exercise error paths; they must not write into the user's real data directory.
-    // TODO(verify): the disk write is unit-tested through append_error_log only; this call site has
-    // not run in a built app yet, because starting a second Codex Switch takes over the user's
-    // running Codex. Trigger: the first `*_error` event after installing a build with this change.
-    // Check `<app data dir>/logs/codex-switch-errors.jsonl`: one JSON line per error carrying
-    // timestamp, version, pid, event and the full details. Pass: the line exists and its details
-    // match the dev-log entry. Fail: look for the eprintln below in the app's stderr, then at
-    // error_log_path() / directory permissions. Remove this TODO once a real line is confirmed.
+    // Production disk logging was confirmed on 2026-09-20; see docs/development/codex-restart.md.
     #[cfg(not(test))]
     if is_error_event(event) {
         if let Err(err) = error_log_path().and_then(|path| append_error_log(&path, event, &details))
@@ -681,6 +675,26 @@ mod tests {
         assert!(!first["timestamp"].as_str().unwrap().is_empty());
         let second: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["event"], "session_sync_error");
+    }
+
+    #[test]
+    fn watcher_failure_log_persists_no_retry_and_process_context() {
+        let path = unique_temp_log_path("watcher-no-retry");
+        let details = json!({
+            "error": "taskkill /F /T /PID 42: exitCode=128; access denied",
+            "retry": false,
+            "disabledUntil": "codex_switch_restart",
+            "processes": [{"pid": 42, "parentPid": 1, "startedAt": 100, "executablePath": "Codex/ChatGPT.exe"}]
+        });
+        append_error_log(&path, "codex_app_watcher_on_open_error", &details).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        let entry: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(entry["event"], "codex_app_watcher_on_open_error");
+        assert_eq!(entry["details"], details);
+        assert_eq!(entry["pid"], std::process::id());
+        assert!(!entry["timestamp"].as_str().unwrap().is_empty());
+        println!("watcher failure log verified: {}", path.display());
     }
 
     #[test]

@@ -224,25 +224,34 @@ where
     }
 
     log_session_sync_event("codex_app_watcher_started", json!({}));
-    thread::spawn(move || loop {
-        let result = catch_unwind(AssertUnwindSafe(|| watch_codex_app(&on_open)));
-        let panic = result
-            .err()
-            .map(panic_payload_message)
-            .unwrap_or_else(|| "Watcher 意外退出".to_string());
-        eprintln!("Codex watcher 已停止，准备自动恢复: {panic}");
-        log_session_sync_event(
-            "codex_app_watcher_panic_error",
-            json!({
-                "error": panic,
-                "restartDelayMs": WATCHER_RESTART_DELAY_MS
-            }),
-        );
-        thread::sleep(StdDuration::from_millis(WATCHER_RESTART_DELAY_MS));
+    thread::spawn(move || {
+        // Keep the failure latch across watcher recovery; only restarting Switch resets it.
+        let mut automatic_open_disabled = false;
+        loop {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                watch_codex_app(&on_open, &mut automatic_open_disabled)
+            }));
+            automatic_open_disabled = true;
+            let panic = result
+                .err()
+                .map(panic_payload_message)
+                .unwrap_or_else(|| "Watcher 意外退出".to_string());
+            eprintln!("Codex watcher 已停止，准备自动恢复: {panic}");
+            log_session_sync_event(
+                "codex_app_watcher_panic_error",
+                json!({
+                    "error": panic,
+                    "retry": false,
+                    "disabledUntil": "codex_switch_restart",
+                    "restartDelayMs": WATCHER_RESTART_DELAY_MS
+                }),
+            );
+            thread::sleep(StdDuration::from_millis(WATCHER_RESTART_DELAY_MS));
+        }
     });
 }
 
-fn watch_codex_app<F>(on_open: &F)
+fn watch_codex_app<F>(on_open: &F, automatic_open_disabled: &mut bool)
 where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String>,
 {
@@ -277,6 +286,11 @@ where
             }
         };
         update_current_codex_app_processes(processes.clone(), None);
+
+        if *automatic_open_disabled {
+            sleep_interval();
+            continue;
+        }
 
         if processes.is_empty() {
             reset_candidate(&mut candidate_signature, &mut candidate_since);
@@ -436,8 +450,8 @@ where
                 "processes": codex_processes_log_value(&processes)
             }),
         );
-        match catch_unwind(AssertUnwindSafe(|| on_open(&processes))) {
-            Ok(Ok(outcome)) if outcome.relaunch_expected => {
+        match run_automatic_open_handler(on_open, &processes, automatic_open_disabled) {
+            Some(outcome) if outcome.relaunch_expected => {
                 open_signature = Some(signature.clone());
                 last_open_handler_at = Instant::now();
                 log_session_sync_event(
@@ -451,7 +465,7 @@ where
                 pending_relaunch_until =
                     Some(Instant::now() + StdDuration::from_millis(PENDING_RELAUNCH_TTL_MS));
             }
-            Ok(Ok(_)) => {
+            Some(_) => {
                 open_signature = Some(signature.clone());
                 last_open_handler_at = Instant::now();
                 log_session_sync_event(
@@ -459,34 +473,45 @@ where
                     json!({ "relaunchExpected": false }),
                 );
             }
-            Ok(Err(err)) => {
-                last_open_handler_at = Instant::now();
-                eprintln!("Codex 打开后处理失败，将自动重试: {err}");
-                log_session_sync_event(
-                    "codex_app_watcher_on_open_error",
-                    json!({
-                        "error": err,
-                        "retry": true
-                    }),
-                );
-            }
-            Err(payload) => {
-                last_open_handler_at = Instant::now();
-                let error = panic_payload_message(payload);
-                eprintln!("Codex 打开后处理异常，将自动重试: {error}");
-                log_session_sync_event(
-                    "codex_app_watcher_on_open_panic_error",
-                    json!({
-                        "error": error,
-                        "retry": true
-                    }),
-                );
-            }
+            None => {}
         }
         reset_candidate(&mut candidate_signature, &mut candidate_since);
 
         sleep_interval();
     }
+}
+
+fn run_automatic_open_handler<F>(
+    on_open: &F,
+    processes: &[CodexProcess],
+    disabled: &mut bool,
+) -> Option<CodexAppOpenOutcome>
+where
+    F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String>,
+{
+    if *disabled {
+        return None;
+    }
+    let (event, error) = match catch_unwind(AssertUnwindSafe(|| on_open(processes))) {
+        Ok(Ok(outcome)) => return Some(outcome),
+        Ok(Err(error)) => ("codex_app_watcher_on_open_error", error),
+        Err(payload) => (
+            "codex_app_watcher_on_open_panic_error",
+            panic_payload_message(payload),
+        ),
+    };
+    *disabled = true;
+    eprintln!("Codex 自动处理失败，本次 Switch 运行期间不再自动重启 Codex: {error}");
+    log_session_sync_event(
+        event,
+        json!({
+            "error": error,
+            "retry": false,
+            "disabledUntil": "codex_switch_restart",
+            "processes": codex_processes_log_value(processes)
+        }),
+    );
+    None
 }
 
 pub(super) fn codex_processes_log_value(processes: &[CodexProcess]) -> Value {
@@ -748,6 +773,100 @@ fn process_command_line(process: &sysinfo::Process) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    fn watcher_test_process(pid: u64) -> CodexProcess {
+        CodexProcess {
+            pid,
+            parent_pid: 0,
+            started_at: 100,
+            executable_path: "Codex/ChatGPT.exe".to_string(),
+            command_line: String::new(),
+        }
+    }
+
+    #[test]
+    fn automatic_open_error_disables_all_later_attempts_and_logs() {
+        let calls = Cell::new(0);
+        let on_open = |_: &[CodexProcess]| {
+            calls.set(calls.get() + 1);
+            Err("test watcher termination failed: exitCode=128; access denied".to_string())
+        };
+        let mut disabled = false;
+        for pid in [42, 42, 43] {
+            assert!(run_automatic_open_handler(
+                &on_open,
+                &[watcher_test_process(pid)],
+                &mut disabled,
+            )
+            .is_none());
+        }
+        assert!(disabled);
+        assert_eq!(calls.get(), 1);
+        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entry = logs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| {
+                entry["details"]["details"]["错误"]
+                    == "test watcher termination failed: exitCode=128; access denied"
+            })
+            .unwrap();
+        assert_eq!(entry["details"]["event"], "codex_app_watcher_on_open_error");
+        assert_eq!(entry["details"]["details"]["将重试"], false);
+    }
+
+    #[test]
+    fn automatic_open_panic_disables_later_attempts() {
+        let calls = Cell::new(0);
+        let on_open = |_: &[CodexProcess]| -> Result<CodexAppOpenOutcome, String> {
+            calls.set(calls.get() + 1);
+            panic!("test watcher handler panic");
+        };
+        let mut disabled = false;
+        for _ in 0..2 {
+            assert!(run_automatic_open_handler(&on_open, &[], &mut disabled).is_none());
+        }
+        assert!(disabled);
+        assert_eq!(calls.get(), 1);
+        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entry = logs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["details"]["details"]["错误"] == "test watcher handler panic")
+            .unwrap();
+        assert_eq!(
+            entry["details"]["event"],
+            "codex_app_watcher_on_open_panic_error"
+        );
+        assert_eq!(entry["details"]["details"]["将重试"], false);
+    }
+
+    #[test]
+    fn successful_automatic_open_keeps_watcher_enabled() {
+        let calls = Cell::new(0);
+        let on_open = |_: &[CodexProcess]| {
+            calls.set(calls.get() + 1);
+            Ok(CodexAppOpenOutcome {
+                relaunch_expected: calls.get() == 2,
+            })
+        };
+        let mut disabled = false;
+        assert!(
+            !run_automatic_open_handler(&on_open, &[], &mut disabled)
+                .unwrap()
+                .relaunch_expected
+        );
+        assert!(
+            run_automatic_open_handler(&on_open, &[], &mut disabled)
+                .unwrap()
+                .relaunch_expected
+        );
+        assert!(!disabled);
+        assert_eq!(calls.get(), 2);
+    }
 
     #[test]
     fn codex_executable_keys_normalize_and_deduplicate_paths() {

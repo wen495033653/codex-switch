@@ -92,7 +92,7 @@ pub(crate) fn handle_codex_app_open(
         "codex_app_open_handler",
         actions.session_sync_enabled,
         None,
-    );
+    )?;
     sync_remote_control_runtime_for_open_if_pending("codex_app_open_handler");
 
     let status = CodexAppOpenStatus {
@@ -183,7 +183,11 @@ fn codex_cdp_launch_hooks_for_watch_open(actions: CodexAppOpenActions) -> CodexC
     }
 }
 
-fn session_sync_pending_for_relaunch(trigger: &str, enabled: bool, command: Option<&str>) -> bool {
+fn session_sync_pending_for_relaunch(
+    trigger: &str,
+    enabled: bool,
+    command: Option<&str>,
+) -> Result<bool, String> {
     if !enabled {
         let event = if command.is_some() {
             "codex_app_restart_command_session_sync_skip"
@@ -196,7 +200,7 @@ fn session_sync_pending_for_relaunch(trigger: &str, enabled: bool, command: Opti
             json!({ "reason": "setting_disabled" })
         };
         log_session_sync_event(event, details);
-        return false;
+        return Ok(false);
     }
 
     match preview_codex_sessions_to_current_mode_now_from(trigger) {
@@ -219,7 +223,7 @@ fn session_sync_pending_for_relaunch(trigger: &str, enabled: bool, command: Opti
                 })
             };
             log_session_sync_event(event, details);
-            true
+            Ok(true)
         }
         Ok(updated) => {
             let event = if command.is_some() {
@@ -240,7 +244,7 @@ fn session_sync_pending_for_relaunch(trigger: &str, enabled: bool, command: Opti
                 })
             };
             log_session_sync_event(event, details);
-            false
+            Ok(false)
         }
         Err(err) => {
             let event = if command.is_some() {
@@ -260,7 +264,7 @@ fn session_sync_pending_for_relaunch(trigger: &str, enabled: bool, command: Opti
                 })
             };
             log_session_sync_event(event, details);
-            true
+            Err(err)
         }
     }
 }
@@ -386,7 +390,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
 
     let actions = codex_app_open_actions()?;
     let session_sync_pending =
-        session_sync_pending_for_relaunch(command, actions.session_sync_enabled, Some(command));
+        session_sync_pending_for_relaunch(command, actions.session_sync_enabled, Some(command))?;
     let remote_control_runtime_pending =
         remote_control_runtime_pending_for_relaunch(command, Some(command));
     let restarted = relaunch_running_codex_processes(
@@ -544,9 +548,11 @@ fn relaunch_running_codex_processes(
 
     apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;
 
-    if post_exit_session_sync {
-        sync_codex_sessions_after_process_exit(origin);
-    }
+    let session_sync_result = if post_exit_session_sync {
+        sync_codex_sessions_after_process_exit(origin)
+    } else {
+        Ok(())
+    };
 
     thread::sleep(StdDuration::from_millis(RELAUNCH_DELAY_MS));
 
@@ -592,6 +598,8 @@ fn relaunch_running_codex_processes(
         }
         return Err(format!("未能重新打开 Codex，可执行路径: {executables:?}"));
     }
+    // Reopen the already-closed app once, but report sync failure so the watcher stops retrying.
+    session_sync_result?;
     log_session_sync_event(
         "codex_app_relaunch_processes_finish",
         json!({
@@ -676,7 +684,7 @@ fn sync_remote_control_runtime_for_post_exit(context: &str) -> Value {
     }
 }
 
-fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) {
+fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) -> Result<(), String> {
     let trigger = match origin {
         CodexRelaunchOrigin::Watcher => "codex_app_relaunch_after_exit_watcher",
         CodexRelaunchOrigin::AppCommand => "codex_app_relaunch_after_exit_app_command",
@@ -688,7 +696,8 @@ fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) {
             "trigger": trigger
         }),
     );
-    match sync_codex_sessions_to_current_mode_now_from(trigger) {
+    let result = sync_codex_sessions_to_current_mode_now_from(trigger);
+    match &result {
         Ok(updated) => log_session_sync_event(
             "codex_app_relaunch_processes_post_exit_session_sync_finish",
             json!({
@@ -706,6 +715,7 @@ fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) {
             }),
         ),
     }
+    result.map(|_| ())
 }
 
 fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Result<bool, String> {

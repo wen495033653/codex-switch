@@ -8,6 +8,8 @@
 - 失败时返回 PID、退出状态、单独的 `exitCode`、`elapsedMs`、两路输出和清理结果，非 UTF-8 输出用 `rawBase64` 保留原字节。所有调用方都向上传递 `Result`，不忽略错误。
 - 普通模式启动后，确认同一个子进程句柄持续存活 1500ms；提前退出（包括 `exitCode=0`）按失败返回，不重试、不伪装成功。这只证明进程存活，不代表窗口或业务就绪。CDP 模式用实际的 CDP 注入来确认。
 - 相关日志事件：`codex_app_process_kill_error` / `_finish`、`codex_app_process_kill_tree_exited`、`codex_app_launch_confirmation_error` / `_finish`、`codex_app_restart_command_error`、`codex_app_watcher_on_open_error`。`*_error` 事件从 v5.4.12 起会写入数据目录下的 `logs/codex-switch-errors.jsonl`。
+- 自动处理失败后，本次 Codex Switch 运行期间不再调用自动打开处理，即使 Codex PID 改变、周期检查到期或 watcher 线程恢复也不重试；继续更新进程状态，手动“重启 Codex”不受此标记限制。停用标记只在重启 Codex Switch 后重置。
+- 同步预检查失败直接返回错误，不结束 Codex；若 Codex 已关闭后同步失败，仍完成这一次重新打开，再返回同步错误，禁止 watcher 将它当成成功而再次重启。
 
 ## 结束进程树：只看“是否全部退出”（2026-09-17）
 
@@ -25,6 +27,14 @@
 - watcher 识别根进程和上面的调用共用 `root_pids`。
 
 ## 验证记录
+
+### 2026-09-20：自动处理失败后停止重试
+
+- 现场：v6.0.1 在 09:16:44 和 09:17:59（UTC+8）两次记录 `codex_app_process_kill_error` 和 `codex_app_watcher_on_open_error`。`taskkill` 部分子进程成功，主进程仍因“拒绝访问”存活；旧 watcher 记录 `retry=true` 后继续尝试，导致界面子进程反复重载。错误日志的正式版落盘路径已由这四条记录证实，不再保留该落盘能力的待验证项。
+- 实现：只增加一个运行期停用标记，不新增配置、持久化状态或重试机制。普通错误及可捕获 panic 均写现有错误日志，记录完整错误、目标进程、`retry=false`、`disabledUntil=codex_switch_restart`。
+- 定向验证：`cargo test automatic_open -- --nocapture` 3 项通过，覆盖首次失败后重复调用及新 PID 均不再执行、panic 后不再执行、正常结果仍保留原行为；`cargo test watcher_failure_log_persists_no_retry_and_process_context -- --nocapture` 通过，在临时目录真实写入并读回 JSONL，核对错误、进程字段、时间和 `retry=false`。
+- 完整本地检查：`cargo fmt --check`、`cargo test`（255 passed、3 ignored）、`cargo clippy --all-targets -- -D warnings`、`npm run check`（25 项前端测试和构建）全部通过。
+- 验证边界：上述为故障注入和日志文件写入验证，没有结束真实 Codex，也没有替换正式安装文件。
 
 ### 2026-09-06：重启调度
 
