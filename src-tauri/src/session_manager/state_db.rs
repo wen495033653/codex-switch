@@ -303,35 +303,8 @@ fn write_state_threads(
     connection
         .busy_timeout(Duration::from_millis(3000))
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
-    let Some(schema) = state_threads_schema(&connection)? else {
-        return Ok(0);
-    };
-    let available_columns = schema.keys().cloned().collect::<HashSet<_>>();
-    if !available_columns.contains("id") || !available_columns.contains("rollout_path") {
-        return Ok(0);
-    }
-    let unsupported_required_columns = schema
-        .values()
-        .filter(|column| {
-            column.not_null
-                && !column.primary_key
-                && column.default_value.is_none()
-                && !thread_metadata_supported_column(&column.name)
-        })
-        .map(|column| column.name.clone())
-        .collect::<Vec<_>>();
-    if !unsupported_required_columns.is_empty() {
-        return Ok(0);
-    }
-
-    let insert_columns = THREAD_METADATA_COLUMNS
-        .iter()
-        .filter(|column| available_columns.contains(**column))
-        .copied()
-        .collect::<Vec<_>>();
-    if !insert_columns.contains(&"id") || !insert_columns.contains(&"rollout_path") {
-        return Ok(0);
-    }
+    let schema = state_threads_schema(&connection)?;
+    let insert_columns = state_threads_write_columns(schema.as_ref(), &state_db)?;
     let placeholders = (1..=insert_columns.len())
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
@@ -403,6 +376,55 @@ fn write_state_threads(
 
 fn thread_metadata_supported_column(column: &str) -> bool {
     THREAD_METADATA_COLUMNS.contains(&column)
+}
+
+/// Columns `write_state_threads` can fill for this `threads` schema. A schema we cannot write
+/// completely is an error naming the columns, never a silent zero-row success: callers keep the
+/// trash record or skip the migration marker when nothing was written.
+pub(super) fn state_threads_write_columns(
+    schema: Option<&HashMap<String, StateThreadColumn>>,
+    state_db: &Path,
+) -> Result<Vec<&'static str>, String> {
+    let Some(schema) = schema else {
+        return Err(format!(
+            "Codex state 数据库缺少 threads 表，无法写入会话索引: {}",
+            state_db.display()
+        ));
+    };
+    let missing_key_columns = ["id", "rollout_path"]
+        .into_iter()
+        .filter(|column| !schema.contains_key(*column))
+        .collect::<Vec<_>>();
+    if !missing_key_columns.is_empty() {
+        return Err(format!(
+            "Codex state 数据库 threads 表缺少必需列 [{}]，无法写入会话索引: {}",
+            missing_key_columns.join(", "),
+            state_db.display()
+        ));
+    }
+    let mut unsupported_required_columns = schema
+        .values()
+        .filter(|column| {
+            column.not_null
+                && !column.primary_key
+                && column.default_value.is_none()
+                && !thread_metadata_supported_column(&column.name)
+        })
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    if !unsupported_required_columns.is_empty() {
+        unsupported_required_columns.sort();
+        return Err(format!(
+            "Codex state 数据库 threads 表存在无法填充的必填列 [{}]（NOT NULL 且无默认值），无法写入会话索引: {}",
+            unsupported_required_columns.join(", "),
+            state_db.display()
+        ));
+    }
+    Ok(THREAD_METADATA_COLUMNS
+        .iter()
+        .filter(|column| schema.contains_key(**column))
+        .copied()
+        .collect())
 }
 
 fn thread_metadata_sql_value(item: &ThreadMetadata, column: &str) -> rusqlite::types::Value {

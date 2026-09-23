@@ -19,7 +19,9 @@ use super::{
     },
     util::{backup_stamp, sha256_file, unique_sibling_path},
 };
+use crate::session_sync_diagnostics::log_session_sync_event;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::HashSet,
     fs,
@@ -633,6 +635,16 @@ pub(super) fn restore_deleted_candidate(
                 &mut message,
                 &candidate.target_path,
                 overwrite_backup.as_deref(),
+            );
+            log_session_sync_event(
+                "session_manager_restore_state_db_error",
+                json!({
+                    "deleteId": candidate.record.delete_id,
+                    "root": candidate.root.to_string_lossy().to_string(),
+                    "target": candidate.target_path.to_string_lossy().to_string(),
+                    "trashRetained": candidate.record_dir.exists(),
+                    "error": message
+                }),
             );
             return Err(message);
         }

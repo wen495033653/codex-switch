@@ -8,8 +8,8 @@ use super::{
     state_db::{
         backup_state_database_with_reason, insert_missing_state_threads, quote_sqlite_identifier,
         state_database_has_current_migrations, state_threads_schema, state_threads_schema_for,
-        thread_metadata_from_manifest, validate_state_database, validate_state_database_connection,
-        StateThreadColumn, CURRENT_STATE_REQUIRED_COLUMNS,
+        state_threads_write_columns, thread_metadata_from_manifest, validate_state_database,
+        validate_state_database_connection, StateThreadColumn, CURRENT_STATE_REQUIRED_COLUMNS,
     },
     util::{hex_bytes, system_time_to_rfc3339, truncate_text},
 };
@@ -44,7 +44,14 @@ pub(crate) fn migrate_legacy_codex_data_for_current_home() -> Result<Value, Stri
 
 pub(crate) fn migrate_legacy_codex_data_for_root(root: &Path) -> Result<Value, String> {
     let marker = codex_desktop_migration_marker_path(root)?;
-    if let Some(report) = read_completed_codex_desktop_migration(&marker)? {
+    migrate_legacy_codex_data_with_marker(root, &marker)
+}
+
+pub(super) fn migrate_legacy_codex_data_with_marker(
+    root: &Path,
+    marker: &Path,
+) -> Result<Value, String> {
+    if let Some(report) = read_completed_codex_desktop_migration(marker)? {
         return Ok(report);
     }
 
@@ -67,7 +74,7 @@ pub(crate) fn migrate_legacy_codex_data_for_root(root: &Path) -> Result<Value, S
     }
 
     let _io_guard = lock_codex_session_io("迁移旧版 Codex 数据")?;
-    if let Some(report) = read_completed_codex_desktop_migration(&marker)? {
+    if let Some(report) = read_completed_codex_desktop_migration(marker)? {
         return Ok(report);
     }
     let mut current_connection = Connection::open_with_flags(
@@ -113,10 +120,14 @@ pub(crate) fn migrate_legacy_codex_data_for_root(root: &Path) -> Result<Value, S
             "target": current_state_db.to_string_lossy(),
             "completedAt": now_string()
         });
-        write_codex_desktop_migration_marker(&marker, &report)?;
+        write_codex_desktop_migration_marker(marker, &report)?;
         return Ok(report);
     }
 
+    // Rollout rows are written after the backup and the legacy merge. A threads schema they cannot
+    // be written into fails here: before a backup is taken on every retry, and without a
+    // completed marker that would hide the unindexed rollouts for good.
+    state_threads_write_columns(Some(&current_schema), &current_state_db)?;
     let backup_path =
         backup_state_database_with_reason(&current_connection, "desktop-final-v2-migration")?;
     let inserted =
@@ -146,7 +157,7 @@ pub(crate) fn migrate_legacy_codex_data_for_root(root: &Path) -> Result<Value, S
         "rolloutErrors": rollout_errors,
         "completedAt": now_string()
     });
-    write_codex_desktop_migration_marker(&marker, &report)?;
+    write_codex_desktop_migration_marker(marker, &report)?;
     Ok(report)
 }
 

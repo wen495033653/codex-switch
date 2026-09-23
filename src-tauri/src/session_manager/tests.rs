@@ -1,6 +1,6 @@
 use super::{
-    catalog::*, codex_home::*, legacy_migration::*, model::*, preview::*, rollout::*, state_db::*,
-    status::*, trash::*, trash_store::*, util::*, zip::*,
+    backup::session_manager_data_dir, catalog::*, codex_home::*, legacy_migration::*, model::*,
+    preview::*, rollout::*, state_db::*, status::*, trash::*, trash_store::*, util::*, zip::*,
 };
 use crate::codex_app_server::CodexDesktopThread;
 use rusqlite::{params, Connection};
@@ -1192,38 +1192,53 @@ fn insert_missing_state_threads_never_overwrites_current_rows_or_relationships()
 }
 
 #[test]
-fn upsert_state_threads_skips_unsupported_required_schema() {
-    let root = temp_path("upsert-required-schema");
-    fs::create_dir_all(&root).unwrap();
-    let state_db = root.join("state_5.sqlite");
-    let connection = Connection::open(&state_db).unwrap();
-    connection
-        .execute_batch(
-            r#"
-                CREATE TABLE threads (
-                    id TEXT PRIMARY KEY,
-                    rollout_path TEXT,
-                    unsupported TEXT NOT NULL
-                );
-                "#,
-        )
-        .unwrap();
-    drop(connection);
+fn upsert_state_threads_rejects_schemas_it_cannot_write() {
+    for (name, schema, expected) in [
+        (
+            "unsupported-required",
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, unsupported TEXT NOT NULL);",
+            "[unsupported]",
+        ),
+        (
+            "missing-rollout-path",
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT);",
+            "[rollout_path]",
+        ),
+        (
+            "missing-threads",
+            "CREATE TABLE other (id TEXT PRIMARY KEY);",
+            "缺少 threads 表",
+        ),
+    ] {
+        let root = temp_path(&format!("upsert-schema-{name}"));
+        fs::create_dir_all(&root).unwrap();
+        let state_db = root.join("state_5.sqlite");
+        Connection::open(&state_db)
+            .unwrap()
+            .execute_batch(schema)
+            .unwrap();
 
-    let item = sample_thread_metadata(root.join("sessions/rollout-thread-1.jsonl"));
-    let updated = upsert_state_threads(&root, &[item]).unwrap();
-    let connection = Connection::open(&state_db).unwrap();
-    let count = connection
-        .query_row("SELECT COUNT(*) FROM threads", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .unwrap();
+        let item = sample_thread_metadata(root.join("sessions/rollout-thread-1.jsonl"));
+        let err = upsert_state_threads(&root, &[item]).unwrap_err();
+        let connection = Connection::open(&state_db).unwrap();
+        let has_threads: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'threads'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if has_threads == 1 {
+            let count: i64 = connection
+                .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "{name}");
+        }
+        drop(connection);
+        fs::remove_dir_all(&root).unwrap();
 
-    assert_eq!(updated, 0);
-    assert_eq!(count, 0);
-
-    drop(connection);
-    fs::remove_dir_all(&root).unwrap();
+        assert!(err.contains(expected), "{name}: {err}");
+    }
 }
 
 fn session_file_name(id: &str) -> String {
@@ -1475,6 +1490,100 @@ fn status_overwrite_removes_overwritten_rows_and_surfaces_global_state_failure()
     assert_eq!(tools, 0);
     assert_eq!(archived_bytes, active_bytes);
     assert_eq!(archived_files, 1, "overwrite backup must be removed");
+}
+
+#[test]
+fn restore_keeps_trash_when_state_schema_cannot_be_written() {
+    let base = temp_path("restore-unsupported-schema");
+    let root = base.join("codex");
+    let deleted_root = base.join("deleted-sessions");
+    let relative = PathBuf::from("sessions/2026/07/13/rollout-restore-schema.jsonl");
+    let source = write_test_session(
+        &root,
+        &relative,
+        "019f0000-0000-7000-8000-000000000011",
+        "schema",
+    );
+    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+    Connection::open(root.join("state_5.sqlite"))
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, unsupported TEXT NOT NULL);",
+        )
+        .unwrap();
+
+    let result = restore_deleted_sessions_locked(
+        &deleted_root,
+        vec![delete_id.clone()],
+        ConflictStrategy::Ask,
+    )
+    .unwrap();
+    let trash_kept = deleted_root.join(&delete_id).join("session.jsonl").exists();
+    let restored_exists = source.exists();
+    fs::remove_dir_all(&base).unwrap();
+
+    assert_eq!(result["report"]["restored"], 0, "{result}");
+    assert_eq!(result["report"]["failed"], 1);
+    assert!(result["report"]["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("[unsupported]"));
+    assert!(trash_kept);
+    assert!(!restored_exists);
+}
+
+#[test]
+fn legacy_migration_rejects_unwritable_schema_without_marker_or_backup() {
+    let root = temp_path("legacy-migration-unwritable");
+    let marker = root.join("markers").join("migration.json");
+    fs::create_dir_all(root.join("sqlite")).unwrap();
+    Connection::open(root.join("state_5.sqlite"))
+        .unwrap()
+        .execute_batch(
+            r#"
+            CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY, success INTEGER NOT NULL);
+            INSERT INTO _sqlx_migrations (version, success) VALUES (40, 1);
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                cwd TEXT NOT NULL DEFAULT '',
+                archived INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                updated_at_ms INTEGER NOT NULL DEFAULT 0,
+                preview TEXT NOT NULL DEFAULT '',
+                recency_at INTEGER NOT NULL DEFAULT 0,
+                recency_at_ms INTEGER NOT NULL DEFAULT 0,
+                history_mode TEXT NOT NULL DEFAULT 'legacy',
+                unsupported TEXT NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+    Connection::open(root.join("sqlite").join("state_5.sqlite"))
+        .unwrap()
+        .execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL);")
+        .unwrap();
+    write_test_session(
+        &root,
+        Path::new("sessions/2026/07/13/rollout-unindexed.jsonl"),
+        "019f0000-0000-7000-8000-000000000012",
+        "unindexed",
+    );
+    let backup_dir = session_manager_data_dir()
+        .unwrap()
+        .join("backups")
+        .join("desktop-final-v2-migration");
+    let backups_before = count_files(&backup_dir);
+
+    let err = migrate_legacy_codex_data_with_marker(&root, &marker).unwrap_err();
+    let marker_exists = marker.exists();
+    let backups_after = count_files(&backup_dir);
+    fs::remove_dir_all(&root).unwrap();
+
+    assert!(err.contains("[unsupported]"), "{err}");
+    assert!(!marker_exists);
+    assert_eq!(backups_after, backups_before);
 }
 
 #[test]
