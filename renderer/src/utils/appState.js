@@ -71,6 +71,7 @@ export const DEFAULT_CODEX_STATE = {
 
 export const REPOSITORY_URL = 'https://github.com/wen495033653/codex-switch';
 export const GPT_POOL_URL = 'https://gpt-pool.com';
+export const CODEX_DESKTOP_UPDATE_URL = 'https://learn.chatgpt.com/docs/whats-new#use-codex-in-the-chatgpt-desktop-app';
 
 export const getFallbackPageSize = (viewportHeight) => {
   if (viewportHeight < 660) return 4;

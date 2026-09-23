@@ -36,8 +36,8 @@ export function useIdeReopen({
         const res = await window.api.discardIdeSnapshot(snapshotId);
         if (res && res.store) setStore(requireStore(res));
         toast('账号已切换，稍后重新打开 Codex 或 VS Code 后生效');
-      } catch {
-        return;
+      } catch (err) {
+        toastError(err, '忽略重启提示失败', 7000);
       }
     }
   };

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { REPOSITORY_URL } from '../utils/appState';
+import { CODEX_DESKTOP_UPDATE_URL, REPOSITORY_URL } from '../utils/appState';
 import { getErrorMessage } from '../utils/errors';
 import { proxySaveFeedback } from '../utils/codexSettingsStatus';
 
@@ -38,8 +38,9 @@ export function useSettingsActions({
     try {
       const res = await window.api.getSettings();
       applySettings(res);
-    } catch (_err) {
+    } catch (err) {
       setSettingsDraft(settings);
+      toastError(err, '加载设置失败', 7000);
     }
     setViewMode('settings');
   };
@@ -238,6 +239,14 @@ export function useSettingsActions({
     }
   };
 
+  const openCodexDesktopUpdatePage = async () => {
+    try {
+      await window.api.openExternalUrl(CODEX_DESKTOP_UPDATE_URL);
+    } catch (err) {
+      toastError(err, '打开 ChatGPT 更新页面失败', 7000);
+    }
+  };
+
   const restartCodexAppForSettings = async () => {
     if (codexRestartNoticeLoading) return;
     setCodexRestartNoticeLoading(true);
@@ -267,6 +276,7 @@ export function useSettingsActions({
 
   return {
     openCodexConfigToml,
+    openCodexDesktopUpdatePage,
     openDataDir,
     openRepository,
     codexRestartNotice: {

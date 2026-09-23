@@ -4,8 +4,6 @@ import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils
 import { getAccountName, isAuthSessionInvalid, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 import { useI18n } from '../../i18n';
 
-const CODEX_DESKTOP_UPDATE_URL = 'https://learn.chatgpt.com/docs/whats-new#use-codex-in-the-chatgpt-desktop-app';
-
 function normalizePids(value) {
     if (!Array.isArray(value)) return [];
     return value
@@ -37,6 +35,7 @@ function remoteControlRawMessage(...items) {
 }
 
 export function CodexProcessCard({
+    onOpenCodexDesktopUpdate,
     restartingCodexApp,
     restartCurrentCodexAppNormal
 }) {
@@ -129,7 +128,7 @@ export function CodexProcessCard({
                     <button
                         type="button"
                         className="settings-codex-app-restart-button"
-                        onClick={() => window.api.openExternalUrl(CODEX_DESKTOP_UPDATE_URL)}
+                        onClick={onOpenCodexDesktopUpdate}
                     >
                         {t('更新 ChatGPT')}
                     </button>

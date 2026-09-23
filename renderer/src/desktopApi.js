@@ -12,13 +12,19 @@ function isTauriRuntime() {
 
 function subscribe(eventName, handler) {
   let disposed = false;
+  // Resolves to null when registration failed; that failure is logged here, once.
   const unlistenPromise = listen(eventName, event => {
     if (!disposed) handler(event.payload);
+  }).catch(err => {
+    console.error(`[desktopApi] listen "${eventName}" failed; this window will not receive the event`, err);
+    return null;
   });
 
   return () => {
     disposed = true;
-    unlistenPromise.then(unlisten => unlisten()).catch(() => {});
+    unlistenPromise
+      .then(unlisten => unlisten && unlisten())
+      .catch(err => console.error(`[desktopApi] unlisten "${eventName}" failed`, err));
   };
 }
 

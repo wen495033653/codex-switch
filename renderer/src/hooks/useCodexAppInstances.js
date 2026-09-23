@@ -4,6 +4,7 @@ import {
   markCodexAppInstanceRunning,
   normalizeCodexAppInstanceStatus
 } from '../utils/codexAppInstances';
+import { createPollingErrorLog } from '../utils/pollingErrorLog';
 
 const CODEX_APP_INSTANCE_REOPEN_ERRORS = [
   '独立 Codex 窗口未运行',
@@ -21,6 +22,7 @@ function shouldReopenCodexAppInstanceAfterShowError(err) {
 export function useCodexAppInstances({ toast, toastError }) {
   const [codexAppInstanceStatus, setCodexAppInstanceStatus] = useState(() => normalizeCodexAppInstanceStatus(null));
   const [openingCodexAppTarget, setOpeningCodexAppTarget] = useState('');
+  const [statusErrorLog] = useState(() => createPollingErrorLog('get_codex_app_instance_status'));
 
   const refreshCodexAppInstanceStatus = async ({ silent = true } = {}) => {
     if (!window.api || typeof window.api.getCodexAppInstanceStatus !== 'function') {
@@ -29,10 +31,12 @@ export function useCodexAppInstances({ toast, toastError }) {
     }
     try {
       const res = await window.api.getCodexAppInstanceStatus();
+      statusErrorLog.succeeded();
       setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(res));
       return res;
     } catch (err) {
-      if (!silent) toastError(err, '加载 Codex 多开状态失败', 7000);
+      if (silent) statusErrorLog.failed(err);
+      else toastError(err, '加载 Codex 多开状态失败', 7000);
       return null;
     }
   };

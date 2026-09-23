@@ -89,6 +89,7 @@ export function useUpdateFlow({
       }
     } catch (err) {
       if (manual) toastError(err, '检查更新失败');
+      else console.error('[check_update] automatic update check failed', err);
     } finally {
       setCheckingUpdate(false);
     }
@@ -112,8 +113,8 @@ export function useUpdateFlow({
     if (!remoteVersion) return;
     try {
       await window.api.dismissUpdateVersion(remoteVersion);
-    } catch {
-      return;
+    } catch (err) {
+      toastError(err, '忽略此版本失败', 7000);
     }
   };
 

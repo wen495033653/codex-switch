@@ -10,6 +10,7 @@ import {
   normalizeBackgroundRefreshInterval,
   OAUTH_TIMEOUT_HINT
 } from './utils/appState';
+import { createPollingErrorLog } from './utils/pollingErrorLog';
 import {
   useAddAccountFlow,
   useAccountOperations,
@@ -107,16 +108,21 @@ function MainApp() {
     visible: false,
     message: ''
   });
+  const [usageStatsErrorLog] = useState(() => createPollingErrorLog('usage_stats_get'));
   const refreshUsageStats = async ({ silent = false } = {}) => {
     if (!window.api || typeof window.api.getUsageStats !== 'function') return null;
     try {
       const res = await window.api.getUsageStats();
       if (res && res.ok === true) {
+        usageStatsErrorLog.succeeded();
         setUsageStats(res);
+      } else {
+        usageStatsErrorLog.failed(res);
       }
       return res;
     } catch (err) {
-      if (!silent) toastError(err, '加载 token 统计失败', 7000);
+      if (silent) usageStatsErrorLog.failed(err);
+      else toastError(err, '加载 token 统计失败', 7000);
       return null;
     }
   };
@@ -385,6 +391,7 @@ function MainApp() {
 
   const {
     openCodexConfigToml,
+    openCodexDesktopUpdatePage,
     openDataDir,
     openRepository,
     codexRestartNotice,
@@ -582,7 +589,8 @@ function MainApp() {
             updateCodexProxySettings,
             updateSettingsDraftAndSave,
             onCodexRemoteControlAutoDisabled: handleCodexRemoteControlAutoDisabled,
-            onOpenCodexConfigToml: openCodexConfigToml
+            onOpenCodexConfigToml: openCodexConfigToml,
+            onOpenCodexDesktopUpdate: openCodexDesktopUpdatePage
           }}
           apiModePageProps={{
             activeApiProfileId,

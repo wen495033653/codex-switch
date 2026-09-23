@@ -23,7 +23,7 @@ async function fixture(restartError) {
       if (!(index in values)) values[index] = initial;
       return [values[index], value => { values[index] = typeof value === 'function' ? value(values[index]) : value; }];
     } },
-    '../utils/appState': { REPOSITORY_URL: 'https://example.test' },
+    '../utils/appState': { CODEX_DESKTOP_UPDATE_URL: 'https://example.test/update', REPOSITORY_URL: 'https://example.test' },
     '../utils/errors': { getErrorMessage: error => error.message },
   };
   const module = new vm.SourceTextModule(fs.readFileSync(new URL('../renderer/src/hooks/useSettingsActions.js', import.meta.url), 'utf8'), { context });

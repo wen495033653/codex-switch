@@ -24,7 +24,7 @@ async function fixture(responses) {
       if (!(index in values)) values[index] = initial;
       return [values[index], value => { values[index] = typeof value === 'function' ? value(values[index]) : value; }];
     } },
-    '../utils/appState': { REPOSITORY_URL: 'https://example.test' },
+    '../utils/appState': { CODEX_DESKTOP_UPDATE_URL: 'https://example.test/update', REPOSITORY_URL: 'https://example.test' },
     '../utils/errors': { getErrorMessage: (error, defaultMessage) => error?.message || defaultMessage },
   };
   const source = fs.readFileSync(new URL('../renderer/src/hooks/useSettingsActions.js', import.meta.url), 'utf8');

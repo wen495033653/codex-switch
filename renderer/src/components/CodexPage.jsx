@@ -9,6 +9,7 @@ export default function CodexPage({
     maskAccountName,
     onCodexRemoteControlAutoDisabled,
     onOpenCodexConfigToml,
+    onOpenCodexDesktopUpdate,
     restartingCodexApp,
     restartCurrentCodexAppNormal,
     savingCodexProxyEnv,
@@ -48,6 +49,7 @@ export default function CodexPage({
 
                 <div className="settings-modal settings-page-content-split">
                     <CodexProcessCard
+                        onOpenCodexDesktopUpdate={onOpenCodexDesktopUpdate}
                         restartingCodexApp={restartingCodexApp}
                         restartCurrentCodexAppNormal={restartCurrentCodexAppNormal}
                     />

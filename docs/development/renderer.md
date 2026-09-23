@@ -46,3 +46,14 @@
 - 验证：
   - 渲染检查（替身后端）：本地存 `en`、设置加载失败。修改前界面是中文、本地值被改成 `zh-CN`；修改后界面是英文、本地值仍是 `en`。本地存 `en`、设置为 `zh-CN` 且延迟 6 秒返回：加载前英文且本地值不变，加载后中文且本地值变为 `zh-CN`。
   - TODO(verify)：真实应用启动还没看过。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时。通过判据：界面语言设为 English 后重启，首屏没有中文，`localStorage` 的 `codex-switch.ui-language` 保持 `en`。
+
+## 失败不再静默（2026-09-23）
+
+- 用户点出来的操作失败时弹提示：更新弹窗点“稍后”时记录跳过版本失败（`dismiss_update_version`）、重新打开提示点“稍后”时丢弃快照失败（`discard_ide_snapshot`）、进入设置页时读取设置失败（仍然进入设置页，显示上次的设置）、Codex 页“更新 ChatGPT”打开网页失败。
+- 后台请求失败写 `console.error`，开发版会进入开发日志窗口。启动时的自动检查更新失败记一条。每隔几秒的轮询（`get_codex_app_instance_status`、`usage_stats_get`）用 `utils/pollingErrorLog.js`：只记第一次失败、错误内容变化和恢复，都带连续失败次数，避免每次轮询一条挤掉开发日志（上限 160 条）里的其它内容。`usage_stats_get` 返回 `ok` 不为 `true` 时也按失败记录原始返回。
+- 事件监听注册失败时记一条错误，说明这个窗口收不到该事件；取消监听失败也记录。
+- “更新 ChatGPT”的打开逻辑从视图组件移到 `useSettingsActions`，由 `CodexPage` 通过 props 传入。
+- 验证：
+  - 离线：`scripts/test-background-errors.mjs`（事件注册失败只记一条、取消监听失败有记录；轮询失败按“首次、变化、恢复”记录）。
+  - 渲染检查（替身后端，替身把页面报成可见）：四个用户操作的失败都弹出后端原文；多开状态轮询失败 4 次只记 1 条 `[get_codex_app_instance_status] background request failed (consecutive failures: 1)`；token 统计和自动检查更新失败各记 1 条。
+  - TODO(verify)：真实应用里没有触发过这些失败。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时，检查脚本里对 `get_codex_app_instance_status` 返回一次错误。通过判据：开发日志窗口出现带 `consecutive failures` 的记录，恢复后出现 `recovered after`。
