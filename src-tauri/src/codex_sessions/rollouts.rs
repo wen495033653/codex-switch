@@ -541,6 +541,12 @@ pub(super) fn update_rollout_provider_line(
     if line.trim().is_empty() {
         return Ok(None);
     }
+    // A line can only change if some object in it has a `model_provider` key, or if it is a
+    // session_meta event (which gains the key). Neither is possible without these literals, so
+    // the other lines (almost all of a rollout) skip the JSON parse.
+    if !line.contains("\"model_provider\"") && !line.contains("\"session_meta\"") {
+        return Ok(None);
+    }
 
     let mut event: Value = match serde_json::from_str(line) {
         Ok(event) => event,

@@ -1078,6 +1078,76 @@ fn json_lines_without_model_provider_are_not_rewritten() {
     assert_eq!(updated, None);
 }
 
+/// The rewrite rule without the literal prefilter: parse every line.
+fn reference_provider_line_update(line: &str, target: &str) -> Option<String> {
+    fn replace(value: &mut Value, target: &str) -> bool {
+        match value {
+            Value::Object(map) => {
+                let mut changed = false;
+                if map.contains_key("model_provider")
+                    && map.get("model_provider").and_then(Value::as_str) != Some(target)
+                {
+                    map.insert("model_provider".to_string(), json!(target));
+                    changed = true;
+                }
+                for item in map.values_mut() {
+                    changed |= replace(item, target);
+                }
+                changed
+            }
+            Value::Array(items) => items
+                .iter_mut()
+                .fold(false, |changed, item| replace(item, target) | changed),
+            _ => false,
+        }
+    }
+    if line.trim().is_empty() {
+        return None;
+    }
+    let mut event: Value = serde_json::from_str(line).ok()?;
+    let mut changed = replace(&mut event, target);
+    if event.get("type").and_then(Value::as_str) == Some("session_meta") {
+        if let Some(payload) = event.get_mut("payload").and_then(Value::as_object_mut) {
+            if !payload.contains_key("model_provider") {
+                payload.insert("model_provider".to_string(), json!(target));
+                changed = true;
+            }
+        }
+    }
+    changed.then(|| serde_json::to_string(&event).unwrap())
+}
+
+#[test]
+fn provider_line_prefilter_matches_full_parse() {
+    let lines = [
+        r#"{"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}"#,
+        r#"{"type":"session_meta","payload":{"id":"s","model_provider":"api"}}"#,
+        r#"{"type":"session_meta","payload":{"id":"s"}}"#,
+        r#"{"type":"session_meta","payload":"not an object"}"#,
+        r#"{"type":"session_meta"}"#,
+        r#"{"type":"turn_context","payload":{"model":"gpt","model_provider":"openai"}}"#,
+        r#"{"type":"response_item","payload":{"items":[{"model_provider":"openai"},{"x":1}]}}"#,
+        r#"{"type":"response_item","payload":{"model_provider":null}}"#,
+        r#"{"type":"event_msg","payload":{"type":"agent_message","message":"hello"}}"#,
+        r#"{"type":"event_msg","payload":{"message":"set \"model_provider\" to openai"}}"#,
+        r#"{"type":"event_msg","payload":{"message":"mentions session_meta"}}"#,
+        r#"["model_provider","session_meta"]"#,
+        r#"{"type":"session_meta","payload":{"id":"s"}"#,
+        "not json at all",
+        "   ",
+        "",
+    ];
+    for line in lines {
+        for target in ["api", "openai"] {
+            assert_eq!(
+                update_rollout_provider_line(line, target).unwrap(),
+                reference_provider_line_update(line, target),
+                "{target}: {line}"
+            );
+        }
+    }
+}
+
 #[test]
 fn malformed_json_lines_are_ignored() {
     let updated = update_rollout_provider_line("{", "api").unwrap();
