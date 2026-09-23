@@ -37,6 +37,13 @@
 - 保留 `relaunch_running_codex_processes` 结束进程树后的 `wait_for_pids_exit(&pids, 12_000)`：`kill_process_tree` 在根进程已经退出时直接返回 `Ok(false)`，不结束也不等待它的后代，这时外层等待是唯一覆盖 watcher 列表里其余 PID 的检查。正常情况下它第一次检查就返回。
 - IDE 快照 `capture_open_ide_snapshot` 本来就只刷新 cmd 和 exe，没有用 `new_all`。试过先按名称筛候选再读 cmd/exe，本机 380 个进程下 235ms 对 236–385ms，开销主要在逐进程打开句柄取启动时间，收益不明显，没有提交。
 
+## 代码整理（2026-09-23）
+
+- 启动函数只在“已启动”和“出错”两种结果间返回，以前的 `Result<bool>` 从不返回 `Ok(false)`，改为 `Result<()>`，删掉 `Ok(false)` 分支和只做转调的 `launch_executable_with_options`、`relaunch_executable`。`relaunch_codex_executable_for_current_settings` 在可执行文件不存在时仍返回 `Ok(false)`，保留 `bool`。
+- 重启 Codex 的循环里每个可执行文件要么启动成功要么带错误返回，调用方已拒绝空列表，原来的“一个都没重新打开”错误分支不可达，删除。
+- 重开编辑器时非 Codex 的程序（VS Code）启动失败后等 300ms 重试一次；以前第二次失败后又多睡 300ms 才返回，且只返回最后一次错误。现在不多等，错误写成“第 1 次: …；第 2 次: …”。
+- 验证：`relaunch_retry_waits_once_and_returns_both_failures`（不存在的可执行文件，耗时 300–600ms，两次错误都在）；`process_control::tests` 真实子进程用例和完整 `cargo test`、fmt、Clippy all-targets 通过。没有真实重启 Codex 或 VS Code。
+
 ## 验证记录
 
 ### 2026-09-23：watcher 候选确认

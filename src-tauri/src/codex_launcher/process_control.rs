@@ -315,14 +315,6 @@ pub(crate) fn wait_for_pids_exit(pids: &[u64], timeout_ms: u64) -> Vec<u64> {
     alive
 }
 
-pub(crate) fn launch_executable_with_options(
-    executable_path: &str,
-    args: &[String],
-    envs: &[(String, String)],
-) -> Result<bool, String> {
-    spawn_executable(executable_path, args, envs).map(|_| true)
-}
-
 fn spawn_executable(
     executable_path: &str,
     args: &[String],
@@ -359,7 +351,7 @@ pub(crate) fn launch_codex_process_with_options(
     executable_path: &str,
     args: &[String],
     envs: &[(String, String)],
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let started = Instant::now();
     let mut child = spawn_executable(executable_path, args, envs)?;
     let pid = child.id();
@@ -373,9 +365,7 @@ pub(crate) fn launch_codex_process_with_options(
         json!({"pid": pid, "executable": executable_path, "elapsedMs": started.elapsed().as_millis(),
             "confirmationMs": LAUNCH_CONFIRM_MS, "criterion": "spawned_process_still_running", "error": result.as_ref().err()}),
     );
-    result
-        .map(|()| true)
-        .map_err(|err| format!("Codex 启动确认失败 {executable_path}: {err}"))
+    result.map_err(|err| format!("Codex 启动确认失败 {executable_path}: {err}"))
 }
 
 fn confirm_launched_process(child: &mut Child, confirmation: StdDuration) -> Result<(), String> {
@@ -397,10 +387,6 @@ fn confirm_launched_process(child: &mut Child, confirmation: StdDuration) -> Res
     }
 }
 
-pub(crate) fn relaunch_executable(executable_path: &str) -> Result<bool, String> {
-    launch_executable_with_options(executable_path, &[], &[])
-}
-
 pub(crate) fn sanitize_desktop_app_launch_env(command: &mut Command) {
     // Codex Switch can be launched from Codex/VS Code, where Electron helper
     // processes set this. Packaged desktop apps must start as Electron apps,
@@ -408,21 +394,13 @@ pub(crate) fn sanitize_desktop_app_launch_env(command: &mut Command) {
     command.env_remove("ELECTRON_RUN_AS_NODE");
 }
 
-pub(crate) fn relaunch_executable_with_retry(executable_path: &str) -> Result<bool, String> {
-    let mut last_error = None;
-    for _ in 0..2 {
-        match relaunch_executable(executable_path) {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
-            Err(err) => last_error = Some(err),
-        }
+/// Starts the executable, retrying once 300ms after a failed spawn.
+pub(crate) fn relaunch_executable_with_retry(executable_path: &str) -> Result<(), String> {
+    let relaunch = || spawn_executable(executable_path, &[], &[]).map(drop);
+    relaunch().or_else(|first| {
         thread::sleep(StdDuration::from_millis(300));
-    }
-    if let Some(err) = last_error {
-        Err(err)
-    } else {
-        Ok(false)
-    }
+        relaunch().map_err(|second| format!("第 1 次: {first}；第 2 次: {second}"))
+    })
 }
 
 #[cfg(test)]
@@ -711,6 +689,23 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(killed_pids.contains(&parent_pid), "{entries}");
         assert!(!killed_pids.contains(&child_pid), "{entries}");
+    }
+
+    #[test]
+    fn relaunch_retry_waits_once_and_returns_both_failures() {
+        let missing = std::env::temp_dir()
+            .join(format!("codex-switch-missing-{}", std::process::id()))
+            .join("Code.exe");
+        let started = Instant::now();
+        let error = relaunch_executable_with_retry(&missing.to_string_lossy()).unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            error.starts_with("第 1 次: 应用可执行文件不存在"),
+            "{error}"
+        );
+        assert!(error.contains("；第 2 次: 应用可执行文件不存在"), "{error}");
+        assert!(elapsed >= StdDuration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < StdDuration::from_millis(600), "{elapsed:?}");
     }
 
     #[test]

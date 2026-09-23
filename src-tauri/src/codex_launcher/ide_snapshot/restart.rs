@@ -88,7 +88,8 @@ where
                 &executable,
             )?
         } else {
-            relaunch_executable_with_retry(&executable)?
+            relaunch_executable_with_retry(&executable)?;
+            true
         };
         if restarted {
             restarted_paths.insert(normalize_executable_path(&executable));

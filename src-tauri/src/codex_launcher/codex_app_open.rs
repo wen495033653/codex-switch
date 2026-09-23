@@ -466,16 +466,16 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
     );
     super::codex_app_watcher::expect_codex_app_open_for_executables(&executables);
     match relaunch_codex_executable(executable, mode) {
-        Ok(restarted) => {
+        Ok(()) => {
             log_session_sync_event(
                 "codex_app_relaunch_executable_finish",
                 json!({
                     "executable": executable,
                     "mode": format!("{mode:?}"),
-                    "restarted": restarted
+                    "restarted": true
                 }),
             );
-            Ok(restarted)
+            Ok(true)
         }
         Err(err) => {
             super::codex_app_watcher::clear_expected_codex_app_open_for_executables(&executables);
@@ -516,8 +516,8 @@ pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
             "mode": format!("{mode:?}")
         }),
     );
-    let launched = launch_codex_process_with_options(executable, args, envs)?;
-    Ok(CodexAppInstanceLaunch { launched })
+    launch_codex_process_with_options(executable, args, envs)?;
+    Ok(CodexAppInstanceLaunch { launched: true })
 }
 
 fn relaunch_running_codex_processes(
@@ -702,11 +702,11 @@ fn relaunch_closed_codex(
         super::codex_app_watcher::expect_app_command_codex_app_open_for_executables(executables);
     }
 
-    let mut restarted = 0usize;
+    // Each launch either succeeds or ends the loop with its error, and the caller has already
+    // rejected an empty executable list, so every executable was reopened when the loop ends.
     for executable in executables {
         match relaunch_codex_executable(executable, mode) {
-            Ok(true) => restarted += 1,
-            Ok(false) => {}
+            Ok(()) => {}
             Err(err) => {
                 if origin == CodexRelaunchOrigin::AppCommand {
                     super::codex_app_watcher::clear_expected_codex_app_open_for_executables(
@@ -726,14 +726,7 @@ fn relaunch_closed_codex(
         }
         thread::sleep(StdDuration::from_millis(120));
     }
-
-    if restarted == 0 {
-        if origin == CodexRelaunchOrigin::AppCommand {
-            super::codex_app_watcher::clear_expected_codex_app_open_for_executables(executables);
-        }
-        return Err(format!("未能重新打开 Codex，可执行路径: {executables:?}"));
-    }
-    Ok(restarted)
+    Ok(executables.len())
 }
 
 fn apply_codex_config_after_process_exit(
@@ -842,12 +835,9 @@ fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) -> Result
     result.map(|_| ())
 }
 
-fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Result<bool, String> {
+fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Result<(), String> {
     match mode {
-        CodexRelaunchMode::Cdp(hooks) => {
-            launch_codex_with_cdp_hooks(Path::new(executable), hooks)?;
-            Ok(true)
-        }
+        CodexRelaunchMode::Cdp(hooks) => launch_codex_with_cdp_hooks(Path::new(executable), hooks),
         CodexRelaunchMode::Normal => launch_codex_process_with_options(executable, &[], &[]),
     }
 }
