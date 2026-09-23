@@ -1,6 +1,6 @@
-use super::process_control::kill_process_tree;
 #[cfg(windows)]
-use super::shell::{json_as_array, parse_json_output, run_pwsh};
+use super::codex_app_watcher::process_command_line;
+use super::process_control::kill_process_tree;
 use crate::{
     accounts::{
         auth_error_is_login_expired, get_codex_state_value, lookup_store_account,
@@ -305,30 +305,90 @@ fn legacy_remote_control_home_removed() -> Result<bool, String> {
     Ok(true)
 }
 
+// Old versions started `codex.exe app-server ... --enable remote_control` themselves. The list scan
+// reads only names; command lines are read for `codex.exe` candidates alone. The sysinfo refresh has
+// no error result: a command line it cannot read (for example an elevated process) stays empty and
+// does not match, as WMI returned a null CommandLine for it before.
 #[cfg(windows)]
 fn legacy_remote_control_helper_pids() -> Vec<u64> {
-    let script = r#"
-$ErrorActionPreference = "Stop"
-$helpers = Get-CimInstance Win32_Process | Where-Object {
-  $_.Name -ieq "codex.exe" `
-    -and $_.CommandLine -match "\bapp-server\b" `
-    -and $_.CommandLine -match "--enable\s+remote_control"
-} | Select-Object -ExpandProperty ProcessId
-$helpers | ConvertTo-Json -Depth 2 -Compress
-"#;
-    run_pwsh(script)
-        .ok()
-        .and_then(|output| parse_json_output(&output, json!([])).ok())
-        .map(json_as_array)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|pid| pid.as_u64())
-        .collect()
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    let candidates = system
+        .processes()
+        .iter()
+        .filter(|(_, process)| {
+            is_legacy_remote_control_helper_name(&process.name().to_string_lossy())
+        })
+        .map(|(pid, _)| *pid)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&candidates),
+        false,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .without_tasks(),
+    );
+    let mut pids = candidates
+        .iter()
+        .filter_map(|pid| system.process(*pid))
+        .filter(|process| {
+            is_legacy_remote_control_helper_command_line(&process_command_line(process))
+        })
+        .map(|process| u64::from(process.pid().as_u32()))
+        .collect::<Vec<_>>();
+    pids.sort_unstable();
+    pids
 }
 
 #[cfg(not(windows))]
 fn legacy_remote_control_helper_pids() -> Vec<u64> {
     Vec::new()
+}
+
+// Same test as the former `$_.Name -ieq "codex.exe"`.
+#[cfg(any(windows, test))]
+fn is_legacy_remote_control_helper_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("codex.exe")
+}
+
+// Same tests as the former case-insensitive `-match "\bapp-server\b"` and
+// `-match "--enable\s+remote_control"`; word characters are letters, digits and `_`.
+#[cfg(any(windows, test))]
+fn is_legacy_remote_control_helper_command_line(command_line: &str) -> bool {
+    let command_line = command_line.to_lowercase();
+    contains_whole_word(&command_line, "app-server")
+        && contains_enable_remote_control(&command_line)
+}
+
+#[cfg(any(windows, test))]
+fn contains_whole_word(text: &str, word: &str) -> bool {
+    let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
+    text.match_indices(word).any(|(index, _)| {
+        !text[..index].chars().next_back().is_some_and(is_word_char)
+            && !text[index + word.len()..]
+                .chars()
+                .next()
+                .is_some_and(is_word_char)
+    })
+}
+
+#[cfg(any(windows, test))]
+fn contains_enable_remote_control(text: &str) -> bool {
+    const FLAG: &str = "--enable";
+    text.match_indices(FLAG).any(|(index, _)| {
+        let rest = &text[index + FLAG.len()..];
+        let value = rest.trim_start();
+        value.len() < rest.len() && value.starts_with("remote_control")
+    })
 }
 
 fn stop_legacy_remote_control_helpers() -> Result<usize, String> {
@@ -1014,6 +1074,82 @@ mod tests {
             .expect("transient refresh errors should remain retryable");
 
         assert_eq!(issue, None);
+    }
+
+    // A copy of this test binary named codex.exe runs the sleeping process fixture; the extra
+    // arguments are libtest filters that only put the helper flags on its command line.
+    #[cfg(windows)]
+    #[test]
+    fn legacy_helper_scan_reads_real_codex_process_command_lines() {
+        use std::process::{Command, Stdio};
+        let dir =
+            std::env::temp_dir().join(format!("codex-switch-legacy-helper-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let helper = dir.join("codex.exe");
+        fs::copy(std::env::current_exe().unwrap(), &helper).unwrap();
+        let spawn = |extra: &[&str]| {
+            let mut command = Command::new(&helper);
+            command
+                .args([
+                    "--exact",
+                    "codex_launcher::process_control::tests::process_fixture",
+                    "--nocapture",
+                ])
+                .args(extra)
+                .env("CODEX_SWITCH_PROCESS_FIXTURE", "sleep")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            super::super::shell::hide_command_window(&mut command);
+            command.spawn().unwrap()
+        };
+        let mut legacy = spawn(&["app-server", "flag --enable remote_control"]);
+        let mut desktop = spawn(&["app-server"]);
+
+        let found = legacy_remote_control_helper_pids();
+
+        for child in [&mut legacy, &mut desktop] {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(found.contains(&u64::from(legacy.id())), "{found:?}");
+        assert!(!found.contains(&u64::from(desktop.id())), "{found:?}");
+    }
+
+    #[test]
+    fn legacy_helper_matching_keeps_former_powershell_filter() {
+        assert!(is_legacy_remote_control_helper_name("codex.exe"));
+        assert!(is_legacy_remote_control_helper_name("CODEX.EXE"));
+        assert!(!is_legacy_remote_control_helper_name("codex"));
+        assert!(!is_legacy_remote_control_helper_name("ChatGPT.exe"));
+
+        // Arguments exactly as the old helper spawn passed them.
+        for command_line in [
+            r"C:\App\resources\codex.exe app-server --listen ws://127.0.0.1:4500 --analytics-default-enabled --enable remote_control",
+            r#""C:\App\resources\codex.exe" APP-SERVER --ENABLE    REMOTE_CONTROL"#,
+            "codex.exe app-server --enable\tremote_control_v2",
+            "codex.exe x--enable remote_control -- app-server",
+        ] {
+            assert!(
+                is_legacy_remote_control_helper_command_line(command_line),
+                "{command_line}"
+            );
+        }
+        for command_line in [
+            "codex.exe app-server --analytics-default-enabled",
+            "codex.exe app-server2 --enable remote_control",
+            "codex.exe myapp-server --enable remote_control",
+            "codex.exe app_server --enable remote_control",
+            "codex.exe app-server --enabled remote_control",
+            "codex.exe app-server --enable=remote_control",
+            "codex.exe app-server --enable",
+            "",
+        ] {
+            assert!(
+                !is_legacy_remote_control_helper_command_line(command_line),
+                "{command_line}"
+            );
+        }
     }
 
     #[test]

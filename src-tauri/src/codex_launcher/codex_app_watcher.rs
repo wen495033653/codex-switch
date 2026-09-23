@@ -768,7 +768,7 @@ fn running_codex_processes() -> Result<Vec<CodexProcess>, String> {
     Ok(processes)
 }
 
-fn process_command_line(process: &sysinfo::Process) -> String {
+pub(super) fn process_command_line(process: &sysinfo::Process) -> String {
     process
         .cmd()
         .iter()

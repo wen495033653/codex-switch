@@ -28,7 +28,21 @@
 - `kill_root_process_trees`：重启 Codex 和重开编辑器时只结束根进程（父进程不在同一应用的进程集合里），后代随进程树结束，之后仍等待全部 PID 退出。实测逐个结束 Electron helper 会让主进程把 helper 重新拉起，9 次 taskkill 约 9 秒后才轮到主进程。
 - watcher 识别根进程和上面的调用共用 `root_pids`。
 
+## 进程枚举只取需要的字段（2026-09-23）
+
+- 存活检查 `get_alive_pids`（`wait_for_pids_exit` 每 250ms 调一次）只刷新传入的 PID；结束进程树前的快照只取进程列表自带的 pid、parent、启动时间。两处以前都是 `System::new_all()`，会逐进程读 CPU、内存、命令行、可执行路径和环境变量。
+- 旧版远程控制 helper 的检测（watcher 打开处理、周期检查和重启前的预检查都会调用）改用 sysinfo 两阶段扫描：进程列表里名为 `codex.exe` 的才读命令行。匹配规则保持原 PowerShell 条件：名称 `-ieq "codex.exe"`，命令行大小写不敏感地含整词 `app-server`，且含 `--enable`、至少一个空白、`remote_control`。不再启动 `pwsh.exe`，以前没装 PowerShell 7 的机器上这个检测一直静默返回空。
+- 没有返回 `Result`：去掉 PowerShell 后，原来被吞掉的启动失败、退出码、JSON 解析这几类错误都不存在了，sysinfo 的刷新接口没有错误结果。读不到命令行的进程（例如管理员权限进程）命令行为空、不匹配，与 WMI 对它返回 null `CommandLine` 相同。
+- 保留 `relaunch_running_codex_processes` 结束进程树后的 `wait_for_pids_exit(&pids, 12_000)`：`kill_process_tree` 在根进程已经退出时直接返回 `Ok(false)`，不结束也不等待它的后代，这时外层等待是唯一覆盖 watcher 列表里其余 PID 的检查。正常情况下它第一次检查就返回。
+- IDE 快照 `capture_open_ide_snapshot` 本来就只刷新 cmd 和 exe，没有用 `new_all`。试过先按名称筛候选再读 cmd/exe，本机 380 个进程下 235ms 对 236–385ms，开销主要在逐进程打开句柄取启动时间，收益不明显，没有提交。
+
 ## 验证记录
+
+### 2026-09-23：进程枚举
+
+- 单元测试：`legacy_helper_matching_keeps_former_powershell_filter` 覆盖旧 helper 的真实启动参数、大小写、多个空白和 Tab、整词边界、`--enabled`、`--enable=` 等；`legacy_helper_scan_reads_real_codex_process_command_lines`（仅 Windows）把测试二进制复制成临时目录下的 `codex.exe` 并以带与不带 helper 参数的命令行启动，扫描只返回前者，随后结束这两个测试进程。`process_control::tests` 含真实子进程的用例全部通过。完整检查：fmt、Clippy all-targets、`cargo test` 271 passed / 5 ignored。
+- 本机只读对比（debug 构建，临时测试，未提交，没有结束任何进程）：旧 PowerShell 检测 630–815ms，新扫描 234–296ms，两者结果都为空；本机唯一的 `codex.exe` 两边都读不到命令行（WMI `CommandLine` 为 null）。`get_alive_pids` 6.6–12.6ms，`System::new_all()` 593–673ms。
+- 没有在真实 Codex 上执行结束或重启。现有版本已不再启动旧版 helper，真实残留 helper 的识别只由上面的复制进程用例覆盖；识别后调用的 `kill_process_tree` 与重启流程共用，由 `process_control::tests` 覆盖。
 
 ### 2026-09-20：v6.0.3 发版检查
 
