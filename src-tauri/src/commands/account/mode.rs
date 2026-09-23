@@ -117,7 +117,6 @@ pub(super) fn import_refresh_token_impl(app: AppHandle, token: String) -> Result
         return Err("refresh_token 不能为空".to_string());
     }
 
-    update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let exchange = exchange_refresh_token(refresh_token)?;
     let account_id = string_field(&exchange, "account_id");
     let access_token = string_field(&exchange, "access_token");
