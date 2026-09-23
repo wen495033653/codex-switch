@@ -69,6 +69,8 @@ fn session_sync_state_db_summary_details(details: &Value) -> Value {
         ("trigger", "触发来源"),
         ("targetProvider", "目标 provider"),
         ("updated", "更新数量"),
+        ("lockedRollouts", "被占用而跳过的 rollout 数"),
+        ("lockedRolloutPaths", "被占用而跳过的 rollout"),
     ] {
         if let Some(value) = details.get(key) {
             summary.insert(label.to_string(), value.clone());

@@ -681,6 +681,219 @@ fn sync_root_state_db_resolves_relative_rollouts_from_codex_home() {
     );
 }
 
+/// The pre-streaming implementation: read the whole file, substring-check it, parse lines until
+/// the first session_meta with an object payload.
+fn full_read_rollout_metadata(path: &Path) -> (Option<String>, bool) {
+    let content = fs::read_to_string(path).unwrap();
+    let has_user_event = content.contains("\"user_message\"") || content.contains("\"user_input\"");
+    let mut cwd = None;
+    for line in content.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if event.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let Some(payload) = event.get("payload").and_then(Value::as_object) else {
+            continue;
+        };
+        cwd = payload
+            .get("cwd")
+            .and_then(Value::as_str)
+            .and_then(to_desktop_workspace_path);
+        break;
+    }
+    (cwd, has_user_event)
+}
+
+#[test]
+fn streamed_rollout_metadata_matches_full_read() {
+    let dir = unique_sessions_dir("rollout-metadata-stream");
+    fs::create_dir_all(&dir).unwrap();
+    let meta = |cwd: &str| {
+        json!({"timestamp": "2026-05-07T00:00:00Z", "type": "session_meta",
+            "payload": {"id": "s", "cwd": cwd, "model_provider": "openai"}})
+        .to_string()
+    };
+    let user = json!({"type": "event_msg", "payload": {"type": "user_message", "message": "hi"}})
+        .to_string();
+    let agent = json!({"type": "event_msg", "payload": {"type": "agent_message", "message": "yo"}})
+        .to_string();
+    let fixtures = [
+        ("meta-first-user-late", format!("{}\n{agent}\n{agent}\n{user}\n", meta("E:\\work"))),
+        ("no-meta-user-input", "{\"type\":\"response_item\",\"payload\":{\"user_input\":1}}\n".to_string()),
+        (
+            "meta-without-payload-first",
+            format!(
+                "{agent}\n{{\"type\":\"session_meta\",\"payload\":\"text\"}}\n{}\n",
+                meta(r"\\?\C:\work")
+            ),
+        ),
+        (
+            "meta-without-cwd",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\"}}\n{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"D:\\\\late\"}}\n".to_string(),
+        ),
+        ("crlf", format!("{}\r\n{user}\r\n", meta("D:\\crlf"))),
+        ("no-trailing-newline", format!("{}\n{user}", meta("D:\\tail"))),
+        ("user-before-meta", format!("{user}\n{}\n", meta("D:\\after"))),
+        ("nothing", format!("{agent}\nnot json\n")),
+        ("empty", String::new()),
+    ];
+    for (name, content) in fixtures {
+        let path = dir.join(format!("rollout-{name}.jsonl"));
+        fs::write(&path, &content).unwrap();
+        let expected = full_read_rollout_metadata(&path);
+        let streamed = read_rollout_thread_metadata(&path, true, true).unwrap();
+        assert_eq!(
+            streamed,
+            RolloutMetadataRead::Read(RolloutThreadMetadata {
+                cwd: expected.0,
+                has_user_event: expected.1,
+            }),
+            "{name}"
+        );
+    }
+    let missing = read_rollout_thread_metadata(&dir.join("rollout-missing.jsonl"), true, true);
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(missing, Ok(RolloutMetadataRead::Missing));
+}
+
+#[test]
+fn state_sync_reads_only_what_the_row_still_needs() {
+    let temp_dir = unique_sessions_dir("state-db-partial-read");
+    let state_db = temp_dir.join("state_5.sqlite");
+    let recorded = temp_dir.join("sessions").join("rollout-recorded.jsonl");
+    let pending = temp_dir.join("sessions").join("rollout-pending.jsonl");
+    fs::create_dir_all(recorded.parent().unwrap()).unwrap();
+    // Everything after line 1 is not UTF-8. The old whole-file read_to_string failed the whole
+    // sync on it; a row whose user event is already recorded now only needs line 1.
+    let mut bytes = format!(
+        "{}\n",
+        json!({"type": "session_meta", "payload": {"id": "a", "cwd": r"\\?\C:\recorded"}})
+    )
+    .into_bytes();
+    bytes.extend_from_slice(b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\n");
+    fs::write(&recorded, bytes).unwrap();
+    write_rollout_file_with_user_event(&pending, "openai", "D:\\pending");
+
+    let connection = Connection::open(&state_db).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                has_user_event INTEGER
+            )",
+        )
+        .unwrap();
+    for (id, path, has_user_event) in [
+        ("thread-recorded", &recorded, Some(1)),
+        ("thread-pending", &pending, None),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+                 VALUES (?1, ?2, 'api', 'old', ?3)",
+                (id, path.to_string_lossy().to_string(), has_user_event),
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let updated = sync_codex_state_threads_to_provider(&state_db, "api").unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    let rows = connection
+        .prepare("SELECT id, cwd, has_user_event FROM threads ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(connection);
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(updated, 3);
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "thread-pending".to_string(),
+                "D:\\pending".to_string(),
+                Some(1)
+            ),
+            (
+                "thread-recorded".to_string(),
+                "C:/recorded".to_string(),
+                Some(1)
+            ),
+        ]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn state_sync_reports_rollouts_locked_by_another_process() {
+    use std::{collections::HashSet, os::windows::fs::OpenOptionsExt};
+
+    let temp_dir = unique_sessions_dir("state-db-locked-rollout");
+    let state_db = temp_dir.join("state_5.sqlite");
+    let locked = temp_dir.join("sessions").join("rollout-locked.jsonl");
+    write_rollout_file_with_user_event(&locked, "openai", "D:\\locked");
+    let connection = Connection::open(&state_db).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL,
+                model_provider TEXT NOT NULL, cwd TEXT NOT NULL, has_user_event INTEGER);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+             VALUES ('thread-locked', ?1, 'api', 'old', 0)",
+            [locked.to_string_lossy().to_string()],
+        )
+        .unwrap();
+    // share_mode(0): any other open fails with ERROR_SHARING_VIOLATION (32), like a rollout
+    // Codex keeps open exclusively.
+    let holder = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&locked)
+        .unwrap();
+    let columns = [
+        "id",
+        "rollout_path",
+        "model_provider",
+        "cwd",
+        "has_user_event",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<HashSet<_>>();
+
+    let metadata = collect_state_thread_sync_metadata(&connection, &state_db, &columns).unwrap();
+    drop(connection);
+    let updated = sync_codex_state_threads_to_provider(&state_db, "api").unwrap();
+    drop(holder);
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    assert_eq!(
+        metadata.locked_rollouts,
+        vec![locked.to_string_lossy().to_string()]
+    );
+    assert!(metadata.user_event_thread_ids.is_empty());
+    assert!(metadata.cwd_by_thread_id.is_empty());
+    assert_eq!(updated, 0);
+}
+
 #[test]
 fn preview_state_provider_counts_changes_without_writing() {
     let temp_dir = unique_sessions_dir("preview-state-db");

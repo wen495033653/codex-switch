@@ -11,15 +11,18 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    io::ErrorKind,
+    io::{BufRead, BufReader, ErrorKind},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 #[derive(Debug, Default)]
-struct StateThreadSyncMetadata {
-    user_event_thread_ids: HashSet<String>,
-    cwd_by_thread_id: BTreeMap<String, String>,
+pub(super) struct StateThreadSyncMetadata {
+    pub(super) user_event_thread_ids: HashSet<String>,
+    pub(super) cwd_by_thread_id: BTreeMap<String, String>,
+    /// Rollouts another process holds open without sharing (Windows sharing / lock violation or
+    /// access denied). They are skipped for this sync, as before, but now counted in the summary.
+    pub(super) locked_rollouts: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -35,11 +38,22 @@ impl StateThreadUpdateCounts {
     }
 }
 
-#[derive(Debug, Default)]
-struct RolloutThreadMetadata {
-    cwd: Option<String>,
-    has_user_event: bool,
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct RolloutThreadMetadata {
+    pub(super) cwd: Option<String>,
+    pub(super) has_user_event: bool,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum RolloutMetadataRead {
+    Missing,
+    Locked,
+    Read(RolloutThreadMetadata),
+}
+
+const USER_EVENT_MARKERS: [&[u8]; 2] = [b"\"user_message\"", b"\"user_input\""];
+
+const SESSION_META_MARKER: &[u8] = b"\"session_meta\"";
 
 pub(super) fn pinned_thread_rollout_paths_if_exists() -> Result<Vec<PathBuf>, String> {
     let codex_home = codex_dir()?;
@@ -137,7 +151,7 @@ fn state_threads_columns(connection: &Connection) -> Result<Option<HashSet<Strin
     Ok(Some(columns))
 }
 
-fn collect_state_thread_sync_metadata(
+pub(super) fn collect_state_thread_sync_metadata(
     connection: &Connection,
     state_db: &Path,
     columns: &HashSet<String>,
@@ -151,23 +165,35 @@ fn collect_state_thread_sync_metadata(
         return Ok(StateThreadSyncMetadata::default());
     }
 
+    // A row that already has has_user_event = 1 cannot be changed by the user-event update, so its
+    // rollout does not need to be scanned for user messages.
+    let sql = format!(
+        "SELECT id, rollout_path, {}
+         FROM threads
+         WHERE COALESCE(rollout_path, '') <> ''",
+        if wants_user_event {
+            "CASE WHEN COALESCE(has_user_event, 0) = 1 THEN 1 ELSE 0 END"
+        } else {
+            "0"
+        }
+    );
     let mut statement = connection
-        .prepare(
-            "SELECT id, rollout_path
-             FROM threads
-             WHERE COALESCE(rollout_path, '') <> ''",
-        )
+        .prepare(&sql)
         .map_err(|err| format!("查询 Codex state 会话 rollout 路径失败: {err}"))?;
     let rows = statement
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)? == 1,
+            ))
         })
         .map_err(|err| format!("读取 Codex state 会话 rollout 路径失败: {err}"))?;
 
     let mut metadata = StateThreadSyncMetadata::default();
     let root = codex_home_from_state_db_path(state_db);
     for row in rows {
-        let (thread_id, rollout_path) =
+        let (thread_id, rollout_path, user_event_recorded) =
             row.map_err(|err| format!("读取 Codex state 会话 rollout 路径失败: {err}"))?;
         let thread_id = thread_id.trim();
         let Some(rollout_path) = rollout_path else {
@@ -176,11 +202,23 @@ fn collect_state_thread_sync_metadata(
         if thread_id.is_empty() || rollout_path.trim().is_empty() {
             continue;
         }
-        let rollout_path = state_thread_rollout_path(&root, &rollout_path);
-        let Some(rollout_metadata) = rollout_thread_metadata(&rollout_path)? else {
+        let scan_user_event = wants_user_event && !user_event_recorded;
+        if !scan_user_event && !wants_cwd {
             continue;
-        };
-        if wants_user_event && rollout_metadata.has_user_event {
+        }
+        let rollout_path = state_thread_rollout_path(&root, &rollout_path);
+        let rollout_metadata =
+            match read_rollout_thread_metadata(&rollout_path, scan_user_event, wants_cwd)? {
+                RolloutMetadataRead::Read(rollout_metadata) => rollout_metadata,
+                RolloutMetadataRead::Missing => continue,
+                RolloutMetadataRead::Locked => {
+                    metadata
+                        .locked_rollouts
+                        .push(rollout_path.to_string_lossy().to_string());
+                    continue;
+                }
+            };
+        if scan_user_event && rollout_metadata.has_user_event {
             metadata.user_event_thread_ids.insert(thread_id.to_string());
         }
         if wants_cwd {
@@ -201,41 +239,77 @@ fn state_thread_rollout_path(root: &Path, raw_path: &str) -> PathBuf {
     }
 }
 
-fn rollout_thread_metadata(path: &Path) -> Result<Option<RolloutThreadMetadata>, String> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(err) if is_locked_io_error(&err) => return Ok(None),
-        Err(err) => {
-            return Err(format!(
-                "读取 Codex state 会话 rollout 元数据失败 {}: {err}",
-                path.display()
-            ))
+/// Streams a rollout line by line and stops as soon as the requested facts are known: the cwd of
+/// the first `session_meta` line (normally line 1) and whether any line mentions a user event.
+/// The whole file is only read when a wanted fact is absent.
+pub(super) fn read_rollout_thread_metadata(
+    path: &Path,
+    scan_user_event: bool,
+    read_cwd: bool,
+) -> Result<RolloutMetadataRead, String> {
+    let read_error = |err: std::io::Error| {
+        format!(
+            "读取 Codex state 会话 rollout 元数据失败 {}: {err}",
+            path.display()
+        )
+    };
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(RolloutMetadataRead::Missing),
+        Err(err) if is_locked_io_error(&err) => return Ok(RolloutMetadataRead::Locked),
+        Err(err) => return Err(read_error(err)),
+    };
+    let mut reader = BufReader::new(file);
+    let mut metadata = RolloutThreadMetadata::default();
+    let mut need_user_event = scan_user_event;
+    let mut need_cwd = read_cwd;
+    let mut line = Vec::new();
+    while need_user_event || need_cwd {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(err) if is_locked_io_error(&err) => return Ok(RolloutMetadataRead::Locked),
+            Err(err) => return Err(read_error(err)),
         }
-    };
-    let mut metadata = RolloutThreadMetadata {
-        cwd: None,
-        has_user_event: content.contains("\"user_message\"") || content.contains("\"user_input\""),
-    };
+        if need_user_event
+            && USER_EVENT_MARKERS
+                .iter()
+                .any(|marker| contains_bytes(&line, marker))
+        {
+            metadata.has_user_event = true;
+            need_user_event = false;
+        }
+        if need_cwd && contains_bytes(&line, SESSION_META_MARKER) {
+            if let Some(cwd) = session_meta_line_cwd(&line) {
+                metadata.cwd = cwd;
+                need_cwd = false;
+            }
+        }
+    }
+    Ok(RolloutMetadataRead::Read(metadata))
+}
 
-    for line in content.lines() {
-        let Ok(event) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if event.get("type").and_then(Value::as_str) != Some("session_meta") {
-            continue;
-        }
-        let Some(payload) = event.get("payload").and_then(Value::as_object) else {
-            continue;
-        };
-        metadata.cwd = payload
+/// `Some(cwd)` when the line is a `session_meta` event with an object payload (the first such
+/// line decides, even without a cwd); `None` to keep looking.
+fn session_meta_line_cwd(line: &[u8]) -> Option<Option<String>> {
+    let event = serde_json::from_slice::<Value>(line).ok()?;
+    if event.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let payload = event.get("payload").and_then(Value::as_object)?;
+    Some(
+        payload
             .get("cwd")
             .and_then(Value::as_str)
-            .and_then(to_desktop_workspace_path);
-        break;
-    }
+            .and_then(to_desktop_workspace_path),
+    )
+}
 
-    Ok(Some(metadata))
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn is_locked_io_error(error: &std::io::Error) -> bool {
@@ -368,7 +442,14 @@ pub(super) fn sync_codex_state_threads_to_provider_with_diagnostics(
         .commit()
         .map_err(|err| format!("保存 Codex state 会话同步结果失败: {err}"))?;
     let updated = counts.total();
-    log_state_db_update_summary(state_db, target_provider, trigger, counts, before_summary);
+    log_state_db_update_summary(
+        state_db,
+        target_provider,
+        trigger,
+        counts,
+        &thread_metadata.locked_rollouts,
+        before_summary,
+    );
     Ok(updated)
 }
 
@@ -502,6 +583,8 @@ pub(super) fn preview_codex_state_threads_to_provider_with_diagnostics(
                 "cwdRowsUpdated": counts.cwd_rows,
                 "detected": detected,
                 "countMetadataUpdates": count_metadata_updates,
+                "lockedRollouts": thread_metadata.locked_rollouts.len(),
+                "lockedRolloutPaths": thread_metadata.locked_rollouts,
                 "updated": updated
             }),
         );
@@ -514,6 +597,7 @@ fn log_state_db_update_summary(
     target_provider: &str,
     trigger: Option<&str>,
     counts: StateThreadUpdateCounts,
+    locked_rollouts: &[String],
     summary: Result<Option<Value>, String>,
 ) {
     let Some(trigger) = trigger else {
@@ -522,11 +606,11 @@ fn log_state_db_update_summary(
     let updated = counts.total();
     let summary = match summary {
         Ok(Some(summary)) => summary,
-        Ok(None) if updated == 0 => return,
+        Ok(None) if updated == 0 && locked_rollouts.is_empty() => return,
         Ok(None) => json!({}),
         Err(err) => json!({ "summaryError": err }),
     };
-    if updated == 0 && summary.get("summaryError").is_none() {
+    if updated == 0 && locked_rollouts.is_empty() && summary.get("summaryError").is_none() {
         return;
     }
     log_session_sync_event(
@@ -538,6 +622,8 @@ fn log_state_db_update_summary(
             "providerRowsUpdated": counts.provider_rows,
             "userEventRowsUpdated": counts.user_event_rows,
             "cwdRowsUpdated": counts.cwd_rows,
+            "lockedRollouts": locked_rollouts.len(),
+            "lockedRolloutPaths": locked_rollouts,
             "updated": updated,
             "summary": summary
         }),
