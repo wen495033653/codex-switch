@@ -16,6 +16,7 @@ use super::{
     },
     state_db::{
         delete_state_threads_for_sessions, thread_metadata_from_manifest, upsert_state_threads,
+        StateDbBatchBackup,
     },
     util::{backup_stamp, sha256_bytes, sha256_file, unique_sibling_path},
 };
@@ -528,6 +529,7 @@ pub(super) fn reassign_restore_candidate(
 pub(super) fn restore_deleted_candidate(
     candidate: RestoreCandidate,
     conflict_strategy: ConflictStrategy,
+    state_backup: &mut StateDbBatchBackup,
 ) -> Result<(usize, bool, Vec<String>), String> {
     check_deleted_session_backup_size(&candidate.record, &candidate.source_file)?;
     let parent = candidate
@@ -652,7 +654,8 @@ pub(super) fn restore_deleted_candidate(
         .filter(|id| *id != candidate.target_id)
     {
         let overwritten_ids = session_id_variants(overwritten_id);
-        if let Err(err) = delete_state_threads_for_sessions(&candidate.root, &overwritten_ids, &[])
+        if let Err(err) =
+            delete_state_threads_for_sessions(&candidate.root, &overwritten_ids, &[], state_backup)
         {
             warnings.push(format!("清理被覆盖会话的 Desktop state 失败: {err}"));
         }

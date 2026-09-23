@@ -93,18 +93,81 @@ pub(super) struct StateThreadColumn {
     pub(super) primary_key: bool,
 }
 
-fn backup_state_database_for_delete(
-    connection: &Connection,
-    _root: &Path,
-) -> Result<PathBuf, String> {
-    backup_state_database_with_reason(connection, "delete")
+/// At most one `VACUUM INTO` snapshot per batch operation, taken right before the first statement
+/// that actually changes rows. A batch whose ids match no row takes none.
+pub(super) struct StateDbBatchBackup {
+    reason: &'static str,
+    path: Option<PathBuf>,
 }
 
-fn backup_state_database_for_status(
+impl StateDbBatchBackup {
+    pub(super) fn new(reason: &'static str) -> Self {
+        Self { reason, path: None }
+    }
+
+    #[cfg(test)]
+    pub(super) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    fn ensure(&mut self, connection: &Connection) -> Result<PathBuf, String> {
+        if let Some(path) = &self.path {
+            return Ok(path.clone());
+        }
+        let path = backup_state_database_with_reason(connection, self.reason)?;
+        self.path = Some(path.clone());
+        Ok(path)
+    }
+}
+
+/// The ids that have a `threads` row or a row in one of the tables referencing thread ids, i.e.
+/// the ids a delete or rename would actually change.
+fn ids_with_thread_rows<'a>(
     connection: &Connection,
-    _root: &Path,
-) -> Result<PathBuf, String> {
-    backup_state_database_with_reason(connection, "status")
+    ids: impl IntoIterator<Item = &'a String>,
+    tables: ThreadReferenceTables,
+) -> Result<Vec<String>, String> {
+    let mut sql = "SELECT EXISTS(SELECT 1 FROM threads WHERE id = ?1)".to_string();
+    for (enabled, clause) in [
+        (
+            tables.dynamic_tools,
+            "EXISTS(SELECT 1 FROM thread_dynamic_tools WHERE thread_id = ?1)",
+        ),
+        (
+            tables.goals,
+            "EXISTS(SELECT 1 FROM thread_goals WHERE thread_id = ?1)",
+        ),
+        (
+            tables.spawn_edges,
+            "EXISTS(SELECT 1 FROM thread_spawn_edges WHERE parent_thread_id = ?1 OR child_thread_id = ?1)",
+        ),
+        (
+            tables.stage1_outputs,
+            "EXISTS(SELECT 1 FROM stage1_outputs WHERE thread_id = ?1)",
+        ),
+        (
+            tables.agent_job_items,
+            "EXISTS(SELECT 1 FROM agent_job_items WHERE assigned_thread_id = ?1)",
+        ),
+    ] {
+        if enabled {
+            sql.push_str(" OR ");
+            sql.push_str(clause);
+        }
+    }
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|err| format!("查询 Codex Desktop threads 索引失败: {err}"))?;
+    let mut existing = Vec::new();
+    for id in ids {
+        let found = statement
+            .query_row([id], |row| row.get::<_, i64>(0))
+            .map_err(|err| format!("查询 Codex Desktop thread {id} 失败: {err}"))?;
+        if found != 0 {
+            existing.push(id.clone());
+        }
+    }
+    Ok(existing)
 }
 
 /// Consistent snapshot of a live (possibly WAL-mode) state database. A plain file copy of
@@ -617,8 +680,18 @@ pub(super) fn apply_status_moves_to_state_db(
         ));
     }
     let reference_tables = thread_reference_tables(&connection)?;
+    let overwritten_ids = ids_with_thread_rows(&connection, overwritten_ids, reference_tables)?;
+    let moved_rows = ids_with_thread_rows(
+        &connection,
+        moves.iter().map(|item| &item.id),
+        reference_tables,
+    )?;
+    if overwritten_ids.is_empty() && moved_rows.is_empty() {
+        // None of the sessions has a row: nothing to change, nothing to back up.
+        return Ok(None);
+    }
 
-    let backup_path = backup_state_database_for_status(&connection, root)?;
+    let backup_path = StateDbBatchBackup::new("status").ensure(&connection)?;
     let archived = target_status == "archived";
     let archived_value = i64::from(archived);
     let archived_at = archived.then(now_unix_seconds);
@@ -635,7 +708,7 @@ pub(super) fn apply_status_moves_to_state_db(
             .execute_batch("PRAGMA defer_foreign_keys = ON;")
             .map_err(|err| format!("配置 Codex state 外键延迟检查失败: {err}"))?;
     }
-    delete_thread_rows(&transaction, overwritten_ids, reference_tables)?;
+    delete_thread_rows(&transaction, &overwritten_ids, reference_tables)?;
     for status_move in moves {
         let rollout_path = status_move.target_path.to_string_lossy().to_string();
         transaction
@@ -790,6 +863,7 @@ pub(super) fn delete_state_threads_for_sessions(
     root: &Path,
     ids: &[String],
     rollout_paths: &[PathBuf],
+    backup: &mut StateDbBatchBackup,
 ) -> Result<(), String> {
     let state_db = codex_state_db_path_for_root(root)?;
     if !state_db.exists() {
@@ -823,17 +897,17 @@ pub(super) fn delete_state_threads_for_sessions(
         }
     }
 
-    if delete_ids.is_empty() {
+    let reference_tables = thread_reference_tables(&connection)?;
+    let mut ids = ids_with_thread_rows(&connection, &delete_ids, reference_tables)?;
+    if ids.is_empty() {
         return Ok(());
     }
+    ids.sort();
 
-    let reference_tables = thread_reference_tables(&connection)?;
-    backup_state_database_for_delete(&connection, root)?;
+    backup.ensure(&connection)?;
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 删除事务失败: {err}"))?;
-    let mut ids: Vec<String> = delete_ids.into_iter().collect();
-    ids.sort();
     delete_thread_rows(&transaction, &ids, reference_tables)?;
     transaction
         .commit()

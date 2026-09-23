@@ -9,7 +9,7 @@ use super::{
     model::{parse_conflict_strategy, ConflictStrategy, ConversationItem},
     preview::{normalize_preview_limit, read_preview_message_page},
     rollout::{conversation_title_from_summary, parse_session_file_for_list},
-    state_db::delete_state_threads_for_sessions,
+    state_db::{delete_state_threads_for_sessions, StateDbBatchBackup},
     trash_store::{
         build_restore_deleted_candidate, check_deleted_session_backup_size,
         deleted_record_session_path, deleted_session_record_dir_at, deleted_sessions_dir,
@@ -189,7 +189,13 @@ pub(super) fn delete_conversations_locked(
     let desktop_error = if deleted_records.is_empty() {
         None
     } else {
-        delete_state_threads_for_sessions(root, &removed_ids, &rollout_paths).err()
+        delete_state_threads_for_sessions(
+            root,
+            &removed_ids,
+            &rollout_paths,
+            &mut StateDbBatchBackup::new("delete"),
+        )
+        .err()
     };
     let global_state_error = if deleted_records.is_empty() {
         None
@@ -363,9 +369,11 @@ pub(super) fn restore_deleted_sessions_locked(
     let mut trash_retained = Vec::new();
     let mut sqlite_updated = 0usize;
     let mut warnings = Vec::new();
+    // Rows of overwritten sessions are deleted per candidate; one backup covers the whole batch.
+    let mut state_backup = StateDbBatchBackup::new("delete");
     for candidate in candidates {
         let delete_id = candidate.record.delete_id.clone();
-        match restore_deleted_candidate(candidate, conflict_strategy) {
+        match restore_deleted_candidate(candidate, conflict_strategy, &mut state_backup) {
             Ok((updated, trash_removed, mut candidate_warnings)) => {
                 sqlite_updated += updated;
                 restored_delete_ids.push(delete_id.clone());

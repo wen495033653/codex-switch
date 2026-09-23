@@ -1883,7 +1883,9 @@ fn delete_state_threads_removes_related_rows() {
             .unwrap();
     drop(connection);
 
-    delete_state_threads_for_sessions(&root, &["t1".to_string()], &[]).unwrap();
+    let mut backup = StateDbBatchBackup::new("delete");
+    delete_state_threads_for_sessions(&root, &["t1".to_string()], &[], &mut backup).unwrap();
+    assert!(backup.path().is_some_and(Path::exists));
     let connection = Connection::open(&state_db).unwrap();
 
     assert_eq!(
@@ -1943,7 +1945,13 @@ fn delete_state_threads_resolves_thread_id_from_rollout_path() {
         .unwrap();
     drop(connection);
 
-    delete_state_threads_for_sessions(&root, &["t1".to_string()], &[rollout_path]).unwrap();
+    delete_state_threads_for_sessions(
+        &root,
+        &["t1".to_string()],
+        &[rollout_path],
+        &mut StateDbBatchBackup::new("delete"),
+    )
+    .unwrap();
     let connection = Connection::open(&state_db).unwrap();
 
     assert_eq!(
@@ -2222,4 +2230,82 @@ fn restore_legacy_record_without_hash_still_restores() {
 
     assert_eq!(result["report"]["restored"], 1, "{result}");
     assert_eq!(restored, original);
+}
+
+#[test]
+fn state_db_backup_is_taken_once_per_batch_and_only_when_rows_change() {
+    let root = temp_path("state-db-backup-once");
+    fs::create_dir_all(&root).unwrap();
+    let state_db = root.join("state_5.sqlite");
+    Connection::open(&state_db)
+        .unwrap()
+        .execute_batch(
+            r#"
+            CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT);
+            CREATE TABLE thread_goals (thread_id TEXT NOT NULL, goal TEXT NOT NULL);
+            INSERT INTO threads (id, rollout_path, title) VALUES ('t1', 'a.jsonl', 'A'), ('t2', 'b.jsonl', 'B');
+            INSERT INTO thread_goals (thread_id, goal) VALUES ('orphan', 'left behind');
+            "#,
+        )
+        .unwrap();
+
+    let mut untouched = StateDbBatchBackup::new("delete");
+    delete_state_threads_for_sessions(&root, &["missing".to_string()], &[], &mut untouched)
+        .unwrap();
+    let mut batch = StateDbBatchBackup::new("delete");
+    delete_state_threads_for_sessions(&root, &["t1".to_string()], &[], &mut batch).unwrap();
+    let first_backup = batch.path().map(Path::to_path_buf);
+    delete_state_threads_for_sessions(&root, &["t2".to_string()], &[], &mut batch).unwrap();
+    let second_backup = batch.path().map(Path::to_path_buf);
+    // A child row without a thread row still counts as a change (and is still removed).
+    let mut orphan = StateDbBatchBackup::new("delete");
+    delete_state_threads_for_sessions(&root, &["orphan".to_string()], &[], &mut orphan).unwrap();
+    let connection = Connection::open(&state_db).unwrap();
+    let threads: i64 = connection
+        .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
+        .unwrap();
+    let goals: i64 = connection
+        .query_row("SELECT COUNT(*) FROM thread_goals", [], |row| row.get(0))
+        .unwrap();
+    let rows_in_first_backup: i64 = Connection::open(first_backup.as_ref().unwrap())
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
+        .unwrap();
+    drop(connection);
+    fs::remove_dir_all(&root).unwrap();
+
+    assert!(untouched.path().is_none());
+    assert!(first_backup.is_some());
+    assert_eq!(first_backup, second_backup);
+    assert_eq!(rows_in_first_backup, 2);
+    assert!(orphan.path().is_some());
+    assert_eq!(threads, 0);
+    assert_eq!(goals, 0);
+}
+
+#[test]
+fn status_change_without_state_rows_takes_no_backup() {
+    let root = temp_path("status-no-state-rows");
+    let session_id = "019e20f9-34b7-7a82-a95b-fe461de89806";
+    let relative = PathBuf::from("sessions/2026/05/13").join(session_file_name(session_id));
+    write_test_session(&root, &relative, session_id, "no row");
+    drop(create_current_state_db(&root));
+
+    let result = set_conversation_status_impl(
+        root.to_string_lossy().to_string(),
+        vec![path_to_slash(&relative)],
+        "archived".to_string(),
+        None,
+    )
+    .unwrap();
+    let archived = root
+        .join("archived_sessions")
+        .join(session_file_name(session_id))
+        .exists();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["report"]["changed"], 1);
+    assert!(result["report"]["state_backup_path"].is_null());
+    assert!(archived);
 }
