@@ -67,27 +67,6 @@ export function getApiLastAvailableAt(test) {
   return null;
 }
 
-export function hasFreshSuccessfulApiPrecheck(profile, test, model = DEFAULT_API_TEST_MODEL) {
-  const signature = getApiTestSignature(
-    profile && profile.base_url,
-    profile && profile.api_key,
-    model
-  );
-  return Boolean(test && test.signature === signature && test.ok && isFreshApiTest(test));
-}
-
-export function mergeApiTestResult(apiTestResults, profileId, test) {
-  return {
-    ...normalizeApiTestResults(apiTestResults),
-    [profileId]: test
-  };
-}
-
-export function getApiPrecheckFailureMessage(test, fallback = 'API 预检失败') {
-  const message = test && test.message ? String(test.message).trim() : '';
-  return message ? `API 预检失败：${message}` : fallback;
-}
-
 // `testApiBaseUrl` is the backend call, passed in by the page so this module stays free of
 // window.api.
 export async function runApiProfilePrecheck({

@@ -521,8 +521,6 @@ const EN_TRANSLATIONS = {
   'API Base URL 仅支持 http 或 https': 'API Base URL supports only http or https',
   'API Base URL 缺少 host': 'API Base URL is missing a host',
   'API Key 不能为空': 'API Key cannot be empty',
-  'Codex 代理已关闭': 'Codex proxy disabled',
-  'Codex 代理已启用': 'Codex proxy enabled',
   'Codex 已重启': 'Codex restarted',
   'gpt破限配置已保存，重启 Codex 后生效。': 'GPT unlock settings were saved and will take effect after Codex restarts.',
   'gpt破限已关闭': 'GPT unlock disabled',
@@ -553,8 +551,7 @@ const RUNTIME_PATTERNS = [
   [/^已彻底删除 (\d+) 个会话$/, match => `${match[1]} sessions permanently deleted`],
   [/^已彻底删除 (\d+) 个会话，(\d+) 个失败$/, match => `${match[1]} sessions permanently deleted, ${match[2]} failed`],
   [/^请填写(.+)$/, match => `Complete the following fields: ${match[1].split('、').map(field => EN_TRANSLATIONS[field] || field).join(', ')}`],
-  [/^API Base URL 格式无效：(.+)$/, match => `Invalid API Base URL: ${match[1]}`],
-  [/^API 预检失败：(.+)$/, match => `API check failed: ${match[1]}`]
+  [/^API Base URL 格式无效：(.+)$/, match => `Invalid API Base URL: ${match[1]}`]
 ];
 
 let runtimeLanguage = resolveLanguage(DEFAULT_UI_LANGUAGE);

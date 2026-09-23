@@ -95,16 +95,6 @@ export const normalizeBackgroundRefreshInterval = (value) => {
   return Math.max(1, Math.min(1440, Math.round(number)));
 };
 
-export const buildApiModePayload = (source) => {
-  const raw = source && typeof source === 'object' ? source : {};
-  return {
-    id: raw.id ? String(raw.id) : DEFAULT_API_PROFILE_ID,
-    name: raw.name ? raw.name : DEFAULT_API_NAME,
-    base_url: raw.base_url ? raw.base_url : '',
-    api_key: raw.api_key ? raw.api_key : ''
-  };
-};
-
 export const buildApiProfilePayload = (source, fallbackId = DEFAULT_API_PROFILE_ID) => {
   const raw = source && typeof source === 'object' ? source : {};
   const id = raw.id ? String(raw.id).trim() : String(fallbackId || DEFAULT_API_PROFILE_ID).trim();
@@ -184,19 +174,4 @@ export const buildApiSettingsPayload = ({ activeId, activeProfile, profiles }) =
     api_profiles: profileList,
     api_mode: profile
   };
-};
-
-export const getApiProviderDisplayName = (source) => {
-  const raw = source && typeof source === 'object' ? source : {};
-  const name = String(raw.name || '').trim();
-  if (name && name !== DEFAULT_API_NAME) return name;
-
-  const baseUrl = String(raw.base_url || '').trim();
-  if (!baseUrl) return '';
-  const value = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
-  try {
-    return new URL(value).hostname || '';
-  } catch (_err) {
-    return '';
-  }
 };
