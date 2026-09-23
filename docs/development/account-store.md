@@ -16,6 +16,13 @@
 - 导入单个 refresh_token 不再改 `codex_active_mode`。这一行原本和 `set_subscription_mode()` 成对出现，95bd67e 去掉了导入时切换 Codex 模式，设置修改却留了下来：API 模式下导入账号会把设置改成订阅模式（交换失败也一样），导致远程控制被挂起、下次启动不再恢复 API 模式。OAuth 添加账号从来不改模式。
 - 批量导入 refresh_token 时，每个失败条目都保留错误原文，按它在导入文件里的序号写入错误日志（`account_import_token_error`，不记录 token），结果消息列出最常见的失败原因。以前网络错误、限流和线程 panic 都被算成“token 失效”，原因全部丢弃。
 
+## OAuth 回调连接（2026-09-23）
+
+- 现象（代码推断，未收到用户报告）：OAuth 登录时，回调服务器收到一个没有请求内容的连接（浏览器预连接）或一个无法解析的请求，整个登录流程就以“读取 OAuth 回调请求失败”结束。
+- 根因（已实测）：监听 socket 设为非阻塞后，Windows 上 `accept` 得到的连接继承非阻塞模式，`set_read_timeout` 不起作用，请求行还没到时 `read` 立即返回 `WouldBlock`。本机用独立探针测得：客户端连上但不发送时，`read` 在 4.7µs 内返回 `WouldBlock`。macOS 的 BSD `accept` 语义相同（推断，未在 macOS 上实测）；Linux 不继承。
+- 修复：`read_callback_request` 先把连接设回阻塞再设 5 秒读超时；单个连接读取或解析失败时回 400、记录 `oauth_callback_request_error`，然后继续等待下一个连接，不再结束登录。
+- 验证：`callback_request_waits_for_a_late_request_line` 用非阻塞监听 + 客户端延迟 200ms 发送请求行；去掉修复时该测试失败（`WouldBlock`），加上修复后通过。没有做真实浏览器登录。
+
 ## 关键决策和原因
 
 - 锁是进程内的 `Mutex`。应用有 single-instance 插件，同一时间只有一个 Codex Switch 进程写这些文件。

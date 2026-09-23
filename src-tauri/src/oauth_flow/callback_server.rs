@@ -1,5 +1,6 @@
 use super::{OAUTH_CALLBACK_PORT, OAUTH_CANCEL_MESSAGE};
-use crate::accounts::exchange_oauth_code;
+use crate::{accounts::exchange_oauth_code, session_sync_diagnostics::log_session_sync_event};
+use serde_json::json;
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -42,11 +43,17 @@ pub(super) fn wait_for_oauth_exchange(
 
         match listener.accept() {
             Ok((mut stream, _addr)) => {
-                let url = match parse_http_url(&mut stream) {
+                // Browsers open idle pre-connections and may probe other paths; one bad
+                // connection must not end the sign-in, so it is answered and skipped.
+                let url = match read_callback_request(&mut stream) {
                     Ok(value) => value,
                     Err(err) => {
+                        log_session_sync_event(
+                            "oauth_callback_request_error",
+                            json!({ "error": err, "action": "skip_connection" }),
+                        );
                         send_http_response(&mut stream, 400, "登录失败", &err);
-                        return Err(err);
+                        continue;
                     }
                 };
 
@@ -199,7 +206,14 @@ fn callback_param(url: &url::Url, key: &str) -> String {
         .unwrap_or_default()
 }
 
-fn parse_http_url(stream: &mut TcpStream) -> Result<url::Url, String> {
+/// Reads the request line of one accepted connection. On Windows and macOS an accepted
+/// socket inherits the listener's non-blocking mode, where the read timeout is ignored and
+/// a read before the browser has sent its request fails at once with `WouldBlock`, so the
+/// stream is switched back to blocking first.
+fn read_callback_request(stream: &mut TcpStream) -> Result<url::Url, String> {
+    stream
+        .set_nonblocking(false)
+        .map_err(|err| format!("设置 OAuth 请求为阻塞读取失败: {err}"))?;
     stream
         .set_read_timeout(Some(StdDuration::from_secs(5)))
         .map_err(|err| format!("设置 OAuth 请求读取超时失败: {err}"))?;
@@ -278,7 +292,49 @@ fn send_http_response(stream: &mut TcpStream, status: u16, title: &str, message:
 
 #[cfg(test)]
 mod tests {
-    use super::{callback_param, parse_manual_callback_url};
+    use super::{callback_param, parse_manual_callback_url, read_callback_request};
+    use std::{
+        io::Write,
+        net::{TcpListener, TcpStream},
+        thread,
+        time::Duration,
+    };
+
+    fn accept_from_nonblocking_listener(listener: &TcpListener) -> TcpStream {
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) => panic!("accept failed: {err}"),
+            }
+        }
+    }
+
+    #[test]
+    fn callback_request_waits_for_a_late_request_line() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut client = TcpStream::connect(addr).unwrap();
+            thread::sleep(Duration::from_millis(200));
+            client
+                .write_all(
+                    b"GET /auth/callback?code=abc&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n",
+                )
+                .unwrap();
+            client
+        });
+        let mut stream = accept_from_nonblocking_listener(&listener);
+
+        let url = read_callback_request(&mut stream).unwrap();
+
+        assert_eq!(url.path(), "/auth/callback");
+        assert_eq!(callback_param(&url, "code"), "abc");
+        drop(client.join().unwrap());
+    }
 
     #[test]
     fn parse_manual_callback_url_accepts_plain_query() {
