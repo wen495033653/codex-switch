@@ -1,6 +1,7 @@
 use super::{
     backup::session_manager_data_dir, catalog::*, codex_home::*, legacy_migration::*, model::*,
-    preview::*, rollout::*, state_db::*, status::*, trash::*, trash_store::*, util::*, zip::*,
+    preview::*, rollout::*, state_db::*, status::*, transfer::*, trash::*, trash_store::*, util::*,
+    zip::*,
 };
 use crate::codex_app_server::CodexDesktopThread;
 use rusqlite::{params, Connection};
@@ -1584,6 +1585,75 @@ fn legacy_migration_rejects_unwritable_schema_without_marker_or_backup() {
     assert!(err.contains("[unsupported]"), "{err}");
     assert!(!marker_exists);
     assert_eq!(backups_after, backups_before);
+}
+
+#[test]
+fn export_bundle_manifest_matches_exported_bytes_and_imports_cleanly() {
+    let base = temp_path("export-bundle");
+    let source_root = base.join("source");
+    let target_root = base.join("target");
+    let indexed_relative = PathBuf::from("sessions/2026/07/13/rollout-export-indexed.jsonl");
+    let unindexed_relative = PathBuf::from("archived_sessions/rollout-export-unindexed.jsonl");
+    let indexed = write_test_session(
+        &source_root,
+        &indexed_relative,
+        "019f0000-0000-7000-8000-000000000021",
+        "indexed",
+    );
+    write_test_session(
+        &source_root,
+        &unindexed_relative,
+        "019f0000-0000-7000-8000-000000000022",
+        "unindexed",
+    );
+    let connection = create_current_state_db(&source_root);
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, title) VALUES ('019f0000-0000-7000-8000-000000000021', ?1, 'Indexed')",
+            [indexed.to_string_lossy()],
+        )
+        .unwrap();
+    drop(connection);
+    fs::create_dir_all(target_root.join("sessions")).unwrap();
+
+    let bundle = collect_export_bundle(
+        &source_root,
+        vec![
+            path_to_slash(&indexed_relative),
+            path_to_slash(&unindexed_relative),
+            path_to_slash(&indexed_relative),
+            "../outside.jsonl".to_string(),
+        ],
+    )
+    .unwrap();
+    let zip_path = base.join("export.zip");
+    write_zip_store(&zip_path, &bundle.entries).unwrap();
+    let archive = ZipArchiveLite::open(&zip_path).unwrap();
+    let candidates = bundle
+        .sessions
+        .iter()
+        .map(|session| build_import_candidate(&target_root, &archive, session))
+        .collect::<Vec<_>>();
+    fs::remove_dir_all(&base).unwrap();
+
+    assert_eq!(bundle.sessions.len(), 2);
+    assert_eq!(bundle.errors.len(), 1, "{:?}", bundle.errors);
+    for (session, (name, data)) in bundle.sessions.iter().zip(&bundle.entries) {
+        assert_eq!(&session.relative_path, name);
+        assert_eq!(session.size_bytes, data.len() as u64);
+        assert_eq!(session.sha256, sha256_bytes(data));
+    }
+    assert_eq!(
+        bundle.total_size,
+        bundle
+            .entries
+            .iter()
+            .map(|(_, data)| data.len() as u64)
+            .sum::<u64>()
+    );
+    for candidate in candidates {
+        assert_eq!(candidate.unwrap().action, ImportAction::Import);
+    }
 }
 
 #[test]

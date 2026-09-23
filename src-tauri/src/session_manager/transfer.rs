@@ -42,15 +42,15 @@ struct ExportManifest {
 }
 
 #[derive(Debug, Clone)]
-struct ImportCandidate {
-    manifest: ManifestSession,
-    data: Vec<u8>,
-    target_path: PathBuf,
-    action: ImportAction,
+pub(super) struct ImportCandidate {
+    pub(super) manifest: ManifestSession,
+    pub(super) data: Vec<u8>,
+    pub(super) target_path: PathBuf,
+    pub(super) action: ImportAction,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum ImportAction {
+pub(super) enum ImportAction {
     Import,
     SkipSame,
     Conflict,
@@ -81,82 +81,14 @@ pub(super) fn export_conversations_impl(
         .into_path()
         .map_err(|err| format!("导出文件路径无效: {err}"))?;
 
-    let mut warnings = Vec::new();
-    let session_index = read_session_index(&root, &mut warnings);
-    let catalog = read_current_state_conversations(&root, &session_index)?;
-    warnings.extend(catalog.warnings);
-    let state_by_path = catalog
-        .conversations
-        .into_iter()
-        .map(|item| (conversation_path_key(Path::new(&item.source_path)), item))
-        .collect::<HashMap<_, _>>();
-    let mut seen = HashSet::new();
-    let mut entries = Vec::new();
-    let mut sessions = Vec::new();
-    let mut errors = Vec::new();
-    let mut total_size = 0u64;
-
-    for relative_path in relative_paths {
-        if !seen.insert(relative_path.clone()) {
-            continue;
-        }
-        let relative = match normalize_relative_path(&relative_path) {
-            Ok(relative) => relative,
-            Err(err) => {
-                errors.push(err);
-                continue;
-            }
-        };
-        if let Err(err) = ensure_session_relative_path(&relative) {
-            errors.push(err);
-            continue;
-        }
-        let path = root.join(&relative);
-        let status = match status_from_relative_path(&relative) {
-            Ok(status) => status,
-            Err(err) => {
-                errors.push(err);
-                continue;
-            }
-        };
-        let item = state_by_path
-            .get(&conversation_path_key(&path))
-            .cloned()
-            .map(|mut item| {
-                item.sha256 = sha256_file(&path).ok();
-                item
-            })
-            .map(Ok)
-            .unwrap_or_else(|| conversation_from_path(&root, &path, &status, true, &session_index));
-        match item {
-            Ok(item) => match fs::read(&path) {
-                Ok(data) => {
-                    let sha256 = item.sha256.clone().unwrap_or_else(|| sha256_bytes(&data));
-                    total_size += item.size_bytes;
-                    sessions.push(ManifestSession {
-                        id: item.id,
-                        title: item.title,
-                        updated_at: item.updated_at,
-                        status: item.status,
-                        relative_path: item.relative_path.clone(),
-                        size_bytes: item.size_bytes,
-                        sha256,
-                    });
-                    entries.push((item.relative_path, data));
-                }
-                Err(err) => errors.push(format!("读取会话文件失败 {}: {err}", path.display())),
-            },
-            Err(err) => errors.push(err),
-        }
-    }
-
-    if sessions.is_empty() {
+    let bundle = collect_export_bundle(&root, relative_paths)?;
+    if bundle.sessions.is_empty() {
         return Err(format!(
             "没有可导出的会话{}",
-            if errors.is_empty() {
+            if bundle.errors.is_empty() {
                 String::new()
             } else {
-                format!("：{}", errors.join("；"))
+                format!("：{}", bundle.errors.join("；"))
             }
         ));
     }
@@ -166,12 +98,12 @@ pub(super) fn export_conversations_impl(
         version: MANIFEST_VERSION,
         exported_at: now_string(),
         source_os: std::env::consts::OS.to_string(),
-        sessions,
+        sessions: bundle.sessions,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|err| format!("生成 manifest.json 失败: {err}"))?;
     let mut zip_entries = vec![("manifest.json".to_string(), manifest_bytes)];
-    zip_entries.extend(entries);
+    zip_entries.extend(bundle.entries);
     write_zip_store(&export_path, &zip_entries)?;
 
     Ok(json!({
@@ -180,12 +112,103 @@ pub(super) fn export_conversations_impl(
         "report": {
             "path": export_path.to_string_lossy().to_string(),
             "exported": manifest.sessions.len(),
-            "total_size": total_size,
-            "failed": errors.len(),
-            "errors": errors,
-            "warnings": warnings
+            "total_size": bundle.total_size,
+            "failed": bundle.errors.len(),
+            "errors": bundle.errors,
+            "warnings": bundle.warnings
         }
     }))
+}
+
+pub(super) struct ExportBundle {
+    pub(super) sessions: Vec<ManifestSession>,
+    pub(super) entries: Vec<(String, Vec<u8>)>,
+    pub(super) errors: Vec<String>,
+    pub(super) warnings: Vec<String>,
+    pub(super) total_size: u64,
+}
+
+/// Reads the selected sessions under the session I/O lock. Each file is read exactly once and that
+/// one buffer provides the zip entry, its SHA-256 and its size, so the manifest always matches
+/// the stored bytes even while Codex keeps appending to the file.
+pub(super) fn collect_export_bundle(
+    root: &Path,
+    relative_paths: Vec<String>,
+) -> Result<ExportBundle, String> {
+    let _io_guard = lock_codex_session_io("导出会话")?;
+    let mut warnings = Vec::new();
+    let session_index = read_session_index(root, &mut warnings);
+    let catalog = read_current_state_conversations(root, &session_index)?;
+    warnings.extend(catalog.warnings);
+    let state_by_path = catalog
+        .conversations
+        .into_iter()
+        .map(|item| (conversation_path_key(Path::new(&item.source_path)), item))
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    let mut bundle = ExportBundle {
+        sessions: Vec::new(),
+        entries: Vec::new(),
+        errors: Vec::new(),
+        warnings,
+        total_size: 0,
+    };
+
+    for relative_path in relative_paths {
+        if !seen.insert(relative_path.clone()) {
+            continue;
+        }
+        let relative = match normalize_relative_path(&relative_path).and_then(|relative| {
+            ensure_session_relative_path(&relative)?;
+            Ok(relative)
+        }) {
+            Ok(relative) => relative,
+            Err(err) => {
+                bundle.errors.push(err);
+                continue;
+            }
+        };
+        let path = root.join(&relative);
+        let status = match status_from_relative_path(&relative) {
+            Ok(status) => status,
+            Err(err) => {
+                bundle.errors.push(err);
+                continue;
+            }
+        };
+        let item = match state_by_path.get(&conversation_path_key(&path)) {
+            Some(item) => item.clone(),
+            None => match conversation_from_path(root, &path, &status, false, &session_index) {
+                Ok(item) => item,
+                Err(err) => {
+                    bundle.errors.push(err);
+                    continue;
+                }
+            },
+        };
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            Err(err) => {
+                bundle
+                    .errors
+                    .push(format!("读取会话文件失败 {}: {err}", path.display()));
+                continue;
+            }
+        };
+        let size_bytes = data.len() as u64;
+        bundle.total_size += size_bytes;
+        bundle.sessions.push(ManifestSession {
+            id: item.id,
+            title: item.title,
+            updated_at: item.updated_at,
+            status: item.status,
+            relative_path: item.relative_path.clone(),
+            size_bytes,
+            sha256: sha256_bytes(&data),
+        });
+        bundle.entries.push((item.relative_path, data));
+    }
+    Ok(bundle)
 }
 
 pub(super) fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, String> {
@@ -360,7 +383,7 @@ pub(super) fn import_conversations_impl(app: AppHandle, root: String) -> Result<
     }))
 }
 
-fn build_import_candidate(
+pub(super) fn build_import_candidate(
     root: &Path,
     archive: &ZipArchiveLite,
     session: &ManifestSession,
