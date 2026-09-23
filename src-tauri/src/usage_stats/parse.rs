@@ -1,4 +1,4 @@
-use super::model::{ParsedSession, TimestampValue, TokenUsage, TokenUsageEvent, UsageWindowStarts};
+use super::model::{ParsedSession, TimestampValue, TokenUsage, TokenUsageEvent};
 use crate::{
     json_util::{raw_string_field, string_field},
     time_util::parse_rfc3339_seconds,
@@ -10,10 +10,7 @@ use std::{
     path::Path,
 };
 
-pub(super) fn parse_session_file(
-    path: &Path,
-    window_starts: &UsageWindowStarts,
-) -> Result<ParsedSession, String> {
+pub(super) fn parse_session_file(path: &Path) -> Result<ParsedSession, String> {
     let file = fs::File::open(path)
         .map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
     let reader = BufReader::new(file);
@@ -21,16 +18,12 @@ pub(super) fn parse_session_file(
     for line in reader.lines() {
         let line =
             line.map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
-        parse_session_line(&line, &mut parsed, Some(window_starts));
+        parse_session_line(&line, &mut parsed);
     }
     Ok(parsed)
 }
 
-pub(super) fn parse_session_line(
-    line: &str,
-    parsed: &mut ParsedSession,
-    window_starts: Option<&UsageWindowStarts>,
-) {
+pub(super) fn parse_session_line(line: &str, parsed: &mut ParsedSession) {
     if !line.contains("\"session_meta\"")
         && !line.contains("\"turn_context\"")
         && !line.contains("\"token_count\"")
@@ -43,7 +36,7 @@ pub(super) fn parse_session_line(
     match raw_string_field(&value, "type").as_str() {
         "session_meta" => parse_session_meta_line(&value, parsed),
         "turn_context" => parse_turn_context_line(&value, parsed),
-        "event_msg" => parse_event_msg_line(&value, parsed, window_starts),
+        "event_msg" => parse_event_msg_line(&value, parsed),
         _ => {}
     }
 }
@@ -69,11 +62,7 @@ fn parse_turn_context_line(value: &Value, parsed: &mut ParsedSession) {
     update_model_from_payload(payload, parsed);
 }
 
-fn parse_event_msg_line(
-    value: &Value,
-    parsed: &mut ParsedSession,
-    window_starts: Option<&UsageWindowStarts>,
-) {
+fn parse_event_msg_line(value: &Value, parsed: &mut ParsedSession) {
     let payload = value.get("payload").unwrap_or(&Value::Null);
     if string_field(payload, "type") != "token_count" {
         return;
@@ -97,7 +86,7 @@ fn parse_event_msg_line(
     let Some(timestamp) = timestamp_from_payload(value, payload) else {
         return;
     };
-    apply_token_count_delta_to_windows(parsed, &usage, timestamp.seconds, window_starts);
+    record_token_count_delta(parsed, &usage, timestamp.seconds);
     let should_update = parsed
         .usage
         .as_ref()
@@ -110,11 +99,12 @@ fn parse_event_msg_line(
     }
 }
 
-fn apply_token_count_delta_to_windows(
+/// Stores what this token_count added since the previous one. The today / 7 day / 30 day
+/// windows are summed from these events in `aggregate`, so the scan does not depend on "now".
+fn record_token_count_delta(
     parsed: &mut ParsedSession,
     usage: &TokenUsage,
     timestamp_seconds: i64,
-    window_starts: Option<&UsageWindowStarts>,
 ) {
     let delta = parsed
         .previous_event_usage
@@ -134,21 +124,8 @@ fn apply_token_count_delta_to_windows(
 
     parsed.token_events.push(TokenUsageEvent {
         timestamp_seconds,
-        usage: delta.clone(),
+        usage: delta,
     });
-    let Some(window_starts) = window_starts else {
-        return;
-    };
-
-    if timestamp_seconds >= window_starts.today {
-        parsed.window_usage.today.add_assign(&delta);
-    }
-    if timestamp_seconds >= window_starts.days_7 {
-        parsed.window_usage.days_7.add_assign(&delta);
-    }
-    if timestamp_seconds >= window_starts.days_30 {
-        parsed.window_usage.days_30.add_assign(&delta);
-    }
 }
 
 fn timestamp_from_payload(root: &Value, payload: &Value) -> Option<TimestampValue> {

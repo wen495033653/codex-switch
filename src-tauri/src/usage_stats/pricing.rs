@@ -3,7 +3,7 @@ use super::{
     model::{EstimatedCost, TokenUsage},
 };
 use rusqlite::OptionalExtension;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 
 const META_PRICING_UPDATED_AT: &str = "pricing_updated_at";
 
@@ -107,8 +107,12 @@ struct ModelPrice {
     long_context_threshold: Option<u64>,
 }
 
-pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Result<bool, String> {
-    let existing: Option<String> = connection
+/// Re-prices every stored session after a price table change. Runs inside the scan transaction,
+/// so the new costs and the new pricing version are committed together or not at all.
+pub(super) fn recompute_existing_costs_if_needed(
+    transaction: &Transaction<'_>,
+) -> Result<bool, String> {
+    let existing: Option<String> = transaction
         .query_row(
             "SELECT value FROM meta WHERE key = ?1",
             [META_PRICING_UPDATED_AT],
@@ -119,8 +123,8 @@ pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Res
     if existing.as_deref() == Some(PRICING_UPDATED_AT) {
         return Ok(false);
     }
-    recompute_existing_costs(connection)?;
-    connection
+    recompute_existing_costs(transaction)?;
+    transaction
         .execute(
             r#"
             INSERT INTO meta(key, value) VALUES(?1, ?2)
@@ -132,7 +136,7 @@ pub(super) fn recompute_existing_costs_if_needed(connection: &Connection) -> Res
     Ok(true)
 }
 
-fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {
+fn recompute_existing_costs(transaction: &Transaction<'_>) -> Result<(), String> {
     struct ExistingUsageRow {
         session_id: String,
         model: String,
@@ -140,7 +144,7 @@ fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {
         usage: TokenUsage,
     }
 
-    let mut statement = connection
+    let mut statement = transaction
         .prepare(
             r#"
             SELECT session_id,
@@ -174,27 +178,29 @@ fn recompute_existing_costs(connection: &Connection) -> Result<(), String> {
         })
         .map_err(|err| db_error("读取 session token 费用失败", err))?;
 
+    let mut update = transaction
+        .prepare(
+            r#"
+            UPDATE session_usage
+            SET estimated_cost_usd = ?2,
+                priced = ?3,
+                pricing_context = ?4,
+                unpriced_reason = ?5
+            WHERE session_id = ?1
+            "#,
+        )
+        .map_err(|err| db_error("重新计算 session token 费用失败", err))?;
     for row in rows {
         let row = row.map_err(|err| db_error("读取 session token 费用失败", err))?;
         let estimated = estimate_cost(&row.model, &row.usage, row.model_context_window);
-        connection
-            .execute(
-                r#"
-                UPDATE session_usage
-                SET estimated_cost_usd = ?2,
-                    priced = ?3,
-                    pricing_context = ?4,
-                    unpriced_reason = ?5
-                WHERE session_id = ?1
-                "#,
-                params![
-                    row.session_id,
-                    estimated.cost_usd,
-                    if estimated.priced { 1 } else { 0 },
-                    estimated.pricing_context,
-                    estimated.unpriced_reason
-                ],
-            )
+        update
+            .execute(params![
+                row.session_id,
+                estimated.cost_usd,
+                if estimated.priced { 1 } else { 0 },
+                estimated.pricing_context,
+                estimated.unpriced_reason
+            ])
             .map_err(|err| db_error("重新计算 session token 费用失败", err))?;
     }
 

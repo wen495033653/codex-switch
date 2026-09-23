@@ -4,11 +4,11 @@ use super::{
         SCAN_OUTCOME_DUPLICATE, SCAN_OUTCOME_IGNORED, SCAN_OUTCOME_INDEXED,
         SCAN_OUTCOME_MISSING_ATTRIBUTION,
     },
-    model::{ScanWarnings, UsageScanSource, UsageWindowStarts},
+    model::{EstimatedCost, OwnerAttribution, ParsedSession, ScanWarnings, UsageScanSource},
     parse::parse_session_file,
     pricing::estimate_cost,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -30,14 +30,34 @@ pub(super) struct SessionScanState {
     outcome: String,
 }
 
+/// What the scan decided for one changed session file. Nothing is written while the scan reads
+/// and parses files; `write_session_scan_results` writes these later in one transaction.
+pub(super) struct SessionScanWrite {
+    source_path: String,
+    stamp: SessionFileStamp,
+    scan_scope: String,
+    session_id: String,
+    outcome: &'static str,
+    indexed: Option<IndexedSession>,
+}
+
+struct IndexedSession {
+    path: PathBuf,
+    parsed: ParsedSession,
+    attribution: OwnerAttribution,
+    estimated: EstimatedCost,
+}
+
+/// Walks one source and queues a write for every file whose stamp or scope changed. Returns
+/// whether anything was queued (or a changed file failed to parse), which is what tells
+/// `AggregateCache` that the previous summary can no longer be reused.
 pub(super) fn scan_codex_sessions(
     connection: &Connection,
     source: &UsageScanSource,
-    window_starts: &UsageWindowStarts,
     stats_started_at_seconds: i64,
-    now: &str,
     warnings: &mut ScanWarnings,
-    scan_states: &mut HashMap<String, SessionScanState>,
+    scan_states: &HashMap<String, SessionScanState>,
+    writes: &mut Vec<SessionScanWrite>,
 ) -> Result<bool, String> {
     let files = collect_session_files(&source.codex_home)?;
     let mut changed = false;
@@ -63,56 +83,39 @@ pub(super) fn scan_codex_sessions(
                 continue;
             }
         }
-        // everything below this point writes to the database
+        // everything below this point queues a database write
         changed = true;
 
-        let parsed = match parse_session_file(&path, window_starts) {
+        let parsed = match parse_session_file(&path) {
             Ok(parsed) => parsed,
             Err(err) => {
                 eprintln!("{err}");
                 continue;
             }
         };
-        if parsed.session_id.is_empty() || parsed.usage.is_none() || parsed.started_at.is_none() {
-            upsert_session_scan_state(
-                connection,
-                scan_states,
-                &source_path,
+        let mut queue = |session_id: &str, outcome: &'static str, indexed| {
+            writes.push(SessionScanWrite {
+                source_path: source_path.clone(),
                 stamp,
-                &scan_scope,
-                "",
-                SCAN_OUTCOME_IGNORED,
-                now,
-            )?;
+                scan_scope: scan_scope.clone(),
+                session_id: session_id.to_string(),
+                outcome,
+                indexed,
+            });
+        };
+        if parsed.session_id.is_empty() || parsed.usage.is_none() || parsed.started_at.is_none() {
+            queue("", SCAN_OUTCOME_IGNORED, None);
             continue;
         }
         if !seen_session_ids.insert(parsed.session_id.clone()) {
-            upsert_session_scan_state(
-                connection,
-                scan_states,
-                &source_path,
-                stamp,
-                &scan_scope,
-                &parsed.session_id,
-                SCAN_OUTCOME_DUPLICATE,
-                now,
-            )?;
+            queue(&parsed.session_id, SCAN_OUTCOME_DUPLICATE, None);
             continue;
         }
         let started_at = parsed.started_at.as_ref().expect("checked above");
         let updated_at = parsed.updated_at.as_ref().unwrap_or(started_at);
         if updated_at.seconds < stats_started_at_seconds {
             warnings.skipped_before_start += 1;
-            upsert_session_scan_state(
-                connection,
-                scan_states,
-                &source_path,
-                stamp,
-                &scan_scope,
-                &parsed.session_id,
-                SCAN_OUTCOME_BEFORE_START,
-                now,
-            )?;
+            queue(&parsed.session_id, SCAN_OUTCOME_BEFORE_START, None);
             continue;
         }
         let attribution = if let Some(attribution) = source.attribution_override.as_ref() {
@@ -122,43 +125,56 @@ pub(super) fn scan_codex_sessions(
                 find_owner_attribution(connection, &parsed.provider, started_at.seconds)?
             else {
                 warnings.missing_attribution += 1;
-                upsert_session_scan_state(
-                    connection,
-                    scan_states,
-                    &source_path,
-                    stamp,
-                    &scan_scope,
-                    &parsed.session_id,
-                    SCAN_OUTCOME_MISSING_ATTRIBUTION,
-                    now,
-                )?;
+                queue(&parsed.session_id, SCAN_OUTCOME_MISSING_ATTRIBUTION, None);
                 continue;
             };
             attribution
         };
         let usage = parsed.usage.as_ref().expect("checked above");
         let estimated = estimate_cost(&parsed.model, usage, parsed.model_context_window);
-        upsert_session_usage(
-            connection,
-            &path,
-            &parsed,
-            usage,
-            &attribution,
-            &estimated,
-            now,
-        )?;
-        upsert_session_scan_state(
-            connection,
-            scan_states,
-            &source_path,
-            stamp,
-            &scan_scope,
-            &parsed.session_id,
+        let session_id = parsed.session_id.clone();
+        queue(
+            &session_id,
             SCAN_OUTCOME_INDEXED,
-            now,
-        )?;
+            Some(IndexedSession {
+                path,
+                parsed,
+                attribution,
+                estimated,
+            }),
+        );
     }
     Ok(changed)
+}
+
+/// Writes the queued results of one refresh, in scan order, inside the caller's transaction. A
+/// failure leaves the transaction to roll back, so the scan states still show these files as
+/// changed and the next refresh repeats the work.
+pub(super) fn write_session_scan_results(
+    transaction: &Transaction<'_>,
+    writes: &[SessionScanWrite],
+    now: &str,
+) -> Result<(), String> {
+    for write in writes {
+        if let Some(indexed) = write.indexed.as_ref() {
+            let usage = indexed
+                .parsed
+                .usage
+                .as_ref()
+                .expect("indexed sessions have usage");
+            upsert_session_usage(
+                transaction,
+                &indexed.path,
+                &indexed.parsed,
+                usage,
+                &indexed.attribution,
+                &indexed.estimated,
+                now,
+            )?;
+        }
+        upsert_session_scan_state(transaction, write, now)?;
+    }
+    Ok(())
 }
 
 fn session_scan_scope(source: &UsageScanSource, stats_started_at_seconds: i64) -> String {
@@ -223,19 +239,13 @@ pub(super) fn load_session_scan_states(
         .map_err(|err| db_error("读取 token 统计扫描缓存失败", err))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn upsert_session_scan_state(
-    connection: &Connection,
-    scan_states: &mut HashMap<String, SessionScanState>,
-    source_path: &str,
-    stamp: SessionFileStamp,
-    scan_scope: &str,
-    session_id: &str,
-    outcome: &str,
+    transaction: &Transaction<'_>,
+    write: &SessionScanWrite,
     now: &str,
 ) -> Result<(), String> {
-    connection
-        .execute(
+    transaction
+        .prepare_cached(
             r#"
             INSERT INTO session_scan_state(
                 source_path, modified_nanos, file_size, scan_scope,
@@ -250,26 +260,19 @@ fn upsert_session_scan_state(
                 outcome = excluded.outcome,
                 last_scanned_at = excluded.last_scanned_at
             "#,
-            params![
-                source_path,
-                stamp.modified_nanos,
-                i64::try_from(stamp.size).unwrap_or(i64::MAX),
-                scan_scope,
-                session_id,
-                outcome,
-                now
-            ],
         )
+        .and_then(|mut statement| {
+            statement.execute(params![
+                write.source_path,
+                write.stamp.modified_nanos,
+                i64::try_from(write.stamp.size).unwrap_or(i64::MAX),
+                write.scan_scope,
+                write.session_id,
+                write.outcome,
+                now
+            ])
+        })
         .map_err(|err| db_error("写入 token 统计扫描缓存失败", err))?;
-    scan_states.insert(
-        source_path.to_string(),
-        SessionScanState {
-            stamp,
-            scan_scope: scan_scope.to_string(),
-            session_id: session_id.to_string(),
-            outcome: outcome.to_string(),
-        },
-    );
     Ok(())
 }
 

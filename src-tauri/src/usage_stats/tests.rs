@@ -170,7 +170,7 @@ fn parses_total_token_usage_and_context_window() {
     let line = token_count_line("2026-06-15T01:00:00Z", 100, 25, 50, 20, 150, 258_400);
     let mut parsed = ParsedSession::default();
 
-    parse_session_line(&line, &mut parsed, None);
+    parse_session_line(&line, &mut parsed);
 
     let usage = parsed.usage.unwrap();
     assert_eq!(usage.input_tokens, 100);
@@ -742,6 +742,523 @@ fn aggregates_usage_by_model_inside_each_window() {
         Some(240)
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_scan_write_rolls_back_the_whole_refresh() {
+    let root = temp_root("rollback");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    record_attribution_at(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        "2026-06-15T00:00:00Z",
+    )
+    .unwrap();
+    let path_a = write_session(
+        &codex_home,
+        "15",
+        "rollout-a",
+        &[
+            session_meta_line(
+                "session-a",
+                PROVIDER_SUBSCRIPTION,
+                "2026-06-15T01:00:00Z",
+                None,
+            ),
+            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
+        ],
+    );
+    let mut cache = None;
+    let first = cached_stats(&db_path, &codex_home, "2026-06-15T03:00:00Z", &mut cache);
+    assert_eq!(window_total(&first, "subscriptions", "sub-a", "all"), 120);
+
+    // Both files change; the scan state of the second one cannot be written.
+    let mut file = fs::OpenOptions::new().append(true).open(&path_a).unwrap();
+    use std::io::Write as _;
+    writeln!(
+        file,
+        "{}",
+        token_count_line("2026-06-15T02:01:00Z", 200, 0, 40, 10, 240, 258_400)
+    )
+    .unwrap();
+    drop(file);
+    let path_b = write_session(
+        &codex_home,
+        "15",
+        "rollout-b",
+        &[
+            session_meta_line(
+                "session-b",
+                PROVIDER_SUBSCRIPTION,
+                "2026-06-15T02:00:00Z",
+                None,
+            ),
+            token_count_line("2026-06-15T02:05:00Z", 80, 0, 20, 0, 100, 258_400),
+        ],
+    );
+    Connection::open(&db_path)
+        .unwrap()
+        .execute_batch(
+            r#"
+            CREATE TRIGGER fail_rollout_b BEFORE INSERT ON session_scan_state
+            WHEN NEW.source_path LIKE '%rollout-b%'
+            BEGIN SELECT RAISE(ABORT, 'forced failure'); END;
+            "#,
+        )
+        .unwrap();
+    let error = usage_stats_get_for_scan_sources(
+        &db_path,
+        &[sources::main_usage_scan_source(&codex_home)],
+        "2026-06-15T03:01:00Z",
+        &mut cache,
+    )
+    .unwrap_err();
+    assert!(error.contains("forced failure"), "{error}");
+
+    // Nothing of the failed refresh was committed, not even the writes for the first file.
+    assert_eq!(token_event_count(&db_path, &path_a), 1);
+    assert_eq!(
+        scan_state_last_scanned_at(&db_path, &path_a),
+        "2026-06-15T03:00:00Z"
+    );
+    assert_eq!(token_event_count(&db_path, &path_b), 0);
+
+    // The next refresh redoes both files instead of reusing the summary cached before them.
+    Connection::open(&db_path)
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_rollout_b")
+        .unwrap();
+    let recovered = cached_stats(&db_path, &codex_home, "2026-06-15T03:02:00Z", &mut cache);
+    assert_eq!(
+        window_total(&recovered, "subscriptions", "sub-a", "all"),
+        340
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn opening_an_older_database_adds_the_missing_session_usage_columns() {
+    let root = temp_root("schema-upgrade");
+    fs::create_dir_all(&root).unwrap();
+    let db_path = root.join("usage.sqlite");
+    Connection::open(&db_path)
+        .unwrap()
+        .execute_batch(
+            r#"
+            CREATE TABLE session_usage (
+                session_id TEXT PRIMARY KEY,
+                source_path TEXT NOT NULL,
+                owner_type TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                started_at_seconds INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_at_seconds INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                reasoning_output_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                model_context_window INTEGER,
+                estimated_cost_usd REAL,
+                priced INTEGER NOT NULL,
+                last_scanned_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+
+    open_usage_connection(&db_path, "2026-06-15T00:00:00Z").unwrap();
+    // A second open finds every column present and changes nothing.
+    let connection = open_usage_connection(&db_path, "2026-06-15T00:00:00Z").unwrap();
+
+    let columns: Vec<String> = connection
+        .prepare("PRAGMA table_info(session_usage)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut expected = vec!["pricing_context".to_string(), "unpriced_reason".to_string()];
+    for prefix in ["today", "days_7", "days_30"] {
+        for name in [
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+            "total_tokens",
+        ] {
+            expected.push(format!("{prefix}_{name}"));
+        }
+    }
+    assert_eq!(columns[19..], expected[..]);
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn relative_source_path(root: &Path, source_path: &str) -> String {
+    Path::new(source_path)
+        .strip_prefix(root)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Everything a scan leaves in the database except file stamps (they depend on the clock) and
+/// the unused `today_*`/`days_7_*`/`days_30_*` columns of `session_usage`.
+fn database_snapshot(db_path: &Path, root: &Path) -> Value {
+    let connection = Connection::open(db_path).unwrap();
+    let mut sessions = connection
+        .prepare(
+            r#"
+            SELECT session_id, source_path, owner_type, owner_id, provider, model,
+                   started_at, started_at_seconds, updated_at, updated_at_seconds,
+                   input_tokens, cached_input_tokens, output_tokens,
+                   reasoning_output_tokens, total_tokens, model_context_window,
+                   estimated_cost_usd, priced, pricing_context, unpriced_reason, last_scanned_at
+            FROM session_usage ORDER BY session_id
+            "#,
+        )
+        .unwrap();
+    let sessions: Vec<Value> = sessions
+        .query_map([], |row| {
+            Ok(json!({
+                "session_id": row.get::<_, String>(0)?,
+                "source_path": relative_source_path(root, &row.get::<_, String>(1)?),
+                "owner_type": row.get::<_, String>(2)?,
+                "owner_id": row.get::<_, String>(3)?,
+                "provider": row.get::<_, String>(4)?,
+                "model": row.get::<_, String>(5)?,
+                "started_at": row.get::<_, String>(6)?,
+                "started_at_seconds": row.get::<_, i64>(7)?,
+                "updated_at": row.get::<_, String>(8)?,
+                "updated_at_seconds": row.get::<_, i64>(9)?,
+                "tokens": [
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?
+                ],
+                "model_context_window": row.get::<_, Option<i64>>(15)?,
+                "estimated_cost_usd": row.get::<_, Option<f64>>(16)?,
+                "priced": row.get::<_, i64>(17)?,
+                "pricing_context": row.get::<_, Option<String>>(18)?,
+                "unpriced_reason": row.get::<_, Option<String>>(19)?,
+                "last_scanned_at": row.get::<_, String>(20)?
+            }))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut events = connection
+        .prepare(
+            r#"
+            SELECT source_path, event_index, timestamp_seconds, input_tokens,
+                   cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens
+            FROM session_token_events ORDER BY source_path, event_index
+            "#,
+        )
+        .unwrap();
+    let events: Vec<Value> = events
+        .query_map([], |row| {
+            Ok(json!([
+                relative_source_path(root, &row.get::<_, String>(0)?),
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?
+            ]))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut scan_states = connection
+        .prepare(
+            r#"
+            SELECT source_path, file_size, scan_scope, session_id, outcome, last_scanned_at
+            FROM session_scan_state ORDER BY source_path
+            "#,
+        )
+        .unwrap();
+    let scan_states: Vec<Value> = scan_states
+        .query_map([], |row| {
+            Ok(json!([
+                relative_source_path(root, &row.get::<_, String>(0)?),
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?
+            ]))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let pricing_version: String = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'pricing_updated_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    json!({
+        "session_usage": sessions,
+        "session_token_events": events,
+        "session_scan_state": scan_states,
+        "pricing_updated_at": pricing_version
+    })
+}
+
+fn write_session_file(path: &Path, lines: &[String]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, format!("{}\n", lines.join("\n"))).unwrap();
+}
+
+/// A fixture that walks every scan outcome: owners switching mid-way, a managed instance,
+/// short and long context pricing, an unpriced model, a counter reset, a duplicate session id,
+/// a session from before the statistics started, one without attribution, one without
+/// session_meta, and events that fall outside the 7 and 30 day windows. "Today" events sit
+/// within an hour before "now" (12:00Z) and all others at least 25 hours earlier, so the
+/// result does not depend on the local UTC offset between -11 and +11 hours.
+///
+/// The recorded baseline in `testdata/scan_baseline.json` was produced by the scan as of
+/// commit 347da53, before the scan writes moved into one transaction and before the
+/// `session_usage` window columns stopped being written. It only changes when the summary is
+/// meant to change.
+#[test]
+fn scan_fixture_summary_matches_recorded_baseline() {
+    let root = temp_root("baseline");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    let sessions = codex_home.join("sessions").join("2026");
+    let instances_dir = root.join("codex-app-instances");
+    let instance_root = instances_dir.join("api-cpa-plus");
+    set_stats_started_at(&db_path, "2026-06-05T00:00:00Z");
+    for (owner_type, owner_id, provider, started_at) in [
+        (
+            OWNER_TYPE_API_PROFILE,
+            "api-early",
+            PROVIDER_API,
+            "2026-04-01T00:00:00Z",
+        ),
+        (
+            OWNER_TYPE_SUBSCRIPTION,
+            "sub-a",
+            PROVIDER_SUBSCRIPTION,
+            "2026-06-05T00:00:00Z",
+        ),
+        (
+            OWNER_TYPE_API_PROFILE,
+            "api-a",
+            PROVIDER_API,
+            "2026-06-10T00:00:00Z",
+        ),
+        (
+            OWNER_TYPE_SUBSCRIPTION,
+            "sub-b",
+            PROVIDER_SUBSCRIPTION,
+            "2026-06-14T12:00:00Z",
+        ),
+    ] {
+        record_attribution_at(&db_path, owner_type, owner_id, provider, started_at).unwrap();
+    }
+    write_instance_marker(&instance_root, "api", "cpa-plus");
+
+    // sub-a, short context gpt-5.5, one event eight days ago and one yesterday.
+    write_session_file(
+        &sessions.join("06").join("07").join("rollout-s1.jsonl"),
+        &[
+            session_meta_line(
+                "s1",
+                PROVIDER_SUBSCRIPTION,
+                "2026-06-07T10:00:00Z",
+                Some("gpt-5.5"),
+            ),
+            token_count_line("2026-06-07T10:05:00Z", 100, 20, 30, 5, 130, 258_400),
+            token_count_line("2026-06-14T09:00:00Z", 400, 120, 90, 15, 490, 258_400),
+        ],
+    );
+    // sub-b after the switch, model from turn_context, events today.
+    let s2_path = sessions.join("06").join("15").join("rollout-s2.jsonl");
+    write_session_file(
+        &s2_path,
+        &[
+            session_meta_line("s2", PROVIDER_SUBSCRIPTION, "2026-06-15T11:00:00Z", None),
+            turn_context_line("2026-06-15T11:00:10Z", "gpt-5.4 mini"),
+            token_count_line("2026-06-15T11:05:00Z", 200, 50, 40, 10, 240, 128_000),
+            token_count_line("2026-06-15T11:40:00Z", 500, 100, 80, 20, 580, 128_000),
+        ],
+    );
+    // api-a, long context gpt-5.5, with a counter reset in the middle.
+    write_session_file(
+        &sessions.join("06").join("13").join("rollout-s3.jsonl"),
+        &[
+            session_meta_line("s3", PROVIDER_API, "2026-06-13T08:00:00Z", Some("gpt-5.5")),
+            token_count_line("2026-06-13T08:10:00Z", 1_000, 200, 300, 50, 1_300, 300_000),
+            token_count_line("2026-06-13T09:10:00Z", 400, 100, 100, 10, 500, 300_000),
+            token_count_line("2026-06-14T10:00:00Z", 900, 300, 200, 30, 1_100, 300_000),
+        ],
+    );
+    // api-a, a model without a price.
+    write_session_file(
+        &sessions.join("06").join("15").join("rollout-s4.jsonl"),
+        &[
+            session_meta_line(
+                "s4",
+                PROVIDER_API,
+                "2026-06-15T11:10:00Z",
+                Some("custom-model"),
+            ),
+            token_count_line("2026-06-15T11:20:00Z", 70, 0, 30, 0, 100, 64_000),
+        ],
+    );
+    // A second file with s2's id, sorted after it: counted once, as a duplicate.
+    write_session_file(
+        &sessions
+            .join("06")
+            .join("15")
+            .join("rollout-s2x-copy.jsonl"),
+        &[
+            session_meta_line("s2", PROVIDER_SUBSCRIPTION, "2026-06-15T11:00:00Z", None),
+            token_count_line("2026-06-15T11:05:00Z", 999, 0, 1, 0, 1_000, 128_000),
+        ],
+    );
+    // An archived session of sub-a.
+    write_session_file(
+        &codex_home
+            .join("archived_sessions")
+            .join("rollout-s5.jsonl"),
+        &[
+            session_meta_line(
+                "s5",
+                PROVIDER_SUBSCRIPTION,
+                "2026-06-09T07:00:00Z",
+                Some("gpt-5.5"),
+            ),
+            token_count_line("2026-06-09T07:30:00Z", 800, 600, 50, 10, 850, 258_400),
+        ],
+    );
+    // Entirely before the statistics started.
+    write_session_file(
+        &sessions.join("06").join("01").join("rollout-s6.jsonl"),
+        &[
+            session_meta_line("s6", PROVIDER_API, "2026-06-01T08:00:00Z", Some("gpt-5.5")),
+            token_count_line("2026-06-02T08:00:00Z", 100, 0, 20, 0, 120, 258_400),
+        ],
+    );
+    // A provider nobody switched to.
+    write_session_file(
+        &sessions.join("06").join("14").join("rollout-s7.jsonl"),
+        &[
+            session_meta_line(
+                "s7",
+                "other-provider",
+                "2026-06-14T08:00:00Z",
+                Some("gpt-5.5"),
+            ),
+            token_count_line("2026-06-14T08:10:00Z", 100, 0, 20, 0, 120, 258_400),
+        ],
+    );
+    // No session_meta line.
+    write_session_file(
+        &sessions.join("06").join("14").join("rollout-s8.jsonl"),
+        &[token_count_line(
+            "2026-06-14T08:10:00Z",
+            100,
+            0,
+            20,
+            0,
+            120,
+            258_400,
+        )],
+    );
+    // Started before the statistics, still active after; one event older than 30 days.
+    write_session_file(
+        &sessions.join("05").join("01").join("rollout-s10.jsonl"),
+        &[
+            session_meta_line("s10", PROVIDER_API, "2026-05-01T08:00:00Z", None),
+            turn_context_line("2026-05-01T08:00:10Z", "gpt-5.6"),
+            token_count_line("2026-05-01T08:10:00Z", 1_000, 400, 100, 0, 1_100, 128_000),
+            token_count_line(
+                "2026-06-12T08:10:00Z",
+                3_000,
+                1_400,
+                300,
+                40,
+                3_300,
+                128_000,
+            ),
+        ],
+    );
+    // Managed instance: attributed by its marker.
+    write_session_file(
+        &instance_root
+            .join("codex-home")
+            .join("sessions")
+            .join("2026")
+            .join("06")
+            .join("15")
+            .join("rollout-s11.jsonl"),
+        &[
+            session_meta_line("s11", PROVIDER_API, "2026-06-15T11:15:00Z", None),
+            turn_context_line("2026-06-15T11:15:10Z", "gpt-5.4-mini"),
+            token_count_line("2026-06-15T11:30:00Z", 600, 200, 60, 6, 660, 128_000),
+        ],
+    );
+
+    let sources = || {
+        let mut sources = vec![main_usage_scan_source(&codex_home)];
+        sources.extend(managed_instance_usage_scan_sources(&instances_dir).unwrap());
+        sources
+    };
+    let mut cache = None;
+    let mut run = |now: &str| {
+        usage_stats_get_for_scan_sources(&db_path, &sources(), now, &mut cache).unwrap()
+    };
+
+    let first = run("2026-06-15T12:00:00Z");
+    let mut file = fs::OpenOptions::new().append(true).open(&s2_path).unwrap();
+    use std::io::Write as _;
+    writeln!(
+        file,
+        "{}",
+        token_count_line("2026-06-15T12:10:00Z", 700, 150, 100, 30, 830, 128_000)
+    )
+    .unwrap();
+    drop(file);
+    write_session_file(
+        &sessions.join("06").join("15").join("rollout-s12.jsonl"),
+        &[
+            session_meta_line("s12", PROVIDER_SUBSCRIPTION, "2026-06-15T12:15:00Z", None),
+            turn_context_line("2026-06-15T12:15:10Z", "gpt-5.6-luna"),
+            token_count_line("2026-06-15T12:20:00Z", 300, 0, 50, 5, 350, 128_000),
+        ],
+    );
+    let appended = run("2026-06-15T12:30:00Z");
+    let unchanged = run("2026-06-15T12:30:30Z");
+    let next_day = run("2026-06-16T12:00:00Z");
+    // Neither of the last two runs writes, so this is also the state after the append.
+    let actual = json!({
+        "first": first,
+        "appended": appended,
+        "next_day": next_day,
+        "database": database_snapshot(&db_path, &root)
+    });
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(unchanged, appended);
+    let expected: Value =
+        serde_json::from_str(include_str!("testdata/scan_baseline.json")).unwrap();
+    assert_eq!(actual, expected);
 }
 
 #[test]

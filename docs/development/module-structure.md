@@ -28,7 +28,7 @@
 - **codex_launcher**：`codex_launcher.rs` 是命令层。其下 `codex_app_open` → `codex_app_watcher`、`remote_control`、`cdp`、`process_control` → `shell`；`codex_app_instances` → `desktop_install`、`instance_config`；`remote_control` → `backend_status`；`proxy_env`、`ide_snapshot` 各自独立。`codex_app_watcher` 不依赖 `codex_app_instances`，桌面兼容状态由命令层取好后传入。
 - **quota → accounts**：单向依赖。`accounts::usage` 属于账号领域，`quota` 是建立在它上面的调度层，这个边界不要动。
 
-用量统计的缓存（`aggregate` 里的 `AggregateCache`）是精确缓存，不按时间过期：只有数据库路径相同、本次扫描没有写入、今天的起点没变、且没有事件跨过 7 天或 30 天的分界时，才复用上次的结果。缓存和扫描锁放在同一个 `Mutex` 里，所以读不到扫描中途的状态。改扫描或计价时，任何会改变汇总结果的写入，都必须让 `scan_codex_sessions` 或 `recompute_existing_costs_if_needed` 返回 `true`。
+用量统计的缓存（`aggregate` 里的 `AggregateCache`）是精确缓存，不按时间过期：只有数据库路径相同、本次扫描没有写入、今天的起点没变、且没有事件跨过 7 天或 30 天的分界时，才复用上次的结果。缓存和扫描锁放在同一个 `Mutex` 里，所以读不到扫描中途的状态。改扫描或计价时，任何会改变汇总结果的写入，都必须让 `scan_codex_sessions` 或 `recompute_existing_costs_if_needed` 返回 `true`。一次刷新的全部写入在同一个事务里完成，汇总成功后才提交，失败时整体回滚，详见 [usage-stats.md](usage-stats.md)。
 
 ## 前端
 

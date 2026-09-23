@@ -29,18 +29,6 @@ impl TokenUsage {
         self.total_tokens > 0
     }
 
-    pub(super) fn add_assign(&mut self, other: &TokenUsage) {
-        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
-        self.cached_input_tokens = self
-            .cached_input_tokens
-            .saturating_add(other.cached_input_tokens);
-        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
-        self.reasoning_output_tokens = self
-            .reasoning_output_tokens
-            .saturating_add(other.reasoning_output_tokens);
-        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
-    }
-
     pub(super) fn saturating_delta(&self, previous: &TokenUsage) -> TokenUsage {
         TokenUsage {
             input_tokens: self.input_tokens.saturating_sub(previous.input_tokens),
@@ -61,13 +49,6 @@ pub(super) struct UsageWindowStarts {
     pub(super) today: i64,
     pub(super) days_7: i64,
     pub(super) days_30: i64,
-}
-
-#[derive(Default)]
-pub(super) struct TokenUsageWindows {
-    pub(super) today: TokenUsage,
-    pub(super) days_7: TokenUsage,
-    pub(super) days_30: TokenUsage,
 }
 
 pub(super) struct TokenUsageEvent {
@@ -91,7 +72,6 @@ pub(super) struct ParsedSession {
     pub(super) usage: Option<TokenUsage>,
     pub(super) model_context_window: Option<u64>,
     pub(super) previous_event_usage: Option<TokenUsage>,
-    pub(super) window_usage: TokenUsageWindows,
     pub(super) token_events: Vec<TokenUsageEvent>,
 }
 

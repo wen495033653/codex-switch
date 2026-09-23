@@ -7,8 +7,11 @@ use crate::{
     time_util::parse_rfc3339_seconds,
 };
 use rusqlite::OptionalExtension;
-use rusqlite::{params, Connection};
-use std::path::{Path, PathBuf};
+use rusqlite::{params, Connection, Transaction};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 pub(super) const META_STATS_STARTED_AT: &str = "stats_started_at";
 
@@ -132,68 +135,46 @@ fn ensure_database(connection: &Connection, now: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Columns added to `session_usage` after its first release. The `today_*`, `days_7_*` and
+/// `days_30_*` columns are no longer written or read: the windows are summed from
+/// `session_token_events`. They stay in the schema with DEFAULT 0 instead of being dropped, so
+/// no migration is needed and older builds can still open the database.
 fn ensure_session_usage_columns(connection: &Connection) -> Result<(), String> {
-    ensure_table_column(
-        connection,
-        "session_usage",
-        "pricing_context",
-        "pricing_context TEXT",
-    )?;
-    ensure_table_column(
-        connection,
-        "session_usage",
-        "unpriced_reason",
-        "unpriced_reason TEXT",
-    )?;
-    ensure_window_usage_columns(connection, "today")?;
-    ensure_window_usage_columns(connection, "days_7")?;
-    ensure_window_usage_columns(connection, "days_30")?;
-    Ok(())
-}
-
-fn ensure_window_usage_columns(connection: &Connection, prefix: &str) -> Result<(), String> {
-    for (name, definition) in [
-        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
-        ("cached_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
-        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
-        ("reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0"),
-        ("total_tokens", "INTEGER NOT NULL DEFAULT 0"),
-    ] {
-        let column = format!("{prefix}_{name}");
-        ensure_table_column(
-            connection,
-            "session_usage",
-            &column,
-            &format!("{column} {definition}"),
-        )?;
-    }
-    Ok(())
-}
-
-fn ensure_table_column(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-    definition: &str,
-) -> Result<(), String> {
-    let pragma_sql = format!("PRAGMA table_info({table})");
     let mut statement = connection
-        .prepare(&pragma_sql)
+        .prepare("PRAGMA table_info(session_usage)")
         .map_err(|err| db_error("读取 token 统计库结构失败", err))?;
-    let columns = statement
+    let existing = statement
         .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| db_error("读取 token 统计库结构失败", err))?
+        .collect::<Result<HashSet<_>, _>>()
         .map_err(|err| db_error("读取 token 统计库结构失败", err))?;
-    for existing_column in columns {
-        let existing_column =
-            existing_column.map_err(|err| db_error("读取 token 统计库结构失败", err))?;
-        if existing_column == column {
-            return Ok(());
+
+    let mut required = vec![
+        ("pricing_context".to_string(), "TEXT"),
+        ("unpriced_reason".to_string(), "TEXT"),
+    ];
+    for prefix in ["today", "days_7", "days_30"] {
+        for name in [
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+            "total_tokens",
+        ] {
+            required.push((format!("{prefix}_{name}"), "INTEGER NOT NULL DEFAULT 0"));
         }
     }
-    let alter_sql = format!("ALTER TABLE {table} ADD COLUMN {definition}");
-    connection
-        .execute(&alter_sql, [])
-        .map_err(|err| db_error("升级 token 统计库结构失败", err))?;
+    for (column, definition) in required {
+        if existing.contains(&column) {
+            continue;
+        }
+        connection
+            .execute(
+                &format!("ALTER TABLE session_usage ADD COLUMN {column} {definition}"),
+                [],
+            )
+            .map_err(|err| db_error("升级 token 统计库结构失败", err))?;
+    }
     Ok(())
 }
 
@@ -280,8 +261,10 @@ pub(super) fn find_owner_attribution(
         .map_err(|err| db_error("查询 token 统计归属失败", err))
 }
 
+/// Writes one indexed session and replaces its token events. Takes the scan transaction, so the
+/// session row, its events and its scan state are committed together with the rest of the scan.
 pub(super) fn upsert_session_usage(
-    connection: &Connection,
+    transaction: &Transaction<'_>,
     path: &Path,
     parsed: &ParsedSession,
     usage: &TokenUsage,
@@ -295,8 +278,8 @@ pub(super) fn upsert_session_usage(
         .model_context_window
         .and_then(|value| i64::try_from(value).ok());
     let estimated_cost_usd = estimated.cost_usd;
-    connection
-        .execute(
+    transaction
+        .prepare_cached(
             r#"
             INSERT INTO session_usage(
                 session_id,
@@ -314,21 +297,6 @@ pub(super) fn upsert_session_usage(
                 output_tokens,
                 reasoning_output_tokens,
                 total_tokens,
-                today_input_tokens,
-                today_cached_input_tokens,
-                today_output_tokens,
-                today_reasoning_output_tokens,
-                today_total_tokens,
-                days_7_input_tokens,
-                days_7_cached_input_tokens,
-                days_7_output_tokens,
-                days_7_reasoning_output_tokens,
-                days_7_total_tokens,
-                days_30_input_tokens,
-                days_30_cached_input_tokens,
-                days_30_output_tokens,
-                days_30_reasoning_output_tokens,
-                days_30_total_tokens,
                 model_context_window,
                 estimated_cost_usd,
                 priced,
@@ -336,7 +304,7 @@ pub(super) fn upsert_session_usage(
                 unpriced_reason,
                 last_scanned_at
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
             ON CONFLICT(session_id) DO UPDATE SET
                 source_path = excluded.source_path,
                 owner_type = excluded.owner_type,
@@ -352,21 +320,6 @@ pub(super) fn upsert_session_usage(
                 output_tokens = excluded.output_tokens,
                 reasoning_output_tokens = excluded.reasoning_output_tokens,
                 total_tokens = excluded.total_tokens,
-                today_input_tokens = excluded.today_input_tokens,
-                today_cached_input_tokens = excluded.today_cached_input_tokens,
-                today_output_tokens = excluded.today_output_tokens,
-                today_reasoning_output_tokens = excluded.today_reasoning_output_tokens,
-                today_total_tokens = excluded.today_total_tokens,
-                days_7_input_tokens = excluded.days_7_input_tokens,
-                days_7_cached_input_tokens = excluded.days_7_cached_input_tokens,
-                days_7_output_tokens = excluded.days_7_output_tokens,
-                days_7_reasoning_output_tokens = excluded.days_7_reasoning_output_tokens,
-                days_7_total_tokens = excluded.days_7_total_tokens,
-                days_30_input_tokens = excluded.days_30_input_tokens,
-                days_30_cached_input_tokens = excluded.days_30_cached_input_tokens,
-                days_30_output_tokens = excluded.days_30_output_tokens,
-                days_30_reasoning_output_tokens = excluded.days_30_reasoning_output_tokens,
-                days_30_total_tokens = excluded.days_30_total_tokens,
                 model_context_window = excluded.model_context_window,
                 estimated_cost_usd = excluded.estimated_cost_usd,
                 priced = excluded.priced,
@@ -374,7 +327,9 @@ pub(super) fn upsert_session_usage(
                 unpriced_reason = excluded.unpriced_reason,
                 last_scanned_at = excluded.last_scanned_at
             "#,
-            params![
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
                 parsed.session_id,
                 path.to_string_lossy().to_string(),
                 attribution.owner_type,
@@ -390,89 +345,61 @@ pub(super) fn upsert_session_usage(
                 i64::try_from(usage.output_tokens).unwrap_or(i64::MAX),
                 i64::try_from(usage.reasoning_output_tokens).unwrap_or(i64::MAX),
                 i64::try_from(usage.total_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.today.input_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.today.cached_input_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.today.output_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.today.reasoning_output_tokens)
-                    .unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.today.total_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_7.input_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_7.cached_input_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_7.output_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_7.reasoning_output_tokens)
-                    .unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_7.total_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_30.input_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_30.cached_input_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_30.output_tokens).unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_30.reasoning_output_tokens)
-                    .unwrap_or(i64::MAX),
-                i64::try_from(parsed.window_usage.days_30.total_tokens).unwrap_or(i64::MAX),
                 model_context_window,
                 estimated_cost_usd,
                 if estimated.priced { 1 } else { 0 },
                 estimated.pricing_context,
                 estimated.unpriced_reason,
                 now
-            ],
-        )
+            ])
+        })
         .map_err(|err| db_error("写入 session token 统计失败", err))?;
-    replace_session_token_events(connection, path, &parsed.token_events)?;
+    replace_session_token_events(transaction, path, &parsed.token_events)?;
     Ok(())
 }
 
 fn replace_session_token_events(
-    connection: &Connection,
+    transaction: &Transaction<'_>,
     path: &Path,
     events: &[TokenUsageEvent],
 ) -> Result<(), String> {
     // token delta 很小，持久化后滚动窗口可直接从 SQLite 计算；文件未变化时
     // 无需为了 today / 7d / 30d 的时间边界重新读取 JSONL。
     let source_path = path.to_string_lossy().into_owned();
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|err| db_error("开启 session token 事件事务失败", err))?;
     transaction
-        .execute(
-            "DELETE FROM session_token_events WHERE source_path = ?1",
-            [&source_path],
-        )
+        .prepare_cached("DELETE FROM session_token_events WHERE source_path = ?1")
+        .and_then(|mut statement| statement.execute([&source_path]))
         .map_err(|err| db_error("清理 session token 事件失败", err))?;
-    {
-        let mut statement = transaction
-            .prepare_cached(
-                r#"
-                INSERT INTO session_token_events(
-                    source_path,
-                    event_index,
-                    timestamp_seconds,
-                    input_tokens,
-                    cached_input_tokens,
-                    output_tokens,
-                    reasoning_output_tokens,
-                    total_tokens
-                )
-                VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                "#,
+    let mut statement = transaction
+        .prepare_cached(
+            r#"
+            INSERT INTO session_token_events(
+                source_path,
+                event_index,
+                timestamp_seconds,
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                reasoning_output_tokens,
+                total_tokens
             )
-            .map_err(|err| db_error("准备 session token 事件写入失败", err))?;
-        for (event_index, event) in events.iter().enumerate() {
-            statement
-                .execute(params![
-                    source_path,
-                    i64::try_from(event_index).unwrap_or(i64::MAX),
-                    event.timestamp_seconds,
-                    i64::try_from(event.usage.input_tokens).unwrap_or(i64::MAX),
-                    i64::try_from(event.usage.cached_input_tokens).unwrap_or(i64::MAX),
-                    i64::try_from(event.usage.output_tokens).unwrap_or(i64::MAX),
-                    i64::try_from(event.usage.reasoning_output_tokens).unwrap_or(i64::MAX),
-                    i64::try_from(event.usage.total_tokens).unwrap_or(i64::MAX)
-                ])
-                .map_err(|err| db_error("写入 session token 事件失败", err))?;
-        }
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+        )
+        .map_err(|err| db_error("准备 session token 事件写入失败", err))?;
+    for (event_index, event) in events.iter().enumerate() {
+        statement
+            .execute(params![
+                source_path,
+                i64::try_from(event_index).unwrap_or(i64::MAX),
+                event.timestamp_seconds,
+                i64::try_from(event.usage.input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(event.usage.cached_input_tokens).unwrap_or(i64::MAX),
+                i64::try_from(event.usage.output_tokens).unwrap_or(i64::MAX),
+                i64::try_from(event.usage.reasoning_output_tokens).unwrap_or(i64::MAX),
+                i64::try_from(event.usage.total_tokens).unwrap_or(i64::MAX)
+            ])
+            .map_err(|err| db_error("写入 session token 事件失败", err))?;
     }
-    transaction
-        .commit()
-        .map_err(|err| db_error("提交 session token 事件失败", err))?;
     Ok(())
 }

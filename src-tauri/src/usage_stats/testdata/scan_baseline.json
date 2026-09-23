@@ -1,0 +1,2532 @@
+{
+  "appended": {
+    "api_profiles": {
+      "api-a": {
+        "all": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.021699999999999997,
+              "input_tokens": 1000,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 300,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 50,
+              "session_count": 1,
+              "total_tokens": 1300,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": null,
+          "input_tokens": 1070,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 330,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 50,
+          "session_count": 2,
+          "total_tokens": 1400,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "days_30": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 500,
+              "estimated_cost_usd": 0.037,
+              "input_tokens": 1900,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 500,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 80,
+              "session_count": 1,
+              "total_tokens": 2400,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 500,
+          "estimated_cost_usd": null,
+          "input_tokens": 1970,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 530,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 80,
+          "session_count": 2,
+          "total_tokens": 2500,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "days_7": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 500,
+              "estimated_cost_usd": 0.037,
+              "input_tokens": 1900,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 500,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 80,
+              "session_count": 1,
+              "total_tokens": 2400,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 500,
+          "estimated_cost_usd": null,
+          "input_tokens": 1970,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 530,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 80,
+          "session_count": 2,
+          "total_tokens": 2500,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "today": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            }
+          },
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": null,
+          "input_tokens": 70,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 30,
+          "priced": false,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 1,
+          "total_tokens": 100,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        }
+      },
+      "api-early": {
+        "all": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1400,
+              "estimated_cost_usd": 0.0177,
+              "input_tokens": 3000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 300,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 3300,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1400,
+          "estimated_cost_usd": 0.0177,
+          "input_tokens": 3000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 300,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 3300,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1000,
+              "estimated_cost_usd": 0.0115,
+              "input_tokens": 2000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 200,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 2200,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1000,
+          "estimated_cost_usd": 0.0115,
+          "input_tokens": 2000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 200,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 2200,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1000,
+              "estimated_cost_usd": 0.0115,
+              "input_tokens": 2000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 200,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 2200,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1000,
+          "estimated_cost_usd": 0.0115,
+          "input_tokens": 2000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 200,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 2200,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "cpa-plus": {
+        "all": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        }
+      }
+    },
+    "ok": true,
+    "pricing_source": "https://developers.openai.com/api/docs/pricing",
+    "pricing_updated_at": "2026-07-10",
+    "subscriptions": {
+      "sub-a": {
+        "all": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 720,
+              "estimated_cost_usd": 0.006959999999999999,
+              "input_tokens": 1200,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 140,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 25,
+              "session_count": 2,
+              "total_tokens": 1340,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 720,
+          "estimated_cost_usd": 0.006959999999999999,
+          "input_tokens": 1200,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 140,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 25,
+          "session_count": 2,
+          "total_tokens": 1340,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 720,
+              "estimated_cost_usd": 0.006959999999999999,
+              "input_tokens": 1200,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 140,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 25,
+              "session_count": 2,
+              "total_tokens": 1340,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 720,
+          "estimated_cost_usd": 0.006959999999999999,
+          "input_tokens": 1200,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 140,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 25,
+          "session_count": 2,
+          "total_tokens": 1340,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 700,
+              "estimated_cost_usd": 0.0056500000000000005,
+              "input_tokens": 1100,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 110,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 20,
+              "session_count": 2,
+              "total_tokens": 1210,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 700,
+          "estimated_cost_usd": 0.0056500000000000005,
+          "input_tokens": 1100,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 110,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 20,
+          "session_count": 2,
+          "total_tokens": 1210,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "sub-b": {
+        "all": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        }
+      }
+    },
+    "warnings": [
+      "1 个 session 缺少 Codex Switch 归属记录，未计入卡片",
+      "1 个 session 缺少可用价格，仅显示 tokens"
+    ]
+  },
+  "database": {
+    "pricing_updated_at": "2026-07-10",
+    "session_scan_state": [
+      [
+        "codex-app-instances/api-cpa-plus/codex-home/sessions/2026/06/15/rollout-s11.jsonl",
+        495,
+        "1780617600:api_profile:cpa-plus",
+        "s11",
+        "indexed",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/archived_sessions/rollout-s5.jsonl",
+        422,
+        "1780617600:automatic",
+        "s5",
+        "indexed",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/05/01/rollout-s10.jsonl",
+        759,
+        "1780617600:automatic",
+        "s10",
+        "indexed",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/01/rollout-s6.jsonl",
+        416,
+        "1780617600:automatic",
+        "s6",
+        "before_start",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/07/rollout-s1.jsonl",
+        682,
+        "1780617600:automatic",
+        "s1",
+        "indexed",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/13/rollout-s3.jsonl",
+        949,
+        "1780617600:automatic",
+        "s3",
+        "indexed",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/14/rollout-s7.jsonl",
+        427,
+        "1780617600:automatic",
+        "s7",
+        "missing_attribution",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/14/rollout-s8.jsonl",
+        259,
+        "1780617600:automatic",
+        "",
+        "ignored",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s12.jsonl",
+        496,
+        "1780617600:automatic",
+        "s12",
+        "indexed",
+        "2026-06-15T12:30:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s2.jsonl",
+        1022,
+        "1780617600:automatic",
+        "s2",
+        "indexed",
+        "2026-06-15T12:30:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s2x-copy.jsonl",
+        401,
+        "1780617600:automatic",
+        "s2",
+        "duplicate",
+        "2026-06-15T12:00:00Z"
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s4.jsonl",
+        419,
+        "1780617600:automatic",
+        "s4",
+        "indexed",
+        "2026-06-15T12:00:00Z"
+      ]
+    ],
+    "session_token_events": [
+      [
+        "codex-app-instances/api-cpa-plus/codex-home/sessions/2026/06/15/rollout-s11.jsonl",
+        0,
+        1781523000,
+        600,
+        200,
+        60,
+        6,
+        660
+      ],
+      [
+        "codex/archived_sessions/rollout-s5.jsonl",
+        0,
+        1780990200,
+        800,
+        600,
+        50,
+        10,
+        850
+      ],
+      [
+        "codex/sessions/2026/05/01/rollout-s10.jsonl",
+        0,
+        1777623000,
+        1000,
+        400,
+        100,
+        0,
+        1100
+      ],
+      [
+        "codex/sessions/2026/05/01/rollout-s10.jsonl",
+        1,
+        1781251800,
+        2000,
+        1000,
+        200,
+        40,
+        2200
+      ],
+      [
+        "codex/sessions/2026/06/07/rollout-s1.jsonl",
+        0,
+        1780826700,
+        100,
+        20,
+        30,
+        5,
+        130
+      ],
+      [
+        "codex/sessions/2026/06/07/rollout-s1.jsonl",
+        1,
+        1781427600,
+        300,
+        100,
+        60,
+        10,
+        360
+      ],
+      [
+        "codex/sessions/2026/06/13/rollout-s3.jsonl",
+        0,
+        1781338200,
+        1000,
+        200,
+        300,
+        50,
+        1300
+      ],
+      [
+        "codex/sessions/2026/06/13/rollout-s3.jsonl",
+        1,
+        1781341800,
+        400,
+        100,
+        100,
+        10,
+        500
+      ],
+      [
+        "codex/sessions/2026/06/13/rollout-s3.jsonl",
+        2,
+        1781431200,
+        500,
+        200,
+        100,
+        20,
+        600
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s12.jsonl",
+        0,
+        1781526000,
+        300,
+        0,
+        50,
+        5,
+        350
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s2.jsonl",
+        0,
+        1781521500,
+        200,
+        50,
+        40,
+        10,
+        240
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s2.jsonl",
+        1,
+        1781523600,
+        300,
+        50,
+        40,
+        10,
+        340
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s2.jsonl",
+        2,
+        1781525400,
+        200,
+        50,
+        20,
+        10,
+        250
+      ],
+      [
+        "codex/sessions/2026/06/15/rollout-s4.jsonl",
+        0,
+        1781522400,
+        70,
+        0,
+        30,
+        0,
+        100
+      ]
+    ],
+    "session_usage": [
+      {
+        "estimated_cost_usd": 0.00416,
+        "last_scanned_at": "2026-06-15T12:00:00Z",
+        "model": "gpt-5.5",
+        "model_context_window": 258400,
+        "owner_id": "sub-a",
+        "owner_type": "subscription",
+        "priced": 1,
+        "pricing_context": "standard_short_context",
+        "provider": "openai",
+        "session_id": "s1",
+        "source_path": "codex/sessions/2026/06/07/rollout-s1.jsonl",
+        "started_at": "2026-06-07T10:00:00Z",
+        "started_at_seconds": 1780826400,
+        "tokens": [
+          400,
+          120,
+          90,
+          15,
+          490
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-14T09:00:00Z",
+        "updated_at_seconds": 1781427600
+      },
+      {
+        "estimated_cost_usd": 0.0177,
+        "last_scanned_at": "2026-06-15T12:00:00Z",
+        "model": "gpt-5.6",
+        "model_context_window": 128000,
+        "owner_id": "api-early",
+        "owner_type": "api_profile",
+        "priced": 1,
+        "pricing_context": "standard_short_context",
+        "provider": "api",
+        "session_id": "s10",
+        "source_path": "codex/sessions/2026/05/01/rollout-s10.jsonl",
+        "started_at": "2026-05-01T08:00:00Z",
+        "started_at_seconds": 1777622400,
+        "tokens": [
+          3000,
+          1400,
+          300,
+          40,
+          3300
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-12T08:10:00Z",
+        "updated_at_seconds": 1781251800
+      },
+      {
+        "estimated_cost_usd": 0.000585,
+        "last_scanned_at": "2026-06-15T12:00:00Z",
+        "model": "gpt-5.4-mini",
+        "model_context_window": 128000,
+        "owner_id": "cpa-plus",
+        "owner_type": "api_profile",
+        "priced": 1,
+        "pricing_context": "standard_short_context",
+        "provider": "api",
+        "session_id": "s11",
+        "source_path": "codex-app-instances/api-cpa-plus/codex-home/sessions/2026/06/15/rollout-s11.jsonl",
+        "started_at": "2026-06-15T11:15:00Z",
+        "started_at_seconds": 1781522100,
+        "tokens": [
+          600,
+          200,
+          60,
+          6,
+          660
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-15T11:30:00Z",
+        "updated_at_seconds": 1781523000
+      },
+      {
+        "estimated_cost_usd": 0.0006000000000000001,
+        "last_scanned_at": "2026-06-15T12:30:00Z",
+        "model": "gpt-5.6-luna",
+        "model_context_window": 128000,
+        "owner_id": "sub-b",
+        "owner_type": "subscription",
+        "priced": 1,
+        "pricing_context": "standard_short_context",
+        "provider": "openai",
+        "session_id": "s12",
+        "source_path": "codex/sessions/2026/06/15/rollout-s12.jsonl",
+        "started_at": "2026-06-15T12:15:00Z",
+        "started_at_seconds": 1781525700,
+        "tokens": [
+          300,
+          0,
+          50,
+          5,
+          350
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-15T12:20:00Z",
+        "updated_at_seconds": 1781526000
+      },
+      {
+        "estimated_cost_usd": 0.00087375,
+        "last_scanned_at": "2026-06-15T12:30:00Z",
+        "model": "gpt-5.4 mini",
+        "model_context_window": 128000,
+        "owner_id": "sub-b",
+        "owner_type": "subscription",
+        "priced": 1,
+        "pricing_context": "standard_short_context",
+        "provider": "openai",
+        "session_id": "s2",
+        "source_path": "codex/sessions/2026/06/15/rollout-s2.jsonl",
+        "started_at": "2026-06-15T11:00:00Z",
+        "started_at_seconds": 1781521200,
+        "tokens": [
+          700,
+          150,
+          100,
+          30,
+          830
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-15T12:10:00Z",
+        "updated_at_seconds": 1781525400
+      },
+      {
+        "estimated_cost_usd": 0.021699999999999997,
+        "last_scanned_at": "2026-06-15T12:00:00Z",
+        "model": "gpt-5.5",
+        "model_context_window": 300000,
+        "owner_id": "api-a",
+        "owner_type": "api_profile",
+        "priced": 1,
+        "pricing_context": "standard_long_context",
+        "provider": "api",
+        "session_id": "s3",
+        "source_path": "codex/sessions/2026/06/13/rollout-s3.jsonl",
+        "started_at": "2026-06-13T08:00:00Z",
+        "started_at_seconds": 1781337600,
+        "tokens": [
+          1000,
+          200,
+          300,
+          50,
+          1300
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-13T08:10:00Z",
+        "updated_at_seconds": 1781338200
+      },
+      {
+        "estimated_cost_usd": null,
+        "last_scanned_at": "2026-06-15T12:00:00Z",
+        "model": "custom-model",
+        "model_context_window": 64000,
+        "owner_id": "api-a",
+        "owner_type": "api_profile",
+        "priced": 0,
+        "pricing_context": null,
+        "provider": "api",
+        "session_id": "s4",
+        "source_path": "codex/sessions/2026/06/15/rollout-s4.jsonl",
+        "started_at": "2026-06-15T11:10:00Z",
+        "started_at_seconds": 1781521800,
+        "tokens": [
+          70,
+          0,
+          30,
+          0,
+          100
+        ],
+        "unpriced_reason": "missing_model_price",
+        "updated_at": "2026-06-15T11:20:00Z",
+        "updated_at_seconds": 1781522400
+      },
+      {
+        "estimated_cost_usd": 0.0028,
+        "last_scanned_at": "2026-06-15T12:00:00Z",
+        "model": "gpt-5.5",
+        "model_context_window": 258400,
+        "owner_id": "sub-a",
+        "owner_type": "subscription",
+        "priced": 1,
+        "pricing_context": "standard_short_context",
+        "provider": "openai",
+        "session_id": "s5",
+        "source_path": "codex/archived_sessions/rollout-s5.jsonl",
+        "started_at": "2026-06-09T07:00:00Z",
+        "started_at_seconds": 1780988400,
+        "tokens": [
+          800,
+          600,
+          50,
+          10,
+          850
+        ],
+        "unpriced_reason": null,
+        "updated_at": "2026-06-09T07:30:00Z",
+        "updated_at_seconds": 1780990200
+      }
+    ]
+  },
+  "first": {
+    "api_profiles": {
+      "api-a": {
+        "all": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.021699999999999997,
+              "input_tokens": 1000,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 300,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 50,
+              "session_count": 1,
+              "total_tokens": 1300,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": null,
+          "input_tokens": 1070,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 330,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 50,
+          "session_count": 2,
+          "total_tokens": 1400,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "days_30": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 500,
+              "estimated_cost_usd": 0.037,
+              "input_tokens": 1900,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 500,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 80,
+              "session_count": 1,
+              "total_tokens": 2400,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 500,
+          "estimated_cost_usd": null,
+          "input_tokens": 1970,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 530,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 80,
+          "session_count": 2,
+          "total_tokens": 2500,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "days_7": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 500,
+              "estimated_cost_usd": 0.037,
+              "input_tokens": 1900,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 500,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 80,
+              "session_count": 1,
+              "total_tokens": 2400,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 500,
+          "estimated_cost_usd": null,
+          "input_tokens": 1970,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 530,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 80,
+          "session_count": 2,
+          "total_tokens": 2500,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "today": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            }
+          },
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": null,
+          "input_tokens": 70,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 30,
+          "priced": false,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 1,
+          "total_tokens": 100,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        }
+      },
+      "api-early": {
+        "all": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1400,
+              "estimated_cost_usd": 0.0177,
+              "input_tokens": 3000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 300,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 3300,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1400,
+          "estimated_cost_usd": 0.0177,
+          "input_tokens": 3000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 300,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 3300,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1000,
+              "estimated_cost_usd": 0.0115,
+              "input_tokens": 2000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 200,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 2200,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1000,
+          "estimated_cost_usd": 0.0115,
+          "input_tokens": 2000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 200,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 2200,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1000,
+              "estimated_cost_usd": 0.0115,
+              "input_tokens": 2000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 200,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 2200,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1000,
+          "estimated_cost_usd": 0.0115,
+          "input_tokens": 2000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 200,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 2200,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "cpa-plus": {
+        "all": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        }
+      }
+    },
+    "ok": true,
+    "pricing_source": "https://developers.openai.com/api/docs/pricing",
+    "pricing_updated_at": "2026-07-10",
+    "subscriptions": {
+      "sub-a": {
+        "all": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 720,
+              "estimated_cost_usd": 0.006959999999999999,
+              "input_tokens": 1200,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 140,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 25,
+              "session_count": 2,
+              "total_tokens": 1340,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 720,
+          "estimated_cost_usd": 0.006959999999999999,
+          "input_tokens": 1200,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 140,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 25,
+          "session_count": 2,
+          "total_tokens": 1340,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 720,
+              "estimated_cost_usd": 0.006959999999999999,
+              "input_tokens": 1200,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 140,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 25,
+              "session_count": 2,
+              "total_tokens": 1340,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 720,
+          "estimated_cost_usd": 0.006959999999999999,
+          "input_tokens": 1200,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 140,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 25,
+          "session_count": 2,
+          "total_tokens": 1340,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 700,
+              "estimated_cost_usd": 0.0056500000000000005,
+              "input_tokens": 1100,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 110,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 20,
+              "session_count": 2,
+              "total_tokens": 1210,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 700,
+          "estimated_cost_usd": 0.0056500000000000005,
+          "input_tokens": 1100,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 110,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 20,
+          "session_count": 2,
+          "total_tokens": 1210,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "sub-b": {
+        "all": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 100,
+              "estimated_cost_usd": 0.0006675000000000001,
+              "input_tokens": 500,
+              "last_used": "2026-06-15T11:40:00Z",
+              "output_tokens": 80,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 20,
+              "session_count": 1,
+              "total_tokens": 580,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 100,
+          "estimated_cost_usd": 0.0006675000000000001,
+          "input_tokens": 500,
+          "last_used": "2026-06-15T11:40:00Z",
+          "output_tokens": 80,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 20,
+          "session_count": 1,
+          "total_tokens": 580,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 100,
+              "estimated_cost_usd": 0.0006675000000000001,
+              "input_tokens": 500,
+              "last_used": "2026-06-15T11:40:00Z",
+              "output_tokens": 80,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 20,
+              "session_count": 1,
+              "total_tokens": 580,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 100,
+          "estimated_cost_usd": 0.0006675000000000001,
+          "input_tokens": 500,
+          "last_used": "2026-06-15T11:40:00Z",
+          "output_tokens": 80,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 20,
+          "session_count": 1,
+          "total_tokens": 580,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 100,
+              "estimated_cost_usd": 0.0006675000000000001,
+              "input_tokens": 500,
+              "last_used": "2026-06-15T11:40:00Z",
+              "output_tokens": 80,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 20,
+              "session_count": 1,
+              "total_tokens": 580,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 100,
+          "estimated_cost_usd": 0.0006675000000000001,
+          "input_tokens": 500,
+          "last_used": "2026-06-15T11:40:00Z",
+          "output_tokens": 80,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 20,
+          "session_count": 1,
+          "total_tokens": 580,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 100,
+              "estimated_cost_usd": 0.0006675000000000001,
+              "input_tokens": 500,
+              "last_used": "2026-06-15T11:40:00Z",
+              "output_tokens": 80,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 20,
+              "session_count": 1,
+              "total_tokens": 580,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 100,
+          "estimated_cost_usd": 0.0006675000000000001,
+          "input_tokens": 500,
+          "last_used": "2026-06-15T11:40:00Z",
+          "output_tokens": 80,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 20,
+          "session_count": 1,
+          "total_tokens": 580,
+          "unpriced_reasons": {}
+        }
+      }
+    },
+    "warnings": [
+      "1 个 session 缺少 Codex Switch 归属记录，未计入卡片",
+      "1 个 session 缺少可用价格，仅显示 tokens"
+    ]
+  },
+  "next_day": {
+    "api_profiles": {
+      "api-a": {
+        "all": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.021699999999999997,
+              "input_tokens": 1000,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 300,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 50,
+              "session_count": 1,
+              "total_tokens": 1300,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": null,
+          "input_tokens": 1070,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 330,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 50,
+          "session_count": 2,
+          "total_tokens": 1400,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "days_30": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 500,
+              "estimated_cost_usd": 0.037,
+              "input_tokens": 1900,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 500,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 80,
+              "session_count": 1,
+              "total_tokens": 2400,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 500,
+          "estimated_cost_usd": null,
+          "input_tokens": 1970,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 530,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 80,
+          "session_count": 2,
+          "total_tokens": 2500,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "days_7": {
+          "by_model": {
+            "custom-model": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": null,
+              "input_tokens": 70,
+              "last_used": "2026-06-15T11:20:00Z",
+              "output_tokens": 30,
+              "priced": false,
+              "pricing_contexts": {},
+              "reasoning_output_tokens": 0,
+              "session_count": 1,
+              "total_tokens": 100,
+              "unpriced_reasons": {
+                "missing_model_price": 1
+              }
+            },
+            "gpt-5.5": {
+              "cached_input_tokens": 500,
+              "estimated_cost_usd": 0.037,
+              "input_tokens": 1900,
+              "last_used": "2026-06-13T08:10:00Z",
+              "output_tokens": 500,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_long_context": 1
+              },
+              "reasoning_output_tokens": 80,
+              "session_count": 1,
+              "total_tokens": 2400,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 500,
+          "estimated_cost_usd": null,
+          "input_tokens": 1970,
+          "last_used": "2026-06-15T11:20:00Z",
+          "output_tokens": 530,
+          "priced": false,
+          "pricing_contexts": {
+            "standard_long_context": 1
+          },
+          "reasoning_output_tokens": 80,
+          "session_count": 2,
+          "total_tokens": 2500,
+          "unpriced_reasons": {
+            "missing_model_price": 1
+          }
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "api-early": {
+        "all": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1400,
+              "estimated_cost_usd": 0.0177,
+              "input_tokens": 3000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 300,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 3300,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1400,
+          "estimated_cost_usd": 0.0177,
+          "input_tokens": 3000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 300,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 3300,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1000,
+              "estimated_cost_usd": 0.0115,
+              "input_tokens": 2000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 200,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 2200,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1000,
+          "estimated_cost_usd": 0.0115,
+          "input_tokens": 2000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 200,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 2200,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.6": {
+              "cached_input_tokens": 1000,
+              "estimated_cost_usd": 0.0115,
+              "input_tokens": 2000,
+              "last_used": "2026-06-12T08:10:00Z",
+              "output_tokens": 200,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 40,
+              "session_count": 1,
+              "total_tokens": 2200,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 1000,
+          "estimated_cost_usd": 0.0115,
+          "input_tokens": 2000,
+          "last_used": "2026-06-12T08:10:00Z",
+          "output_tokens": 200,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 40,
+          "session_count": 1,
+          "total_tokens": 2200,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "cpa-plus": {
+        "all": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.4-mini": {
+              "cached_input_tokens": 200,
+              "estimated_cost_usd": 0.000585,
+              "input_tokens": 600,
+              "last_used": "2026-06-15T11:30:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 6,
+              "session_count": 1,
+              "total_tokens": 660,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 200,
+          "estimated_cost_usd": 0.000585,
+          "input_tokens": 600,
+          "last_used": "2026-06-15T11:30:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 6,
+          "session_count": 1,
+          "total_tokens": 660,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      }
+    },
+    "ok": true,
+    "pricing_source": "https://developers.openai.com/api/docs/pricing",
+    "pricing_updated_at": "2026-07-10",
+    "subscriptions": {
+      "sub-a": {
+        "all": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 720,
+              "estimated_cost_usd": 0.006959999999999999,
+              "input_tokens": 1200,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 140,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 25,
+              "session_count": 2,
+              "total_tokens": 1340,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 720,
+          "estimated_cost_usd": 0.006959999999999999,
+          "input_tokens": 1200,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 140,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 25,
+          "session_count": 2,
+          "total_tokens": 1340,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 720,
+              "estimated_cost_usd": 0.006959999999999999,
+              "input_tokens": 1200,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 140,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 2
+              },
+              "reasoning_output_tokens": 25,
+              "session_count": 2,
+              "total_tokens": 1340,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 720,
+          "estimated_cost_usd": 0.006959999999999999,
+          "input_tokens": 1200,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 140,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 25,
+          "session_count": 2,
+          "total_tokens": 1340,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.5": {
+              "cached_input_tokens": 100,
+              "estimated_cost_usd": 0.00285,
+              "input_tokens": 300,
+              "last_used": "2026-06-14T09:00:00Z",
+              "output_tokens": 60,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 10,
+              "session_count": 1,
+              "total_tokens": 360,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 100,
+          "estimated_cost_usd": 0.00285,
+          "input_tokens": 300,
+          "last_used": "2026-06-14T09:00:00Z",
+          "output_tokens": 60,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 1
+          },
+          "reasoning_output_tokens": 10,
+          "session_count": 1,
+          "total_tokens": 360,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      },
+      "sub-b": {
+        "all": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        },
+        "days_30": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        },
+        "days_7": {
+          "by_model": {
+            "gpt-5.4 mini": {
+              "cached_input_tokens": 150,
+              "estimated_cost_usd": 0.00087375,
+              "input_tokens": 700,
+              "last_used": "2026-06-15T12:10:00Z",
+              "output_tokens": 100,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 30,
+              "session_count": 1,
+              "total_tokens": 830,
+              "unpriced_reasons": {}
+            },
+            "gpt-5.6-luna": {
+              "cached_input_tokens": 0,
+              "estimated_cost_usd": 0.0006000000000000001,
+              "input_tokens": 300,
+              "last_used": "2026-06-15T12:20:00Z",
+              "output_tokens": 50,
+              "priced": true,
+              "pricing_contexts": {
+                "standard_short_context": 1
+              },
+              "reasoning_output_tokens": 5,
+              "session_count": 1,
+              "total_tokens": 350,
+              "unpriced_reasons": {}
+            }
+          },
+          "cached_input_tokens": 150,
+          "estimated_cost_usd": 0.00147375,
+          "input_tokens": 1000,
+          "last_used": "2026-06-15T12:20:00Z",
+          "output_tokens": 150,
+          "priced": true,
+          "pricing_contexts": {
+            "standard_short_context": 2
+          },
+          "reasoning_output_tokens": 35,
+          "session_count": 2,
+          "total_tokens": 1180,
+          "unpriced_reasons": {}
+        },
+        "today": {
+          "by_model": {},
+          "cached_input_tokens": 0,
+          "estimated_cost_usd": 0.0,
+          "input_tokens": 0,
+          "last_used": "",
+          "output_tokens": 0,
+          "priced": true,
+          "pricing_contexts": {},
+          "reasoning_output_tokens": 0,
+          "session_count": 0,
+          "total_tokens": 0,
+          "unpriced_reasons": {}
+        }
+      }
+    },
+    "warnings": [
+      "1 个 session 缺少 Codex Switch 归属记录，未计入卡片",
+      "1 个 session 缺少可用价格，仅显示 tokens"
+    ]
+  }
+}
