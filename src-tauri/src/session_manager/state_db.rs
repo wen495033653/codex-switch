@@ -1,8 +1,8 @@
 use super::{
-    backup::{sanitize_backup_reason, session_manager_backup_dir},
+    backup::reserve_reason_backup_file,
     codex_home::path_to_slash,
     model::{ManifestSession, SessionSummary, StatusMove, ThreadMetadata},
-    util::{backup_stamp, dedupe_strings, unique_sibling_path},
+    util::dedupe_strings,
 };
 use crate::{paths::codex_state_db_path_for_root, time_util::parse_rfc3339_seconds};
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
@@ -188,19 +188,16 @@ pub(super) fn backup_state_database_with_reason(
     connection: &Connection,
     reason: &str,
 ) -> Result<PathBuf, String> {
-    let reason = sanitize_backup_reason(reason);
-    let backup_dir = session_manager_backup_dir(&reason)?;
-    fs::create_dir_all(&backup_dir)
-        .map_err(|err| format!("创建备份目录失败 {}: {err}", backup_dir.display()))?;
-    let base_name = format!(
-        "state_5.sqlite.bak.context-manager-{reason}-{}",
-        backup_stamp()
-    );
-    let backup = unique_sibling_path(&backup_dir.join(&base_name), &base_name);
+    // VACUUM INTO accepts an existing empty file, so the reserved name can be used directly.
+    let backup = reserve_reason_backup_file("state_5.sqlite", reason)?;
     let backup_literal = sqlite_string_literal(&backup);
-    connection
-        .execute_batch(&format!("VACUUM main INTO {backup_literal};"))
-        .map_err(|err| format!("备份 state_5.sqlite 失败 {}: {err}", backup.display()))?;
+    if let Err(err) = connection.execute_batch(&format!("VACUUM main INTO {backup_literal};")) {
+        let mut message = format!("备份 state_5.sqlite 失败 {}: {err}", backup.display());
+        if let Err(remove_err) = fs::remove_file(&backup) {
+            message.push_str(&format!("；清理未完成的备份失败: {remove_err}"));
+        }
+        return Err(message);
+    }
     Ok(backup)
 }
 

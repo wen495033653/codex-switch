@@ -2445,3 +2445,71 @@ fn global_state_cleanup_writes_through_the_shared_rewrite_with_a_data_dir_backup
     assert_eq!(rewritten, json!({"pinned-thread-ids": ["keep"]}));
     assert_eq!(backups, vec![original]);
 }
+
+#[test]
+fn concurrent_backups_with_the_same_reason_get_distinct_files() {
+    let root = temp_path("backup-name-race");
+    fs::create_dir_all(&root).unwrap();
+    let state_db = root.join("state_5.sqlite");
+    Connection::open(&state_db)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('a');",
+        )
+        .unwrap();
+    // Short and unique per run: the backup path must stay under the Windows path limit.
+    let reason = format!(
+        "race-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            % 1_000_000_000
+    );
+    // Several backups inside one second share the stamp; before names were reserved with
+    // create_new, most of these failed with "table threads already exists".
+    let results = (0..8)
+        .map(|_| {
+            let state_db = state_db.clone();
+            let reason = reason.clone();
+            std::thread::spawn(move || {
+                (0..4)
+                    .map(|_| {
+                        let connection = Connection::open(&state_db).unwrap();
+                        backup_state_database_with_reason(&connection, &reason)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flat_map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    let backup_dir = session_manager_data_dir()
+        .unwrap()
+        .join("backups")
+        .join(sanitize_backup_reason(&reason));
+    let files = count_files(&backup_dir);
+    let rows = results
+        .iter()
+        .filter_map(|result| result.as_ref().ok())
+        .map(|path| {
+            Connection::open(path)
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM threads", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    fs::remove_dir_all(&backup_dir).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    let errors = results
+        .iter()
+        .filter_map(|result| result.as_ref().err())
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(files, 32);
+    assert!(rows.iter().all(|count| *count == 1));
+}

@@ -1,8 +1,9 @@
-use super::util::{backup_stamp, unique_sibling_path};
+use super::util::backup_stamp;
 #[cfg(not(test))]
 use crate::paths::app_data_dir;
 use std::{
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -72,13 +73,11 @@ pub(super) fn sanitize_backup_reason(reason: &str) -> String {
     }
 }
 
-/// A fresh backup location for `path` in the data directory's `backups/<reason>/` (created if
-/// needed); the caller writes the backup.
-pub(super) fn reason_backup_path(path: &Path, reason: &str) -> Result<PathBuf, String> {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("备份文件名无效: {}", path.display()))?;
+/// A fresh, reserved (created empty) backup file for `file_name` in the data directory's
+/// `backups/<reason>/`; the caller fills it. Names carry a second-resolution stamp, so the file is
+/// claimed with `create_new`: a check-then-create lets two backups in the same second pick the
+/// same name, and the second one then fails (VACUUM INTO) or overwrites the first (fs::write).
+pub(super) fn reserve_reason_backup_file(file_name: &str, reason: &str) -> Result<PathBuf, String> {
     let reason = sanitize_backup_reason(reason);
     let base_name = format!(
         "{file_name}.bak.context-manager-{reason}-{}",
@@ -87,8 +86,33 @@ pub(super) fn reason_backup_path(path: &Path, reason: &str) -> Result<PathBuf, S
     let backup_dir = session_manager_backup_dir(&reason)?;
     fs::create_dir_all(&backup_dir)
         .map_err(|err| format!("创建备份目录失败 {}: {err}", backup_dir.display()))?;
-    Ok(unique_sibling_path(
-        &backup_dir.join(&base_name),
-        &base_name,
+    for index in 0..1000 {
+        let candidate = if index == 0 {
+            backup_dir.join(&base_name)
+        } else {
+            backup_dir.join(format!("{base_name}-{index:03}"))
+        };
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => return Ok(candidate),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("创建备份文件失败 {}: {err}", candidate.display())),
+        }
+    }
+    Err(format!(
+        "备份文件名已用尽: {}",
+        backup_dir.join(&base_name).display()
     ))
+}
+
+/// A reserved backup location for `path` (see `reserve_reason_backup_file`).
+pub(super) fn reason_backup_path(path: &Path, reason: &str) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("备份文件名无效: {}", path.display()))?;
+    reserve_reason_backup_file(file_name, reason)
 }
