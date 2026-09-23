@@ -56,6 +56,25 @@ User-Agent: codex_cli_rs/...
 5. 前端 `parseAuthInfo`：到期日优先取 `custom.subscription.active_until`，接口从未成功过才回退 id_token claim；套餐优先取 `usage_info.plan_type`，其次 `subscription.plan_type`，最后 claim。
 6. 账号卡片：到期徽标 tooltip 区分“到期后自动续费”和“到期后不再续费”；`is_delinquent` 为 true 时显示“欠费”徽标；`available_count > 0` 时显示“可重置 {count} 次”。仅在接口从未成功、claim 已过期且 usage 套餐仍为付费时，才显示“到期时间未同步”，避免把已知错误的过期日期当成真实到期时间。
 
+## HTTP 请求与错误信息（2026-09-23）
+
+当前行为：
+
+- `/wham/usage`、`/backend-api/subscriptions`、`auth.openai.com/oauth/token` 每次请求都新建 reqwest blocking client，不共享。
+- 请求发送失败、响应解析失败时，错误信息带上 reqwest 的完整原因链，并去掉请求 URL。例如连接被拒绝时是 `error sending request: client error (Connect): tcp connect error: ...(os error 10061)`，原先只有 `error sending request for url (...)`。
+- 非 2xx 响应的正文读取失败时，不再当作空正文：usage/subscription 的错误状态保留 HTTP status（401/403 仍会触发 token 刷新后重试），读取错误写入 `raw_message`；token 端点在原有的状态行后追加 `读取错误响应正文失败: ...`，所以 `auth_error_is_login_expired` 的判断不变。
+
+关键决策和原因：
+
+- 不共享 client。reqwest 0.13.5 只在构建 client 时读取系统代理（hyper-util 0.1.20 的 `Matcher::from_system`：代理环境变量、Windows `HKCU\...\Internet Settings` 的 `ProxyEnable`/`ProxyServer`/`ProxyOverride`、macOS 网络设置）。用户会在应用运行中开关系统代理（开机自启时代理软件也可能晚于本应用启动），共享 client 会一直沿用旧的代理路由直到重启。按代理配置做 key 缓存，要么依赖 hyper-util `Matcher` 的 `Debug` 输出（不含代理认证），要么自己读三个平台的代理设置（macOS 本地编译不了），复杂度和风险都高于收益。
+- 收益本身很小：本机测得 debug 构建下 build + drop 一个 client 平均 0.39 ms（默认配置）和 0.47 ms（`http1_only`），各 50 次。共享能省下的主要是同一轮“刷新所有配额”里跨账号复用连接、少做 TCP/TLS 握手，这部分需要真实网络才能测，而且连接复用后 Cloudflare 对 `/backend-api/subscriptions` 的反应（上面记录过它对 HTTP/2 和连续请求敏感）也未知。
+- URL 不进错误信息：订阅接口的 URL 带 `account_id` 查询参数，而错误状态已经有 `path` 字段。
+
+验证记录：
+
+- 离线检查：`accounts::usage::client` 与 `accounts::oauth_tokens` 的单元测试在 127.0.0.1 上起一次性 TCP 服务（client 显式 `no_proxy`，不出本机），覆盖正文读取失败（`Content-Length: 100` 只发 8 字节后断开）、正文可读、连接被拒绝三种情况。
+- TODO(verify)：真实运行中还没见过新格式的错误信息。触发条件：下一次真实运行时配额或订阅刷新失败（例如断网或代理关闭时点“刷新配额”）。查看 stderr 的 `[subscription] ... message=` 行，以及 `accounts.json` 对应账号的 `custom.usage_error.message`。通过判据：信息在 `error sending request` 之后带有具体原因，且不含 `for url` 和账号 ID。不通过时从 `accounts/usage/client.rs::http_error_message` 查起。
+
 ## 5.4.8 到 5.4.9 的变更原因
 
 - 5.4.8 让“刷新配额”先重签 token，并在后台发现 claims 过期时每 24 小时重签一次，目的是刷新订阅信息。

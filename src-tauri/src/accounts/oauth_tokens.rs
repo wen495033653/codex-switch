@@ -1,4 +1,4 @@
-use super::usage::parse_endpoint_error;
+use super::usage::{http_error_message, parse_endpoint_error};
 use crate::{
     accounts::{OAUTH_AUTHORIZE_ENDPOINT, OAUTH_CLIENT_ID, OAUTH_SCOPE, OAUTH_TOKEN_ENDPOINT},
     json_util::string_field,
@@ -88,6 +88,24 @@ fn token_endpoint_error(prefix: &str, status: u16, text: &str, include_message: 
     lines.join("\n")
 }
 
+/// Describes a rejected token request. A body that cannot be read still yields the status
+/// lines (which `auth_error_is_login_expired` matches on) plus the read error.
+fn token_endpoint_rejection(
+    response: reqwest::blocking::Response,
+    prefix: &str,
+    include_message: bool,
+) -> String {
+    let status = response.status().as_u16();
+    match response.text() {
+        Ok(text) => token_endpoint_error(prefix, status, &text, include_message),
+        Err(err) => format!(
+            "{}\n读取错误响应正文失败: {}",
+            token_endpoint_error(prefix, status, "", include_message),
+            http_error_message(err)
+        ),
+    }
+}
+
 fn token_response_to_exchange(
     data: Value,
     fallback_refresh_token: Option<&str>,
@@ -140,22 +158,19 @@ pub(crate) fn exchange_oauth_code(code: &str, port: u16, verifier: &str) -> Resu
             ("code_verifier", verifier),
         ])
         .send()
-        .map_err(|err| format!("OAuth Token 交换失败\n{err}"))?;
+        .map_err(|err| format!("OAuth Token 交换失败\n{}", http_error_message(err)))?;
 
-    let status = response.status();
-    if !status.is_success() {
-        let text = response.text().unwrap_or_default();
-        return Err(token_endpoint_error(
+    if !response.status().is_success() {
+        return Err(token_endpoint_rejection(
+            response,
             "OAuth Token 交换失败",
-            status.as_u16(),
-            &text,
             false,
         ));
     }
 
     let data: Value = response
         .json()
-        .map_err(|err| format!("解析 OAuth Token 响应失败: {err}"))?;
+        .map_err(|err| format!("解析 OAuth Token 响应失败: {}", http_error_message(err)))?;
     token_response_to_exchange(data, None)
 }
 
@@ -175,22 +190,19 @@ pub(crate) fn exchange_refresh_token(refresh_token: &str) -> Result<Value, Strin
             ("client_id", OAUTH_CLIENT_ID),
         ])
         .send()
-        .map_err(|err| format!("Refresh Token 刷新失败\n{}", err))?;
+        .map_err(|err| format!("Refresh Token 刷新失败\n{}", http_error_message(err)))?;
 
-    let status = response.status();
-    if !status.is_success() {
-        let text = response.text().unwrap_or_default();
-        return Err(token_endpoint_error(
+    if !response.status().is_success() {
+        return Err(token_endpoint_rejection(
+            response,
             "Refresh Token 刷新失败",
-            status.as_u16(),
-            &text,
             true,
         ));
     }
 
     let data: Value = response
         .json()
-        .map_err(|err| format!("解析 Refresh Token 响应失败: {err}"))?;
+        .map_err(|err| format!("解析 Refresh Token 响应失败: {}", http_error_message(err)))?;
     token_response_to_exchange(data, Some(token))
 }
 
@@ -227,4 +239,70 @@ pub(crate) fn build_oauth_auth_url(
         .append_pair("state", state)
         .append_pair("originator", "codex_cli_rs");
     Ok(url.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::accounts::auth_error_is_login_expired;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    /// Answers one request on 127.0.0.1 with `response` as raw bytes, then closes the socket.
+    /// The client bypasses the system proxy, so nothing leaves the machine.
+    fn local_response(response: &'static str) -> reqwest::blocking::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/oauth/token", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(StdDuration::from_secs(5))
+            .build()
+            .unwrap()
+            .post(url)
+            .send()
+            .unwrap()
+    }
+
+    #[test]
+    fn unreadable_rejection_body_keeps_the_status_lines() {
+        // Content-Length promises 100 bytes, the socket closes after 8.
+        let response = local_response(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"error\"",
+        );
+
+        let message = token_endpoint_rejection(response, "Refresh Token 刷新失败", true);
+
+        assert!(
+            message.starts_with(
+                "Refresh Token 刷新失败\nHTTP 401\nAuthorization expired, please sign in again\n读取错误响应正文失败: "
+            ),
+            "{message}"
+        );
+        // Same classification as before the body read became explicit.
+        assert!(auth_error_is_login_expired(&message));
+    }
+
+    #[test]
+    fn readable_rejection_body_is_parsed() {
+        let response = local_response(
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 69\r\nConnection: close\r\n\r\n{\"error\":\"invalid_grant\",\"error_description\":\"refresh token reused!\"}",
+        );
+
+        let message = token_endpoint_rejection(response, "Refresh Token 刷新失败", true);
+
+        assert_eq!(
+            message,
+            "Refresh Token 刷新失败\nHTTP 400\nerror.code: invalid_grant\nerror.message: refresh token reused!"
+        );
+    }
 }

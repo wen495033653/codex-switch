@@ -47,23 +47,68 @@ impl ChatgptEndpoint {
         build_error_state(&error.message, code, &error.raw_message, status, self.path)
     }
 
+    /// A rejection whose body could not be read keeps its status, so a 401/403 still
+    /// triggers the token refresh retry; the read error takes the place of the body text.
+    fn rejected_unreadable(&self, status: u16, err: reqwest::Error) -> Value {
+        let error = parse_endpoint_error(status, "");
+        let raw_message = format!(
+            "Failed to read {} error response body: {}",
+            self.label,
+            http_error_message(err)
+        );
+        build_error_state(
+            &error.message,
+            self.failure_code,
+            &raw_message,
+            status,
+            self.path,
+        )
+    }
+
     /// Sends the request and returns the JSON body; every failure becomes an error state
     /// tagged with this endpoint's path so the UI and logs can tell the two reads apart.
     fn fetch_json(&self, request: Result<RequestBuilder, reqwest::Error>) -> Result<Value, Value> {
         let response = request
             .and_then(RequestBuilder::send)
-            .map_err(|err| self.failure(&err.to_string()))?;
+            .map_err(|err| self.failure(&http_error_message(err)))?;
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().unwrap_or_default();
-            return Err(self.rejected(status.as_u16(), &body));
+            return Err(match response.text() {
+                Ok(body) => self.rejected(status.as_u16(), &body),
+                Err(err) => self.rejected_unreadable(status.as_u16(), err),
+            });
         }
-        response
-            .json()
-            .map_err(|err| self.failure(&format!("Failed to parse {} response: {err}", self.label)))
+        response.json().map_err(|err| {
+            self.failure(&format!(
+                "Failed to parse {} response: {}",
+                self.label,
+                http_error_message(err)
+            ))
+        })
     }
 }
 
+/// A reqwest error with its causes and without the request URL. reqwest's own message stops
+/// at "error sending request" and leaves the reason (timeout, refused connection, TLS) in the
+/// source chain. The URL is dropped because the subscription URL carries the account id in its
+/// query, and the endpoint path is already recorded on the error state.
+pub(crate) fn http_error_message(err: reqwest::Error) -> String {
+    let err = err.without_url();
+    let mut message = err.to_string();
+    let mut source = std::error::Error::source(&err);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
+/// Built per request on purpose. reqwest reads the system proxy (proxy environment variables,
+/// Windows Internet Settings, macOS network settings) only while building a client, and users
+/// switch their system proxy while the app runs; a shared client would keep the old route until
+/// restart. Building one costs about 0.4 ms (measured 2026-09-23), see
+/// docs/development/subscription-refresh.md.
 fn blocking_client(timeout_ms: u64, http1_only: bool) -> Result<Client, reqwest::Error> {
     let mut builder = Client::builder().timeout(StdDuration::from_millis(timeout_ms));
     if http1_only {
@@ -189,4 +234,99 @@ pub(crate) fn get_subscription(
         return Err(SUBSCRIPTION_ENDPOINT.failure("订阅响应缺少 active_until"));
     }
     Ok(subscription)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::state::error_state_is_auth_rejected;
+    use super::*;
+    use crate::json_util::value_u64_field;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    const TEST_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
+        url: "",
+        path: "/test",
+        label: "test",
+        failure_code: "test_failed",
+    };
+
+    /// Answers one request on 127.0.0.1 with `response` as raw bytes, then closes the socket.
+    fn serve_once(response: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/test", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        url
+    }
+
+    /// Local requests only: the system proxy is bypassed so nothing leaves the machine.
+    fn local_get(url: &str) -> Result<RequestBuilder, reqwest::Error> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        Client::builder()
+            .no_proxy()
+            .timeout(StdDuration::from_secs(5))
+            .build()
+            .map(|client| client.get(url))
+    }
+
+    #[test]
+    fn unreadable_error_body_keeps_status_and_reports_the_read_error() {
+        // Content-Length promises 100 bytes, the socket closes after 8.
+        let url = serve_once(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"error\"",
+        );
+
+        let error = TEST_ENDPOINT.fetch_json(local_get(&url)).unwrap_err();
+
+        assert_eq!(value_u64_field(&error, "status"), Some(401));
+        assert!(error_state_is_auth_rejected(&error));
+        assert_eq!(error["code"], "test_failed");
+        assert_eq!(
+            error["message"],
+            "Authorization expired, please sign in again"
+        );
+        let raw = raw_string_field(&error, "raw_message");
+        assert!(
+            raw.starts_with("Failed to read test error response body: "),
+            "{raw}"
+        );
+        assert!(!raw.contains("for url"), "{raw}");
+    }
+
+    #[test]
+    fn readable_error_body_is_parsed() {
+        let url = serve_once(
+            "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 55\r\nConnection: close\r\n\r\n{\"error\":{\"code\":\"rate_limited\",\"message\":\"slow down\"}}",
+        );
+
+        let error = TEST_ENDPOINT.fetch_json(local_get(&url)).unwrap_err();
+
+        assert_eq!(value_u64_field(&error, "status"), Some(429));
+        assert_eq!(error["code"], "rate_limited");
+        assert_eq!(error["message"], "slow down");
+    }
+
+    #[test]
+    fn send_failure_names_the_cause_and_drops_the_url() {
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{port}/test?account_id=account-secret");
+
+        let error = TEST_ENDPOINT.fetch_json(local_get(&url)).unwrap_err();
+
+        let message = raw_string_field(&error, "message");
+        assert!(message.starts_with("error sending request: "), "{message}");
+        assert!(!message.contains("account-secret"), "{message}");
+        assert_eq!(error["path"], "/test");
+    }
 }
