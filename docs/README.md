@@ -13,6 +13,7 @@
 | [account-store.md](development/account-store.md) | 改 accounts.json / settings.json 的读写、token 轮换或刷新全部 |
 | [codex-state.md](development/codex-state.md) | 改从 `auth.json` / `config.toml` 推出当前模式的逻辑 |
 | [usage-stats.md](development/usage-stats.md) | 改 token 用量统计的扫描、写库、计价或汇总 |
+| [renderer.md](development/renderer.md) | 改前端的状态保存、分页、界面语言、错误提示；前端页面的渲染检查做法 |
 | [integration-20260906.md](development/integration-20260906.md) | 2026-09-06 整合验收的一次性记录 |
 
 功能记录统一写三件事：当前行为、关键决策和原因、验证记录。验证记录要分清真实运行、离线检查和未验证；还没完成的验证用 `TODO(verify)` 标出，并写明触发条件和通过判据。

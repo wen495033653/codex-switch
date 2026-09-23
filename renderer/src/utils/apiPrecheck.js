@@ -30,11 +30,25 @@ export function getApiTestSignature(baseUrl, apiKey, model) {
   ].join('\n');
 }
 
+// Only finished checks are kept. A `loading` entry describes a request of the current
+// window; saved and read back after a restart it would block that profile's check forever.
 export function normalizeApiTestResults(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(
-    Object.entries(value).filter(([, item]) => item && typeof item === 'object' && !Array.isArray(item))
+    Object.entries(value).filter(([, item]) => (
+      item && typeof item === 'object' && !Array.isArray(item) && item.loading !== true
+    ))
   );
+}
+
+// Saved results replace the in-memory table, except for the profiles whose check is still
+// running here: their live entry stays until the check finishes and is saved itself.
+export function withInFlightApiTests(savedResults, currentResults, inFlightProfileIds) {
+  const nextResults = { ...savedResults };
+  for (const profileId of inFlightProfileIds) {
+    if (currentResults && currentResults[profileId]) nextResults[profileId] = currentResults[profileId];
+  }
+  return nextResults;
 }
 
 export function isFreshApiTest(test, now = Date.now()) {

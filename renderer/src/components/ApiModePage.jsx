@@ -8,6 +8,7 @@ import {
   normalizeApiTestModelInput,
   normalizeApiTestResults,
   runApiProfilePrecheck,
+  withInFlightApiTests,
 } from '../utils/apiPrecheck';
 import UsageStatsSummary from './UsageStatsSummary';
 import { useI18n } from '../i18n';
@@ -43,6 +44,7 @@ export default function ApiModePage({
   const { language, t, translateRuntimeText } = useI18n();
   const [baseUrlTests, setBaseUrlTests] = useState(() => normalizeApiTestResults(apiTestResults));
   const baseUrlTestsRef = useRef(normalizeApiTestResults(apiTestResults));
+  const inFlightProfileIdsRef = useRef(new Set());
   const [testModelDrafts, setTestModelDrafts] = useState({});
   const [checkModalProfileId, setCheckModalProfileId] = useState(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -86,7 +88,11 @@ export default function ApiModePage({
     : t('准备预检');
 
   useEffect(() => {
-    const nextResults = normalizeApiTestResults(apiTestResults);
+    const nextResults = withInFlightApiTests(
+      normalizeApiTestResults(apiTestResults),
+      baseUrlTestsRef.current,
+      inFlightProfileIdsRef.current
+    );
     baseUrlTestsRef.current = nextResults;
     setBaseUrlTests(nextResults);
   }, [apiTestResults]);
@@ -99,7 +105,7 @@ export default function ApiModePage({
     baseUrlTestsRef.current = nextResults;
     setBaseUrlTests(nextResults);
     if (shouldPersist && typeof onSaveApiTestResults === 'function') {
-      onSaveApiTestResults(nextResults);
+      onSaveApiTestResults(normalizeApiTestResults(nextResults));
     }
   };
 
@@ -145,18 +151,24 @@ export default function ApiModePage({
   };
 
   const handleTestBaseUrl = async (profile, profileId, profileName, rawTestModel) => {
-    if (baseUrlTestsRef.current[profileId]?.loading) return;
+    const inFlightProfileIds = inFlightProfileIdsRef.current;
+    if (inFlightProfileIds.has(profileId)) return;
+    inFlightProfileIds.add(profileId);
 
-    const testModel = normalizeApiTestModelInput(rawTestModel);
-    const result = await runApiProfilePrecheck({
-      profile,
-      profileId,
-      profileName,
-      model: testModel,
-      previousTest: baseUrlTestsRef.current[profileId],
-      onUpdate: test => setApiTestForProfile(profileId, test)
-    });
-    setApiTestForProfile(profileId, result, true);
+    try {
+      const testModel = normalizeApiTestModelInput(rawTestModel);
+      const result = await runApiProfilePrecheck({
+        profile,
+        profileId,
+        profileName,
+        model: testModel,
+        previousTest: baseUrlTestsRef.current[profileId],
+        onUpdate: test => setApiTestForProfile(profileId, test)
+      });
+      setApiTestForProfile(profileId, result, true);
+    } finally {
+      inFlightProfileIds.delete(profileId);
+    }
   };
 
   return (
