@@ -2309,3 +2309,95 @@ fn status_change_without_state_rows_takes_no_backup() {
     assert!(result["report"]["state_backup_path"].is_null());
     assert!(archived);
 }
+
+#[test]
+fn single_path_lookup_matches_the_full_catalog() {
+    let root = temp_path("catalog-single-path");
+    let name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de89807.jsonl";
+    let a = write_test_session(
+        &root,
+        &Path::new("sessions/2026/05/13").join(name),
+        "a",
+        "a",
+    );
+    let same_name_elsewhere =
+        write_test_session(&root, &Path::new("archived_sessions").join(name), "d", "d");
+    let b = write_test_session(
+        &root,
+        Path::new("sessions/2026/05/14/rollout-b.jsonl"),
+        "b",
+        "b",
+    );
+    let unindexed = write_test_session(
+        &root,
+        Path::new("sessions/2026/05/15/rollout-c.jsonl"),
+        "c",
+        "c",
+    );
+    let connection = create_current_state_db(&root);
+    let mut rows = vec![
+        ("d", same_name_elsewhere.to_string_lossy().to_string(), 9),
+        ("a-first", a.to_string_lossy().to_string(), 8),
+        // Same file through a relative path: the catalog drops it as a duplicate.
+        ("a-dup", format!("sessions/2026/05/13/{name}"), 7),
+        ("b", "sessions/2026/05/14/rollout-b.jsonl".to_string(), 6),
+        (
+            "missing",
+            root.join("sessions/gone.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            5,
+        ),
+        (
+            "outside",
+            std::env::temp_dir()
+                .join("x.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            4,
+        ),
+    ];
+    if cfg!(windows) {
+        rows.push(("b-case", b.to_string_lossy().to_uppercase(), 10));
+    }
+    for (id, rollout_path, recency) in rows {
+        connection
+            .execute(
+                "INSERT INTO threads (id, rollout_path, title, recency_at_ms) VALUES (?1, ?2, ?1, ?3)",
+                params![id, rollout_path, recency],
+            )
+            .unwrap();
+    }
+    drop(connection);
+    let index = SessionIndex::new();
+
+    let catalog = read_current_state_conversations(&root, &index).unwrap();
+    let mut compared = Vec::new();
+    for target in [
+        &a,
+        &same_name_elsewhere,
+        &b,
+        &unindexed,
+        &root.join("sessions/gone.jsonl"),
+    ] {
+        let expected = catalog
+            .conversations
+            .iter()
+            .find(|item| {
+                conversation_path_key(Path::new(&item.source_path)) == conversation_path_key(target)
+            })
+            .map(|item| serde_json::to_value(item).unwrap());
+        let actual = current_state_conversation_for_path(&root, target, &index)
+            .unwrap()
+            .map(|item| serde_json::to_value(item).unwrap());
+        compared.push((target.clone(), expected, actual));
+    }
+    fs::remove_dir_all(&root).unwrap();
+
+    for (target, expected, actual) in &compared {
+        assert_eq!(actual, expected, "{}", target.display());
+    }
+    assert_eq!(compared[0].1.as_ref().unwrap()["id"], "a-first");
+    assert_eq!(compared[1].1.as_ref().unwrap()["id"], "d");
+    assert!(compared[3].1.is_none());
+}

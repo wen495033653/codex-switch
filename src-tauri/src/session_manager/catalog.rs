@@ -205,10 +205,33 @@ pub(super) fn conversation_from_path(
     })
 }
 
-pub(super) fn read_current_state_conversations(
-    root: &Path,
-    session_index: &SessionIndex,
-) -> Result<CurrentStateCatalog, String> {
+const CURRENT_STATE_THREADS_QUERY: &str = "SELECT id,
+        rollout_path,
+        COALESCE(title, ''),
+        COALESCE(preview, ''),
+        COALESCE(cwd, ''),
+        COALESCE(archived, 0),
+        CASE
+          WHEN COALESCE(recency_at_ms, 0) > 0 THEN recency_at_ms
+          WHEN COALESCE(updated_at_ms, 0) > 0 THEN updated_at_ms
+          WHEN COALESCE(recency_at, 0) > 0 THEN recency_at * 1000
+          ELSE COALESCE(updated_at, 0) * 1000
+        END AS effective_updated_at_ms
+ FROM threads
+ WHERE rollout_path IS NOT NULL AND TRIM(rollout_path) <> ''
+ ORDER BY recency_at_ms DESC, id DESC";
+
+struct StateThreadRow {
+    id: String,
+    rollout_path: String,
+    title: String,
+    preview: String,
+    cwd: String,
+    archived: i64,
+    updated_at_ms: i64,
+}
+
+fn open_current_state_db(root: &Path) -> Result<Connection, String> {
     let state_db = codex_state_db_path_for_root(root)?;
     if !state_db.exists() {
         return Err(format!(
@@ -239,86 +262,102 @@ pub(super) fn read_current_state_conversations(
     {
         return Err("ChatGPT Desktop 会话数据库结构过旧，请更新到最新版本".to_string());
     }
+    Ok(connection)
+}
 
+/// Calls `visit` for every thread row in catalog order until it returns `true`.
+fn visit_state_thread_rows(
+    connection: &Connection,
+    mut visit: impl FnMut(StateThreadRow) -> bool,
+) -> Result<(), String> {
     let mut statement = connection
-        .prepare(
-            "SELECT id,
-                    rollout_path,
-                    COALESCE(title, ''),
-                    COALESCE(preview, ''),
-                    COALESCE(cwd, ''),
-                    COALESCE(archived, 0),
-                    CASE
-                      WHEN COALESCE(recency_at_ms, 0) > 0 THEN recency_at_ms
-                      WHEN COALESCE(updated_at_ms, 0) > 0 THEN updated_at_ms
-                      WHEN COALESCE(recency_at, 0) > 0 THEN recency_at * 1000
-                      ELSE COALESCE(updated_at, 0) * 1000
-                    END AS effective_updated_at_ms
-             FROM threads
-             WHERE rollout_path IS NOT NULL AND TRIM(rollout_path) <> ''
-             ORDER BY recency_at_ms DESC, id DESC",
-        )
+        .prepare(CURRENT_STATE_THREADS_QUERY)
         .map_err(|err| format!("读取新版 Codex threads 目录失败: {err}"))?;
     let rows = statement
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-            ))
+            Ok(StateThreadRow {
+                id: row.get(0)?,
+                rollout_path: row.get(1)?,
+                title: row.get(2)?,
+                preview: row.get(3)?,
+                cwd: row.get(4)?,
+                archived: row.get(5)?,
+                updated_at_ms: row.get(6)?,
+            })
         })
         .map_err(|err| format!("查询新版 Codex threads 目录失败: {err}"))?;
+    for row in rows {
+        if visit(row.map_err(|err| format!("解析新版 Codex thread 失败: {err}"))?) {
+            break;
+        }
+    }
+    Ok(())
+}
 
+fn conversation_item_from_state_row(
+    row: StateThreadRow,
+    path: &Path,
+    relative: &Path,
+    metadata: &fs::Metadata,
+    session_index: &SessionIndex,
+) -> ConversationItem {
+    let preview = non_empty(row.preview);
+    ConversationItem {
+        title: session_index_title(session_index, &row.id)
+            .or_else(|| non_empty(row.title))
+            .or_else(|| preview.clone().map(|value| truncate_text(&value, 48)))
+            .unwrap_or_else(|| row.id.clone()),
+        id: row.id,
+        updated_at: timestamp_millis_to_rfc3339(row.updated_at_ms)
+            .or_else(|| system_time_to_rfc3339(metadata.modified().ok())),
+        status: if row.archived == 0 {
+            "active".to_string()
+        } else {
+            "archived".to_string()
+        },
+        source_path: path.to_string_lossy().to_string(),
+        relative_path: path_to_slash(relative),
+        size_bytes: metadata.len(),
+        cwd: non_empty(row.cwd),
+        preview,
+        sha256: None,
+        parse_error: None,
+    }
+}
+
+pub(super) fn read_current_state_conversations(
+    root: &Path,
+    session_index: &SessionIndex,
+) -> Result<CurrentStateCatalog, String> {
+    let connection = open_current_state_db(root)?;
     let mut conversations = Vec::new();
     let mut indexed_paths = HashSet::new();
     let mut invalid_paths = 0usize;
     let mut duplicate_paths = 0usize;
-    for row in rows {
-        let (id, rollout_path, title, preview, cwd, archived, updated_at_ms) =
-            row.map_err(|err| format!("解析新版 Codex thread 失败: {err}"))?;
-        let Some((path, relative)) = resolve_state_rollout_path(root, &rollout_path) else {
+    visit_state_thread_rows(&connection, |row| {
+        let Some((path, relative)) = resolve_state_rollout_path(root, &row.rollout_path) else {
             invalid_paths += 1;
-            continue;
+            return false;
         };
         let Ok(metadata) = path.metadata() else {
-            continue;
+            return false;
         };
         if !metadata.is_file() {
-            continue;
+            return false;
         }
-        let path_key = conversation_path_key(&path);
-        if !indexed_paths.insert(path_key) {
+        if !indexed_paths.insert(conversation_path_key(&path)) {
             duplicate_paths += 1;
-            continue;
+            return false;
         }
-        let relative_path = path_to_slash(&relative);
-        let preview = non_empty(preview);
-        conversations.push(ConversationItem {
-            id: id.clone(),
-            title: session_index_title(session_index, &id)
-                .or_else(|| non_empty(title))
-                .or_else(|| preview.clone().map(|value| truncate_text(&value, 48)))
-                .unwrap_or_else(|| id.clone()),
-            updated_at: timestamp_millis_to_rfc3339(updated_at_ms)
-                .or_else(|| system_time_to_rfc3339(metadata.modified().ok())),
-            status: if archived == 0 {
-                "active".to_string()
-            } else {
-                "archived".to_string()
-            },
-            source_path: path.to_string_lossy().to_string(),
-            relative_path,
-            size_bytes: metadata.len(),
-            cwd: non_empty(cwd),
-            preview,
-            sha256: None,
-            parse_error: None,
-        });
-    }
+        conversations.push(conversation_item_from_state_row(
+            row,
+            &path,
+            &relative,
+            &metadata,
+            session_index,
+        ));
+        false
+    })?;
 
     let mut warnings = Vec::new();
     if invalid_paths > 0 {
@@ -335,17 +374,60 @@ pub(super) fn read_current_state_conversations(
     })
 }
 
+/// The catalog entry for one file, without building the catalog: rows are visited in catalog
+/// order and only rows naming the same file get the filesystem calls (metadata, canonicalize)
+/// the full catalog makes for every row. The first row resolving to the file wins, exactly as in
+/// the catalog, where later rows for the same file are dropped as duplicates.
 pub(super) fn current_state_conversation_for_path(
     root: &Path,
     path: &Path,
     session_index: &SessionIndex,
 ) -> Result<Option<ConversationItem>, String> {
     let target = conversation_path_key(path);
-    let catalog = read_current_state_conversations(root, session_index)?;
-    Ok(catalog
-        .conversations
-        .into_iter()
-        .find(|item| conversation_path_key(Path::new(&item.source_path)) == target))
+    let Some(target_name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+    else {
+        return Ok(None);
+    };
+    let connection = open_current_state_db(root)?;
+    let mut found = None;
+    visit_state_thread_rows(&connection, |row| {
+        let Some((row_path, relative)) = resolve_state_rollout_path(root, &row.rollout_path) else {
+            return false;
+        };
+        if !same_file_name(&row_path, &target_name) {
+            return false;
+        }
+        let Ok(metadata) = row_path.metadata() else {
+            return false;
+        };
+        if !metadata.is_file() || conversation_path_key(&row_path) != target {
+            return false;
+        }
+        found = Some(conversation_item_from_state_row(
+            row,
+            &row_path,
+            &relative,
+            &metadata,
+            session_index,
+        ));
+        true
+    })?;
+    Ok(found)
+}
+
+/// Same comparison `conversation_path_key` applies to the final component (ASCII case-insensitive
+/// on Windows).
+fn same_file_name(path: &Path, target_name: &str) -> bool {
+    let Some(name) = path.file_name().map(|name| name.to_string_lossy()) else {
+        return false;
+    };
+    if cfg!(windows) {
+        name.eq_ignore_ascii_case(target_name)
+    } else {
+        name == target_name
+    }
 }
 
 fn resolve_state_rollout_path(root: &Path, rollout_path: &str) -> Option<(PathBuf, PathBuf)> {
