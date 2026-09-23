@@ -1,4 +1,7 @@
-use crate::paths::{config_path, ensure_parent_dir};
+use crate::{
+    atomic_file::write_file_atomically,
+    paths::{config_path, ensure_parent_dir},
+};
 use std::{fs, path::PathBuf};
 
 pub(crate) fn ensure_config_file() -> Result<PathBuf, String> {
@@ -23,5 +26,6 @@ pub(super) fn write_config_lines(lines: &[String]) -> Result<(), String> {
     let path = ensure_config_file()?;
     let mut raw = lines.join("\n");
     raw.push('\n');
-    fs::write(path, raw).map_err(|err| format!("写入 config.toml 失败: {err}"))
+    write_file_atomically(&path, raw.as_bytes())
+        .map_err(|err| format!("写入 config.toml 失败: {err}"))
 }

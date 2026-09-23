@@ -21,7 +21,7 @@ mod store;
 mod usage;
 
 pub(crate) use account_builders::{
-    account_from_exchange, account_from_exchange_preserve_usage, account_from_exchange_syncing,
+    account_from_exchange_preserve_usage, account_from_exchange_syncing,
 };
 pub(crate) use api_mode::{
     get_codex_state_value, read_api_key_from_auth, read_api_key_from_provider_config,
@@ -43,8 +43,8 @@ pub(crate) use store::{
     auth_error_is_login_expired, find_store_account, lookup_store_account, mark_account_auth_error,
     mark_store_account_used, normalize_tokens, profile_id_from_account,
     profile_id_from_tokens_value, read_store_value, read_store_with_active_sync,
-    refresh_token_from_account, remove_store_account, sort_accounts_by_last_used, store_payload,
-    store_payload_from_store, sync_auth_file_if_active, write_store_value,
+    refresh_token_from_account, remove_store_account, store_payload, store_payload_from_store,
+    sync_auth_file_if_active, update_active_store_account, update_store_account,
 };
 pub(crate) use usage::{
     build_error_state, error_state_is_auth_rejected, get_subscription, get_usage, normalize_custom,

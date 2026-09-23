@@ -3,17 +3,17 @@ use super::{
 };
 use crate::{
     accounts::{
-        access_token_from_account, account_with_custom, add_account_to_store, build_error_state,
+        access_token_from_account, account_with_custom, build_error_state,
         error_state_is_auth_rejected, find_store_account, get_usage, mark_account_auth_error,
-        profile_id_from_account, read_store_value, set_usage_result, sort_accounts_by_last_used,
-        write_store_value, INTERACTIVE_REQUEST_TIMEOUT_MS,
+        set_usage_result, update_active_store_account, update_store_account,
+        INTERACTIVE_REQUEST_TIMEOUT_MS,
     },
     codex_session_usage::inherit_stored_usage_fields,
     events::emit_store_updated,
-    json_util::raw_string_field,
+    session_sync_diagnostics::log_session_sync_event,
     time_util::now_string,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::thread;
 use tauri::AppHandle;
 
@@ -31,13 +31,20 @@ pub(crate) fn sync_account_usage_in_background(
             &access_token,
             INTERACTIVE_REQUEST_TIMEOUT_MS,
         );
-        let Ok(account) = find_store_account(&profile_id) else {
-            return;
-        };
         let usage_ok = usage_result.is_ok();
-        let custom = set_usage_result(account.get("custom"), usage_result);
-        if let Ok(store) = add_account_to_store(account_with_custom(&account, custom), false) {
-            emit_store_updated(&app, store);
+        match store_account_usage_result(&profile_id, usage_result) {
+            Ok(store) => emit_store_updated(&app, store),
+            Err(err) => {
+                log_session_sync_event(
+                    "account_usage_sync_store_error",
+                    json!({
+                        "account": profile_id.chars().take(8).collect::<String>(),
+                        "usageOk": usage_ok,
+                        "error": err
+                    }),
+                );
+                return;
+            }
         }
         if !usage_ok {
             return;
@@ -60,7 +67,7 @@ pub(super) fn get_usage_with_auth_retry(
     match get_usage(access_token, account_id, timeout_ms) {
         Ok(usage_info) => Ok(usage_info),
         Err(error) if error_state_is_auth_rejected(&error) => {
-            match refresh_stored_account_tokens(profile_id) {
+            match refresh_stored_account_tokens(profile_id, Some(access_token)) {
                 Ok(store) => {
                     emit_store_updated(app, store);
                     let refreshed = find_store_account(profile_id)
@@ -101,27 +108,18 @@ fn is_limit_window_changed(old_usage: &Value, new_usage: &Value) -> bool {
     })
 }
 
-fn update_account_usage_result_in_store(
-    mut store: Value,
-    profile_id: &str,
-    usage_result: Result<Value, Value>,
-) -> Result<Value, String> {
-    let accounts = store
-        .get_mut("accounts")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| "accounts.json 数据结构无效".to_string())?;
-    let index = accounts
-        .iter()
-        .position(|account| profile_id_from_account(account).unwrap_or_default() == profile_id)
-        .ok_or_else(|| "账号不存在".to_string())?;
-
-    let old_usage = accounts[index]
+fn stored_usage_info(account: &Value) -> Value {
+    account
         .get("custom")
         .and_then(|custom| custom.get("usage_info"))
         .cloned()
-        .unwrap_or(Value::Null);
+        .unwrap_or(Value::Null)
+}
 
-    // A changed limit window means the account was actually used, so it moves to the front.
+/// The account as it should be stored after one usage read. A changed limit window means
+/// the account was actually used, so it moves to the front.
+fn account_with_usage_result(account: &Value, usage_result: Result<Value, Value>) -> Value {
+    let old_usage = stored_usage_info(account);
     let touches_last_used = matches!(
         &usage_result,
         Ok(usage_info)
@@ -129,49 +127,78 @@ fn update_account_usage_result_in_store(
                 && old_usage != *usage_info
                 && is_limit_window_changed(&old_usage, usage_info)
     );
-    let mut next_custom = set_usage_result(accounts[index].get("custom"), usage_result);
+    let mut next_custom = set_usage_result(account.get("custom"), usage_result);
     if touches_last_used {
         next_custom["last_used_at"] = Value::String(now_string());
     }
+    account_with_custom(account, next_custom)
+}
 
-    accounts[index]["custom"] = next_custom;
-    sort_accounts_by_last_used(accounts);
-    write_store_value(&store)?;
-    Ok(store)
+/// Stores one usage read on the account as it is on disk now, keeping its current tokens.
+pub(crate) fn store_account_usage_result(
+    profile_id: &str,
+    usage_result: Result<Value, Value>,
+) -> Result<Value, String> {
+    update_store_account(profile_id, |account| {
+        let custom = set_usage_result(account.get("custom"), usage_result);
+        Ok(account_with_custom(account, custom))
+    })
 }
 
 pub(super) fn update_account_usage_result(
     profile_id: &str,
     usage_result: Result<Value, Value>,
 ) -> Result<Value, String> {
-    update_account_usage_result_in_store(read_store_value()?, profile_id, usage_result)
-}
-
-fn stored_usage_info(store: &Value, profile_id: &str) -> Value {
-    store
-        .get("accounts")
-        .and_then(Value::as_array)
-        .and_then(|accounts| {
-            accounts
-                .iter()
-                .find(|account| profile_id_from_account(account).unwrap_or_default() == profile_id)
-        })
-        .and_then(|account| account.get("custom"))
-        .and_then(|custom| custom.get("usage_info"))
-        .cloned()
-        .unwrap_or(Value::Null)
+    update_store_account(profile_id, |account| {
+        Ok(account_with_usage_result(account, usage_result))
+    })
 }
 
 pub(super) fn update_active_account_usage_result(
     profile_id: &str,
     usage_result: Result<Value, Value>,
 ) -> Result<Option<Value>, String> {
-    let store = read_store_value()?;
-    if raw_string_field(&store, "active_id") != profile_id {
-        return Ok(None);
+    update_active_store_account(profile_id, |account| {
+        let previous_usage = stored_usage_info(account);
+        let usage_result =
+            usage_result.map(|usage_info| inherit_stored_usage_fields(&previous_usage, usage_info));
+        Ok(account_with_usage_result(account, usage_result))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account_with_usage(used_percent: f64) -> Value {
+        json!({
+            "tokens": { "account_id": "acct" },
+            "custom": {
+                "last_used_at": "2026-01-01T00:00:00Z",
+                "usage_info": {
+                    "rate_limit": { "primary_window": { "used_percent": used_percent } }
+                }
+            }
+        })
     }
-    let previous_usage = stored_usage_info(&store, profile_id);
-    let usage_result =
-        usage_result.map(|usage_info| inherit_stored_usage_fields(&previous_usage, usage_info));
-    update_account_usage_result_in_store(store, profile_id, usage_result).map(Some)
+
+    #[test]
+    fn changed_limit_window_moves_account_to_front() {
+        let next = account_with_usage_result(
+            &account_with_usage(10.0),
+            Ok(json!({ "rate_limit": { "primary_window": { "used_percent": 20.0 } } })),
+        );
+
+        assert_ne!(next["custom"]["last_used_at"], "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn unchanged_limit_window_keeps_last_used_at() {
+        let next = account_with_usage_result(
+            &account_with_usage(10.0),
+            Ok(json!({ "rate_limit": { "primary_window": { "used_percent": 10.0 } } })),
+        );
+
+        assert_eq!(next["custom"]["last_used_at"], "2026-01-01T00:00:00Z");
+    }
 }

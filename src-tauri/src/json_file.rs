@@ -1,4 +1,4 @@
-use crate::paths::ensure_parent_dir;
+use crate::{atomic_file::write_file_atomically, paths::ensure_parent_dir};
 use serde_json::Value;
 use std::{fs, path::Path};
 
@@ -11,7 +11,7 @@ pub(crate) fn write_json_file(path: &Path, label: &str, value: &Value) -> Result
     ensure_parent_dir(path)?;
     let raw =
         serde_json::to_string_pretty(value).map_err(|err| format!("序列化 {label} 失败: {err}"))?;
-    fs::write(path, raw).map_err(|err| format!("写入 {label} 失败: {err}"))
+    write_file_atomically(path, raw.as_bytes()).map_err(|err| format!("写入 {label} 失败: {err}"))
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 use crate::{
     accounts::{
         access_token_from_account, account_id_from_account, account_with_custom,
-        add_account_to_store, find_store_account, get_subscription, set_subscription_state,
+        find_store_account, get_subscription, set_subscription_state, update_store_account,
     },
     json_util::{raw_string_field, string_field, value_u64_field},
 };
@@ -59,18 +59,21 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
         }
     };
 
-    let latest = find_store_account(profile_id).unwrap_or(account);
-    let previous = latest
-        .get("custom")
-        .and_then(|custom| custom.get("subscription"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    if previous == subscription {
-        return None;
-    }
-
-    let custom = set_subscription_state(latest.get("custom"), subscription.clone());
-    match add_account_to_store(account_with_custom(&latest, custom), false) {
+    let mut changed = false;
+    let update = update_store_account(profile_id, |latest| {
+        let previous = latest
+            .get("custom")
+            .and_then(|custom| custom.get("subscription"))
+            .unwrap_or(&Value::Null);
+        if *previous == subscription {
+            return Ok(latest.clone());
+        }
+        changed = true;
+        let custom = set_subscription_state(latest.get("custom"), subscription.clone());
+        Ok(account_with_custom(latest, custom))
+    });
+    match update {
+        Ok(_) if !changed => None,
         Ok(store) => {
             eprintln!(
                 "[subscription] account={} 订阅信息已更新 active_until={:?} will_renew={} is_delinquent={}",

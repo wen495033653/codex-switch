@@ -1,27 +1,19 @@
 use crate::json_util::non_empty_string_field;
 use crate::{
     accounts::{
-        access_token_from_account, account_from_exchange, account_from_exchange_preserve_usage,
-        account_id_from_account, account_with_custom, add_account_to_store,
-        error_state_is_auth_rejected, exchange_refresh_token, find_store_account, get_usage,
-        mark_account_auth_error, refresh_token_from_account, set_usage_result,
-        sync_auth_file_if_active, INTERACTIVE_REQUEST_TIMEOUT_MS,
+        access_token_from_account, account_id_from_account, error_state_is_auth_rejected,
+        find_store_account, get_usage, mark_account_auth_error, refresh_token_from_account,
+        INTERACTIVE_REQUEST_TIMEOUT_MS,
     },
-    json_util::{raw_string_field, string_field},
-    quota::refresh_account_subscription,
+    json_util::raw_string_field,
+    quota::{
+        refresh_account_subscription, refresh_stored_account_tokens, store_account_usage_result,
+    },
 };
 use serde_json::{json, Value};
 
 fn usage_error_message(error: &Value) -> String {
     non_empty_string_field(error, "message").unwrap_or_else(|| "Usage refresh failed".to_string())
-}
-
-fn update_account_usage_preserve_tokens(
-    account: &Value,
-    usage_result: Result<Value, Value>,
-) -> Result<Value, String> {
-    let custom = set_usage_result(account.get("custom"), usage_result);
-    add_account_to_store(account_with_custom(account, custom), false)
 }
 
 /// Subscription renewal data lives behind a second endpoint, so every successful quota
@@ -31,12 +23,19 @@ fn store_with_refreshed_subscription(profile_id: &str, store: Value) -> Value {
     refresh_account_subscription(profile_id, INTERACTIVE_REQUEST_TIMEOUT_MS).unwrap_or(store)
 }
 
+fn stored_usage_info(account: &Value) -> Value {
+    account
+        .get("custom")
+        .and_then(|custom| custom.get("usage_info"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 pub(super) struct AccountRefreshContext {
+    pub(super) store: Value,
     pub(super) account: Value,
-    pub(super) exchange: Value,
     pub(super) profile_id: String,
-    pub(super) account_id: String,
-    pub(super) previous_refresh_token: String,
+    pub(super) previous_account: Value,
 }
 
 pub(super) enum AccountRefreshStart {
@@ -44,16 +43,20 @@ pub(super) enum AccountRefreshStart {
     Failed(Value),
 }
 
-fn prepare_account_refresh(id: String) -> Result<AccountRefreshStart, String> {
+/// Rotates the stored tokens through the shared per-account entry point, so a manual
+/// refresh never exchanges the same refresh_token as a background refresh. The new tokens
+/// are persisted before the quota is read.
+fn prepare_account_refresh(
+    id: String,
+    stale_access_token: Option<&str>,
+) -> Result<AccountRefreshStart, String> {
     let target_profile_id = id.trim();
     if target_profile_id.is_empty() {
         return Err("account_id 无效".to_string());
     }
-    let account = find_store_account(target_profile_id)?;
-    let expected_account_id = account_id_from_account(&account)?;
-    let previous_refresh_token = refresh_token_from_account(&account);
-    let exchange = match exchange_refresh_token(&previous_refresh_token) {
-        Ok(value) => value,
+    let previous_account = find_store_account(target_profile_id)?;
+    let store = match refresh_stored_account_tokens(target_profile_id, stale_access_token) {
+        Ok(store) => store,
         Err(err) => {
             return Ok(AccountRefreshStart::Failed(auth_error_payload(
                 target_profile_id,
@@ -61,21 +64,12 @@ fn prepare_account_refresh(id: String) -> Result<AccountRefreshStart, String> {
             )?))
         }
     };
-    let account_id = string_field(&exchange, "account_id");
-    if account_id != expected_account_id {
-        let message = "刷新后账号标识不一致";
-        return Ok(AccountRefreshStart::Failed(auth_error_payload(
-            target_profile_id,
-            message,
-        )?));
-    }
 
     Ok(AccountRefreshStart::Ready(AccountRefreshContext {
-        account,
-        exchange,
+        store,
+        account: find_store_account(target_profile_id)?,
         profile_id: target_profile_id.to_string(),
-        account_id,
-        previous_refresh_token,
+        previous_account,
     }))
 }
 
@@ -102,7 +96,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
     if !access_token.is_empty() {
         match get_usage(&access_token, &account_id, INTERACTIVE_REQUEST_TIMEOUT_MS) {
             Ok(usage_info) => {
-                let store = update_account_usage_preserve_tokens(&account, Ok(usage_info))?;
+                let store = store_account_usage_result(target_profile_id, Ok(usage_info))?;
                 let store = store_with_refreshed_subscription(target_profile_id, store);
                 return Ok(json!({
                     "ok": true,
@@ -113,7 +107,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
             Err(error) if !error_state_is_auth_rejected(&error) => {
                 let message = usage_error_message(&error);
                 let code = raw_string_field(&error, "code");
-                let store = update_account_usage_preserve_tokens(&account, Err(error))?;
+                let store = store_account_usage_result(target_profile_id, Err(error))?;
                 return Ok(json!({
                     "ok": false,
                     "message": format!("配额刷新失败\n{message}"),
@@ -125,34 +119,25 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
         }
     }
 
-    refresh_account_with_token_refresh(target_profile_id.to_string())
+    refresh_account_with_token_refresh(target_profile_id.to_string(), &access_token)
 }
 
-fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
-    let context = match prepare_account_refresh(id)? {
+fn refresh_account_with_token_refresh(
+    id: String,
+    rejected_access_token: &str,
+) -> Result<Value, String> {
+    let context = match prepare_account_refresh(id, Some(rejected_access_token))? {
         AccountRefreshStart::Ready(context) => context,
         AccountRefreshStart::Failed(payload) => return Ok(payload),
     };
 
-    let old_usage = context
-        .account
-        .get("custom")
-        .and_then(|custom| custom.get("usage_info"))
-        .cloned()
-        .unwrap_or(Value::Null);
     let usage_result = get_usage(
-        &string_field(&context.exchange, "access_token"),
-        &context.account_id,
+        &access_token_from_account(&context.account),
+        &account_id_from_account(&context.account)?,
         INTERACTIVE_REQUEST_TIMEOUT_MS,
     );
     let usage_error = usage_result.as_ref().err().cloned();
-    let next_account = account_from_exchange(
-        &context.exchange,
-        context.account.get("custom"),
-        usage_result,
-    )?;
-    let store = add_account_to_store(next_account, false)?;
-    sync_auth_file_if_active(&context.profile_id)?;
+    let store = store_account_usage_result(&context.profile_id, usage_result)?;
 
     if let Some(error) = usage_error {
         let message = usage_error_message(&error);
@@ -166,14 +151,10 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
 
     let store = store_with_refreshed_subscription(&context.profile_id, store);
     let new_account = find_store_account(&context.profile_id)?;
-    let new_usage = new_account
-        .get("custom")
-        .and_then(|custom| custom.get("usage_info"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    let refresh_token_changed =
-        string_field(&context.exchange, "refresh_token") != context.previous_refresh_token;
-    let usage_changed = old_usage != new_usage;
+    let refresh_token_changed = refresh_token_from_account(&new_account)
+        != refresh_token_from_account(&context.previous_account);
+    let usage_changed =
+        stored_usage_info(&context.previous_account) != stored_usage_info(&new_account);
     Ok(json!({
         "ok": true,
         "message": if refresh_token_changed || usage_changed {
@@ -186,26 +167,22 @@ fn refresh_account_with_token_refresh(id: String) -> Result<Value, String> {
 }
 
 pub(super) fn refresh_account_token_impl(id: String) -> Result<Value, String> {
-    let context = match prepare_account_refresh(id)? {
+    let context = match prepare_account_refresh(id, None)? {
         AccountRefreshStart::Ready(context) => context,
         AccountRefreshStart::Failed(payload) => return Ok(payload),
     };
-    let next_account =
-        account_from_exchange_preserve_usage(&context.exchange, context.account.get("custom"))?;
-    let store = add_account_to_store(next_account, false)?;
-    sync_auth_file_if_active(&context.profile_id)?;
     Ok(json!({
         "ok": true,
         "message": "Refresh Token 已刷新",
-        "refresh_token": string_field(&context.exchange, "refresh_token"),
-        "store": store
+        "refresh_token": refresh_token_from_account(&context.account),
+        "store": context.store
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounts::decode_jwt_payload;
+    use crate::{accounts::decode_jwt_payload, json_util::string_field};
     use std::{env, thread, time::Duration};
 
     fn claims_summary(account: &Value) -> String {

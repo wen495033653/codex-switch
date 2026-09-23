@@ -3,28 +3,35 @@ use serde_json::Value;
 
 use super::super::persistence::read_store_value;
 
+/// Position of the account a caller means by `profile_id`. Older settings stored the plain
+/// ChatGPT account id, so a unique account-id match is accepted when no profile id matches.
+pub(super) fn store_account_index(accounts: &[Value], profile_id: &str) -> Option<usize> {
+    if let Some(index) = accounts
+        .iter()
+        .position(|account| profile_id_from_account(account).unwrap_or_default() == profile_id)
+    {
+        return Some(index);
+    }
+
+    let legacy_matches = accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, account)| account_id_from_account(account).unwrap_or_default() == profile_id)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    match legacy_matches.as_slice() {
+        [index] => Some(*index),
+        _ => None,
+    }
+}
+
 fn lookup_store_account_in_value(store: &Value, profile_id: &str) -> Result<Option<Value>, String> {
     let accounts = store
         .get("accounts")
         .and_then(Value::as_array)
         .ok_or_else(|| "accounts.json 数据结构无效".to_string())?;
 
-    if let Some(account) = accounts
-        .iter()
-        .find(|account| profile_id_from_account(account).unwrap_or_default() == profile_id)
-    {
-        return Ok(Some(account.clone()));
-    }
-
-    let legacy_matches = accounts
-        .iter()
-        .filter(|account| account_id_from_account(account).unwrap_or_default() == profile_id)
-        .collect::<Vec<_>>();
-    if legacy_matches.len() == 1 {
-        return Ok(Some(legacy_matches[0].clone()));
-    }
-
-    Ok(None)
+    Ok(store_account_index(accounts, profile_id).map(|index| accounts[index].clone()))
 }
 
 pub(crate) fn lookup_store_account(profile_id: &str) -> Result<Option<Value>, String> {

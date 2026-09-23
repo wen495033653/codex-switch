@@ -1,7 +1,7 @@
 use crate::{
     accounts::{
         access_token_from_account, account_id_from_account, profile_id_from_account,
-        read_store_value, read_store_with_active_sync, BACKGROUND_REQUEST_TIMEOUT_MS,
+        read_store_with_active_sync, BACKGROUND_REQUEST_TIMEOUT_MS,
     },
     events::emit_store_updated,
     json_util::{bool_field, value_u64_field},
@@ -9,6 +9,7 @@ use crate::{
         subscription::refresh_account_subscription,
         usage_store::{get_usage_with_auth_retry, update_account_usage_result},
     },
+    session_sync_diagnostics::log_session_sync_event,
     settings::{
         normalize_background_refresh_interval_minutes, read_settings_value,
         BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES,
@@ -29,20 +30,9 @@ pub(crate) fn begin_refresh_all_quotas(
     runtime: Arc<RefreshAllRuntime>,
     source: &'static str,
 ) -> Result<Value, String> {
-    let status = get_refresh_all_status_value(runtime.as_ref());
     let store = read_store_with_active_sync()?;
-    if bool_field(&status, "running") {
-        return Ok(json!({
-            "ok": true,
-            "message": "后台刷新仍在进行中",
-            "started": false,
-            "status": status,
-            "store": store
-        }));
-    }
-
     let targets = refresh_targets_from_store(&store);
-    let status = set_refresh_all_status_value(
+    let status = match start_refresh_all_status_if_idle(
         runtime.as_ref(),
         json!({
             "running": true,
@@ -55,7 +45,18 @@ pub(crate) fn begin_refresh_all_quotas(
             "message": if targets.is_empty() { "没有可刷新的账号" } else { "后台刷新中" },
             "source": source
         }),
-    );
+    ) {
+        Ok(status) => status,
+        Err(running_status) => {
+            return Ok(json!({
+                "ok": true,
+                "message": "后台刷新仍在进行中",
+                "started": false,
+                "status": running_status,
+                "store": store
+            }));
+        }
+    };
     emit_refresh_all_status(&app, status.clone());
     start_refresh_all_quotas_in_background(app, runtime, targets);
 
@@ -145,11 +146,21 @@ pub(crate) fn get_refresh_all_status_value(runtime: &RefreshAllRuntime) -> Value
         .unwrap_or_else(|_| default_refresh_all_status())
 }
 
-fn set_refresh_all_status_value(runtime: &RefreshAllRuntime, status: Value) -> Value {
-    if let Ok(mut current) = runtime.status.lock() {
-        *current = status.clone();
+/// Checks and claims the "running" flag under one lock, so a manual refresh and the timer
+/// cannot both start a refresh-all pass. Returns the current status when one is running.
+fn start_refresh_all_status_if_idle(
+    runtime: &RefreshAllRuntime,
+    status: Value,
+) -> Result<Value, Value> {
+    let mut current = runtime
+        .status
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if bool_field(&current, "running") {
+        return Err(current.clone());
     }
-    status
+    *current = status.clone();
+    Ok(status)
 }
 
 fn update_refresh_all_status_value<F>(runtime: &RefreshAllRuntime, update: F) -> Value
@@ -312,9 +323,12 @@ fn start_refresh_all_quotas_in_background(
             emit_refresh_all_status(&app, status);
         }
 
-        let _ = read_store_with_active_sync();
-        if let Ok(store) = read_store_value() {
-            emit_store_updated(&app, store);
+        match read_store_with_active_sync() {
+            Ok(store) => emit_store_updated(&app, store),
+            Err(err) => log_session_sync_event(
+                "refresh_all_final_store_read_error",
+                json!({ "error": err }),
+            ),
         }
         let status = update_refresh_all_status_value(runtime.as_ref(), |mut current| {
             let updated = value_u64_field(&current, "updated").unwrap_or(0);

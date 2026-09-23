@@ -1,6 +1,6 @@
 use super::super::{
     model::{normalize_store_data, profile_id_from_account, sort_accounts_by_last_used},
-    persistence::{read_store_value, write_store_value},
+    persistence::mutate_store,
 };
 use crate::accounts::STORE_VERSION;
 use serde_json::{json, Value};
@@ -16,39 +16,36 @@ pub(crate) fn import_store_accounts(
         "accounts": incoming_accounts
     }))?;
 
-    if overwrite {
-        write_store_value(&incoming)?;
-        return Ok(incoming);
-    }
-
-    let mut store = read_store_value()?;
-    let mut merged = HashMap::new();
-
-    for account in store
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-    {
-        if let Ok(profile_id) = profile_id_from_account(&account) {
-            merged.insert(profile_id, account);
+    mutate_store(|store| {
+        if overwrite {
+            *store = incoming;
+            return Ok(());
         }
-    }
 
-    for account in incoming
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-    {
-        if let Ok(profile_id) = profile_id_from_account(&account) {
-            merged.insert(profile_id, account);
+        let mut merged = HashMap::new();
+        for account in store
+            .get("accounts")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .chain(
+                incoming
+                    .get("accounts")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        {
+            if let Ok(profile_id) = profile_id_from_account(&account) {
+                merged.insert(profile_id, account);
+            }
         }
-    }
 
-    let mut accounts: Vec<Value> = merged.into_values().collect();
-    sort_accounts_by_last_used(&mut accounts);
-    store["accounts"] = Value::Array(accounts);
-    write_store_value(&store)?;
-    Ok(store)
+        let mut accounts: Vec<Value> = merged.into_values().collect();
+        sort_accounts_by_last_used(&mut accounts);
+        store["accounts"] = Value::Array(accounts);
+        Ok(())
+    })
+    .map(|(store, ())| store)
 }

@@ -3,7 +3,7 @@ use super::super::super::{
     auth_file::write_account_auth,
     usage::{build_error_state, set_auth_state},
 };
-use super::{mutation::add_account_to_store, query::find_store_account};
+use super::{mutation::update_store_account, query::find_store_account};
 use crate::accounts::account_with_custom;
 use crate::json_util::raw_string_field;
 use crate::settings::remote_control_enabled_from_settings;
@@ -39,16 +39,17 @@ fn auth_file_uses_profile(
 }
 
 pub(crate) fn mark_account_auth_error(profile_id: &str, message: &str) -> Result<Value, String> {
-    let account = find_store_account(profile_id)?;
-    let custom = set_auth_state(
-        account.get("custom"),
-        "error",
-        message,
-        build_error_state(message, "auth_refresh_failed", "", 0, ""),
-        None,
-        None,
-    );
-    let store = add_account_to_store(account_with_custom(&account, custom), false)?;
+    let store = update_store_account(profile_id, |account| {
+        let custom = set_auth_state(
+            account.get("custom"),
+            "error",
+            message,
+            build_error_state(message, "auth_refresh_failed", "", 0, ""),
+            None,
+            None,
+        );
+        Ok(account_with_custom(account, custom))
+    })?;
     disable_selected_remote_control_after_login_expired(profile_id, message)?;
     Ok(store)
 }
