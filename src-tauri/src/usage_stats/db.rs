@@ -194,9 +194,6 @@ pub(super) fn records_counted_after_seconds(connection: &Connection) -> Result<i
     parse_rfc3339_seconds(&value).ok_or_else(|| format!("token 统计记录起点无效: {value:?}"))
 }
 
-// TODO(verify): checked on a copy of the real database (docs/development/usage-stats.md, 验证记录
-// 2026-09-23), not yet in an installed build. Trigger, checks, pass criteria and where to continue
-// are in that document's TODO(verify).
 /// Carries the per-session statistics of earlier versions into the per-response tables, once.
 /// Their all-time totals become one `usage_totals` row per session, and their token events of
 /// the last 30 days become records, so the day, 7 day and 30 day windows keep showing them

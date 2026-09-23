@@ -59,7 +59,7 @@
 - **验证。**
   - 离线：`preflight_checks_appended_lines_and_reuses_unchanged_results`（未写完的行、追加后结论改变、换目标 provider）、`preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time`（同步后大小、时间不变，结论变为 0）、`preflight_checks_a_file_rewritten_by_someone_else_from_the_start`。
   - 真实数据（测试二进制对真实 `~/.codex` 只读）：第一次 420.36MB、3130ms；立即再做一次 0.66MB、28ms；60 秒后（Codex 正在写入）0.81MB、30ms。
-  - 安装版的空闲读盘量随 token 统计一起验证，见 [usage-stats.md](usage-stats.md) 的 TODO(verify)。
+  - 安装版 v6.0.5（2026-09-23）：5 分钟合计读 24.09MB，没有再出现每约 63 秒约 449MB 的读取，采样明细见 [usage-stats.md](usage-stats.md) 的"安装版 v6.0.5"。
 
 ## 代码整理（2026-09-23）
 

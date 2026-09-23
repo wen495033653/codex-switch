@@ -25,13 +25,8 @@ type FileUsageCache = HashMap<PathBuf, CachedFileUsage>;
 
 // The active-quota refresher calls latest_usage_info every minute. Without this cache every call
 // read all recent rollout files from the first byte (about 147 MB per minute on a busy home).
-// TODO(verify): checked by unit tests and by a one-off comparison against the previous full read on
-// a real ~/.codex/sessions (24 files, 146.5 MB: identical result, 897 ms -> 4 ms on the second
-// call), but not yet observed in a running app. Trigger: first run of a build with this change.
-// Check the codex-switch process ReadTransferCount (Task Manager I/O read bytes) over five idle
-// minutes with the window hidden. Pass: no recurring ~147 MB step every 60 s, and the active
-// account's quota still updates while Codex is in use. Fail: start from file_usage_info's stamp
-// comparison. Remove this TODO once confirmed.
+// Confirmed in the installed v6.0.5 on 2026-09-23 (docs/development/usage-stats.md, "安装版
+// v6.0.5"): no recurring ~147 MB read, and the active account's quota kept updating.
 static FILE_USAGE_CACHE: OnceLock<Mutex<FileUsageCache>> = OnceLock::new();
 
 pub(crate) fn latest_usage_info() -> Result<Option<Value>, String> {
