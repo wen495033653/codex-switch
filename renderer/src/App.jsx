@@ -94,6 +94,7 @@ function MainApp() {
   const [usageStatsDetail, setUsageStatsDetail] = useState(null);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [storedLanguagePreference] = useState(getStoredLanguagePreference);
   const devDiagnostics = useDevDiagnostics({ enabled: IS_DEV_BUILD });
   const { message, toast, toastError } = useToast();
   const {
@@ -508,10 +509,13 @@ function MainApp() {
   });
 
   const apiProfileBusy = savingApiMode || savingApiProfile;
-  const languagePreference = settingsDraft.ui_language || settings.ui_language || DEFAULT_UI_LANGUAGE;
+  // Until settings load, DEFAULT_SETTINGS would show (and store) zh-CN for everyone.
+  const languagePreference = settingsLoaded
+    ? (settingsDraft.ui_language || settings.ui_language || DEFAULT_UI_LANGUAGE)
+    : storedLanguagePreference;
 
   return (
-    <I18nProvider preference={languagePreference}>
+    <I18nProvider preference={languagePreference} persist={settingsLoaded}>
     <div className={`app${IS_DEV_BUILD ? ' dev-build' : ''}`}>
       <AppNavbar
         apiModeActive={apiModeActive}

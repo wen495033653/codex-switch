@@ -633,7 +633,9 @@ const I18nContext = createContext({
   translateRuntimeText: value => translateRuntimeText(value, runtimeLanguage)
 });
 
-export function I18nProvider({ preference, children }) {
+// `persist: false` shows a language without storing it, for the stored preference that the
+// main window uses until its settings have loaded.
+export function I18nProvider({ preference, persist = true, children }) {
   const normalizedPreference = normalizeLanguagePreference(preference);
   const language = resolveLanguage(normalizedPreference);
   const value = useMemo(() => ({
@@ -644,8 +646,8 @@ export function I18nProvider({ preference, children }) {
   }), [language, normalizedPreference]);
 
   useLayoutEffect(() => {
-    applyLanguage(normalizedPreference);
-  }, [normalizedPreference]);
+    applyLanguage(normalizedPreference, { persist });
+  }, [normalizedPreference, persist]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
