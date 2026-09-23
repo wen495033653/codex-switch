@@ -1,6 +1,6 @@
 use crate::{
+    app_log::log_event,
     blocking_task::run_blocking,
-    session_sync_diagnostics::log_session_sync_event,
     settings::{remote_control_enabled_from_settings, update_settings_value},
 };
 use serde_json::{json, Value};
@@ -85,7 +85,7 @@ async fn run_codex_restart(
     let started = Instant::now();
     let result = run_blocking("重启 Codex", restart).await;
     if let Err(err) = &result {
-        crate::session_sync_diagnostics::log_session_sync_event(
+        crate::app_log::log_event(
             "codex_app_restart_command_error",
             json!({ "command": command, "elapsedMs": started.elapsed().as_millis(), "error": err }),
         );
@@ -140,7 +140,7 @@ fn sync_remote_control_runtime_after_proxy_change(settings: &Value) -> Value {
         Ok(changed) => json!({ "changed": changed }),
         Err(err) => {
             let error = err.clone();
-            log_session_sync_event(
+            log_event(
                 "codex_remote_control_helper_error",
                 json!({
                     "context": "set_codex_proxy_env_enabled",

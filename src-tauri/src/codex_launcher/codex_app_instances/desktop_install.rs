@@ -1,7 +1,7 @@
+use crate::app_log::log_event_once;
 use crate::json_util::string_field;
 #[cfg(target_os = "macos")]
 use crate::paths::home_dir;
-use crate::session_sync_diagnostics::log_session_sync_event_once;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -205,7 +205,7 @@ pub(crate) fn codex_desktop_support_status() -> Value {
     );
     if let Some(error) = status.get("lookupError") {
         // The settings page polls this status every 3s.
-        log_session_sync_event_once(
+        log_event_once(
             "codex_desktop_install_lookup_error",
             json!({ "error": error }),
         );

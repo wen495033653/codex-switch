@@ -1,5 +1,5 @@
 use super::support::{provider_log_value, write_existing_file};
-use crate::{json_util::raw_string_field, session_sync_diagnostics::log_session_sync_event};
+use crate::{app_log::log_event, json_util::raw_string_field};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -79,7 +79,7 @@ pub(super) fn preview_codex_session_rollout_dirs_to_provider_with_diagnostics(
         extra_rollout_paths,
     )?;
     if let Some(trigger) = trigger {
-        log_session_sync_event(
+        log_event(
             "session_sync_preflight_rollout_selection",
             json!({
                 "trigger": trigger,
@@ -102,7 +102,7 @@ fn sync_codex_session_rollout_dirs_to_provider_with_diagnostics_limit(
     let rollout_files =
         collect_recent_rollout_files_from_dirs(rollout_dirs, limit, extra_rollout_paths)?;
     if let Some(trigger) = trigger {
-        log_session_sync_event(
+        log_event(
             "session_sync_rollout_selection",
             json!({
                 "trigger": trigger,
@@ -129,7 +129,7 @@ fn preview_rollout_files_to_provider_with_diagnostics(
             Ok(false) => {}
             Err(err) => {
                 if let Some(trigger) = trigger {
-                    log_session_sync_event(
+                    log_event(
                         "session_sync_preflight_rollout_file_error",
                         json!({
                             "trigger": trigger,
@@ -146,7 +146,7 @@ fn preview_rollout_files_to_provider_with_diagnostics(
 
     if errors.is_empty() {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_preflight_rollout_batch_finish",
                 json!({
                     "trigger": trigger,
@@ -195,7 +195,7 @@ fn sync_rollout_files_to_provider_with_diagnostics(
             Ok(_) => {}
             Err(err) => {
                 if let Some(trigger) = trigger {
-                    log_session_sync_event(
+                    log_event(
                         "session_sync_rollout_file_error",
                         json!({
                             "trigger": trigger,
@@ -212,7 +212,7 @@ fn sync_rollout_files_to_provider_with_diagnostics(
 
     if errors.is_empty() {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_rollout_batch_finish",
                 json!({
                     "trigger": trigger,

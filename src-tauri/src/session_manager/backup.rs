@@ -16,7 +16,7 @@ pub(super) fn session_manager_data_dir() -> Result<PathBuf, String> {
 }
 
 // Unit tests take real state DB and global state backups; they must not write into the user's
-// application data directory (same rule as the error log in session_sync_diagnostics).
+// application data directory (same rule as the error log in app_log).
 #[cfg(test)]
 pub(super) fn session_manager_data_dir() -> Result<PathBuf, String> {
     Ok(std::env::temp_dir()

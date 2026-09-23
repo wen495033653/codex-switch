@@ -21,7 +21,7 @@ use tauri::AppHandle;
 /// The switch itself succeeded; only the token statistics lose track of who owns the next
 /// sessions, so the failure is recorded rather than returned.
 fn log_attribution_error(owner_type: &str, error: String) {
-    crate::session_sync_diagnostics::log_session_sync_event(
+    crate::app_log::log_event(
         "usage_stats_attribution_error",
         json!({ "ownerType": owner_type, "error": error }),
     );

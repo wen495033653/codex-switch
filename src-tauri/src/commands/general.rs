@@ -129,7 +129,7 @@ fn set_codex_model_instructions_enabled_impl(
     let backup_path = if enabled {
         let preparation =
             prepare_model_instructions_for_enable(app, overwrite_local).map_err(|err| {
-                crate::session_sync_diagnostics::log_session_sync_event(
+                crate::app_log::log_event(
                     "model_instructions_prepare_error",
                     json!({ "enabled": enabled, "overwriteLocal": overwrite_local, "error": err }),
                 );

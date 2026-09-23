@@ -61,7 +61,7 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 ### 会话同步读 rollout（`codex_sessions`）
 
 - `state_threads`：`has_user_event` 已经是 1 的行不再扫描用户消息；其余情况按行流式读取，读到第一个 `session_meta` 的 cwd（通常第 1 行）并且（需要时）找到第一条含 `"user_message"` / `"user_input"` 的行就停止。子串与 `session_meta` 的判定和原来整读的实现相同。停止位置之后的内容不再解码，因此其中的非 UTF-8 字节不再让整个同步失败。
-- 因其他进程占用（共享冲突 32、锁冲突 33、拒绝访问）而跳过的 rollout 仍然跳过，但数量和路径写入 `session_sync_state_db_summary` / `session_sync_preflight_state_db_summary` 的 `lockedRollouts`、`lockedRolloutPaths`（DEV 日志面板也展示）。这两个事件不是 `_error`，正式版不落盘。
+- 因其他进程占用（共享冲突 32、锁冲突 33、拒绝访问）而跳过的 rollout 仍然跳过，但数量和路径写入 `session_sync_state_db_summary` / `session_sync_preflight_state_db_summary` 的 `lockedRollouts`、`lockedRolloutPaths`。同步那条（`session_sync_state_db_summary`）从 2026-09-23 起写入时间线 `logs/codex-switch-events.jsonl`；预检查那条随定时器触发，不记录也不显示（与以前相同）。
 - `rollouts::update_rollout_provider_line`：不含 `"model_provider"` 也不含 `"session_meta"` 字面量的行直接跳过 JSON 解析。
 - “最近 50 个 rollout”的选择没有改（见下方决策）。
 
@@ -71,7 +71,7 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 
 ### 错误日志
 
-下列事件以 `_error` 结尾，正式版会写入数据目录 `logs/codex-switch-errors.jsonl`（DEV 日志面板不展示这些新事件的明细）：
+下列事件以 `_error` 结尾，正式版会写入数据目录 `logs/codex-switch-errors.jsonl` 和时间线 `logs/codex-switch-events.jsonl`，开发日志面板原样显示明细：
 
 | 事件 | 主要字段 |
 | --- | --- |
@@ -93,7 +93,7 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - **`"model_provider"` / `"session_meta"` 字面量预筛的前提**：Codex 用 serde 写 JSONL，键名不会被转义（`_` 之类）。只有这种人为转义的行才会与“逐行解析”的结果不同。
 - **`.codex-global-state.json` 的写入放在 `codex_sessions`。** `session_manager` 已依赖 `codex_sessions`（I/O 锁），反向不行。两套旧实现都不是原子写（一个 `fs::write`，一个截断后原地写）；合并时保留了“只写已存在的文件”的一套，之后在 `main` 上换成了 `atomic_file::write_file_atomically`。
 - **rollout 回写仍是原地写，但写前复核（2026-09-23）。** 关闭 Codex 失败后的直接同步、重开编辑器前的同步都可能在 Codex 仍运行时改写 rollout。这里不能换成临时文件 + rename：Codex 手里的追加句柄会继续写进被替换掉的旧文件，新内容永久丢失。改为写入前比对文件长度和修改时间，与读取时不一致（Codex 在这期间追加过）就跳过该文件并作为同步错误报告，避免截断掉新追加的行；复核与写入之间仍有极短窗口。测试 `rollout_appended_after_the_read_is_not_rewritten`。
-- **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `session_sync_diagnostics` 的错误日志同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
+- **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `app_log` 的日志文件同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
 
 ## 验证记录
 

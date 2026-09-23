@@ -21,10 +21,7 @@ use super::{
     },
     util::{dedupe_strings, sha256_file, system_time_to_rfc3339},
 };
-use crate::{
-    codex_sessions::lock_codex_session_io, session_sync_diagnostics::log_session_sync_event,
-    time_util::now_string,
-};
+use crate::{app_log::log_event, codex_sessions::lock_codex_session_io, time_util::now_string};
 use serde_json::{json, Value};
 use std::{collections::HashSet, fs, path::Path};
 
@@ -216,7 +213,7 @@ pub(super) fn delete_conversations_locked(
         ));
     }
     if desktop_error.is_some() || global_state_error.is_some() {
-        log_session_sync_event(
+        log_event(
             "session_manager_delete_cleanup_error",
             json!({
                 "root": root.to_string_lossy().to_string(),
@@ -414,7 +411,7 @@ pub(super) fn restore_deleted_sessions_locked(
     }
 
     if !warnings.is_empty() {
-        log_session_sync_event(
+        log_event(
             "session_manager_restore_cleanup_error",
             json!({
                 "restored": restored_delete_ids.len(),

@@ -3,13 +3,13 @@ use crate::{
         access_token_from_account, account_id_from_account, profile_id_from_account,
         read_store_with_active_sync, BACKGROUND_REQUEST_TIMEOUT_MS,
     },
+    app_log::log_event,
     events::emit_store_updated,
     json_util::{bool_field, value_u64_field},
     quota::{
         subscription::refresh_account_subscription,
         usage_store::{get_usage_with_auth_retry, update_account_usage_result},
     },
-    session_sync_diagnostics::log_session_sync_event,
     settings::{
         normalize_background_refresh_interval_minutes, read_settings_value,
         BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES,
@@ -90,7 +90,7 @@ pub(crate) fn start_background_quota_auto_refresher(
         let (enabled, interval_minutes) = match background_refresh_settings() {
             Ok(value) => value,
             Err(err) => {
-                log_session_sync_event(
+                log_event(
                     "background_refresh_settings_read_error",
                     json!({
                         "error": err,
@@ -109,14 +109,14 @@ pub(crate) fn start_background_quota_auto_refresher(
                         if let Err(err) =
                             begin_refresh_all_quotas(app.clone(), Arc::clone(&runtime), "auto")
                         {
-                            log_session_sync_event(
+                            log_event(
                                 "background_refresh_start_error",
                                 json!({ "error": err, "intervalMinutes": interval_minutes }),
                             );
                         }
                     }
                 }
-                Err(err) => log_session_sync_event(
+                Err(err) => log_event(
                     "background_refresh_store_read_error",
                     json!({
                         "error": err,
@@ -343,7 +343,7 @@ fn start_refresh_all_quotas_in_background(
 
         match read_store_with_active_sync() {
             Ok(store) => emit_store_updated(&app, store),
-            Err(err) => log_session_sync_event(
+            Err(err) => log_event(
                 "refresh_all_final_store_read_error",
                 json!({ "error": err }),
             ),

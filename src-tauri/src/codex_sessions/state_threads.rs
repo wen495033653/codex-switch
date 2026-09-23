@@ -3,8 +3,8 @@ use super::{
     support::{global_state_path, provider_log_value, state_db_path},
 };
 use crate::{
+    app_log::log_event,
     paths::{codex_dir, codex_home_from_state_db_path},
-    session_sync_diagnostics::log_session_sync_event,
 };
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
@@ -332,7 +332,7 @@ pub(super) fn sync_codex_state_threads_to_provider_with_diagnostics(
 ) -> Result<usize, String> {
     if !state_db.exists() {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_state_db_missing",
                 json!({
                     "trigger": trigger,
@@ -353,7 +353,7 @@ pub(super) fn sync_codex_state_threads_to_provider_with_diagnostics(
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
     let Some(columns) = state_threads_columns(&connection)? else {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_state_db_threads_missing",
                 json!({
                     "trigger": trigger,
@@ -366,7 +366,7 @@ pub(super) fn sync_codex_state_threads_to_provider_with_diagnostics(
     };
     if !columns.contains("model_provider") {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_state_db_threads_unsupported",
                 json!({
                     "trigger": trigger,
@@ -461,7 +461,7 @@ pub(super) fn preview_codex_state_threads_to_provider_with_diagnostics(
 ) -> Result<usize, String> {
     if !state_db.exists() {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_preflight_state_db_missing",
                 json!({
                     "trigger": trigger,
@@ -482,7 +482,7 @@ pub(super) fn preview_codex_state_threads_to_provider_with_diagnostics(
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
     let Some(columns) = state_threads_columns(&connection)? else {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_preflight_state_db_threads_missing",
                 json!({
                     "trigger": trigger,
@@ -495,7 +495,7 @@ pub(super) fn preview_codex_state_threads_to_provider_with_diagnostics(
     };
     if !columns.contains("model_provider") {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_preflight_state_db_threads_unsupported",
                 json!({
                     "trigger": trigger,
@@ -572,7 +572,7 @@ pub(super) fn preview_codex_state_threads_to_provider_with_diagnostics(
         counts.provider_rows
     };
     if let Some(trigger) = trigger {
-        log_session_sync_event(
+        log_event(
             "session_sync_preflight_state_db_summary",
             json!({
                 "trigger": trigger,
@@ -613,7 +613,7 @@ fn log_state_db_update_summary(
     if updated == 0 && locked_rollouts.is_empty() && summary.get("summaryError").is_none() {
         return;
     }
-    log_session_sync_event(
+    log_event(
         "session_sync_state_db_summary",
         json!({
             "trigger": trigger,

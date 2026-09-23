@@ -5,9 +5,9 @@ use crate::{
         normalize_custom, normalize_tokens, profile_id_from_account, read_store_value,
         refresh_token_from_account, set_auth_state, sync_auth_file_if_active, update_store_account,
     },
+    app_log::{account_label, log_event},
     events::emit_store_updated,
     json_util::{raw_string_field, string_field},
-    session_sync_diagnostics::log_session_sync_event,
     time_util::parse_rfc3339_seconds,
 };
 use serde_json::{json, Value};
@@ -66,12 +66,6 @@ fn lock_account_rotation(profile_id: &str) -> AccountRotationGuard {
     AccountRotationGuard {
         profile_id: profile_id.to_string(),
     }
-}
-
-/// Logs identify an account by the first 8 characters of its profile id (the ChatGPT account
-/// id prefix), never the full id, email or tokens.
-pub(super) fn account_log_label(profile_id: &str) -> String {
-    profile_id.chars().take(8).collect()
 }
 
 fn should_auto_refresh_account(account: &Value) -> bool {
@@ -200,10 +194,10 @@ fn refresh_due_account_tokens_once(app: &AppHandle) -> Result<Value, String> {
                     }
                     Err(mark_err) => Some(mark_err),
                 };
-                log_session_sync_event(
+                log_event(
                     "account_auth_auto_refresh_error",
                     json!({
-                        "account": account_log_label(&profile_id),
+                        "account": account_label(&profile_id),
                         "error": err,
                         "markError": mark_error
                     }),
@@ -222,7 +216,7 @@ fn refresh_due_account_tokens_once(app: &AppHandle) -> Result<Value, String> {
 pub(crate) fn start_account_token_auto_refresher(app: AppHandle) {
     thread::spawn(move || loop {
         if let Err(err) = refresh_due_account_tokens_once(&app) {
-            log_session_sync_event(
+            log_event(
                 "account_auth_auto_refresh_pass_error",
                 json!({ "error": err, "nextRunSeconds": AUTO_AUTH_INTERVAL_SECONDS }),
             );

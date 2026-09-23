@@ -1,4 +1,4 @@
-use crate::session_sync_diagnostics::log_session_sync_event_once;
+use crate::app_log::log_event_once;
 use serde_json::json;
 use std::{
     cmp::Reverse,
@@ -10,7 +10,7 @@ use std::{
 /// A directory or file the scan could not read is skipped. The scan runs every minute, so each
 /// distinct failure is recorded once per run.
 fn log_scan_error(error: String) {
-    log_session_sync_event_once(
+    log_event_once(
         "codex_session_usage_scan_error",
         json!({ "error": error, "handling": "skipped" }),
     );

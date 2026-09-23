@@ -4,10 +4,7 @@ use crate::{
     json_util::{bool_field, string_field, value_u64_field},
     time_util::now_string,
 };
-use crate::{
-    codex_sessions::sync_codex_sessions_to_provider_now_from,
-    session_sync_diagnostics::log_session_sync_event,
-};
+use crate::{app_log::log_event, codex_sessions::sync_codex_sessions_to_provider_now_from};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::{collections::HashMap, sync::Mutex};
@@ -130,7 +127,7 @@ fn restart_open_ides_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<Val
         .remove(id)
         .ok_or_else(|| "编辑器快照不存在或已过期".to_string())?;
 
-    log_session_sync_event(
+    log_event(
         "ide_reopen_confirm_start",
         json!({
             "snapshotId": id,
@@ -151,7 +148,7 @@ fn restart_open_ides_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<Val
                 session_sync_warning = Some(err);
             }
         } else {
-            log_session_sync_event(
+            log_event(
                 "ide_reopen_session_sync_skip",
                 json!({
                     "snapshotId": id,
@@ -172,7 +169,7 @@ fn restart_open_ides_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<Val
     } else {
         message
     };
-    log_session_sync_event(
+    log_event(
         "ide_reopen_confirm_finish",
         json!({
             "snapshotId": id,
@@ -204,7 +201,7 @@ fn discard_ide_snapshot_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<
             .map_err(|_| "编辑器快照状态锁异常".to_string())?
             .remove(id)
         {
-            log_session_sync_event(
+            log_event(
                 "ide_reopen_discard_without_config_apply",
                 json!({
                     "snapshotId": id,

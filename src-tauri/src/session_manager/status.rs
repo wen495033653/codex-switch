@@ -14,9 +14,7 @@ use super::{
     state_db::apply_status_moves_to_state_db,
     util::dedupe_strings,
 };
-use crate::{
-    codex_sessions::lock_codex_session_io, session_sync_diagnostics::log_session_sync_event,
-};
+use crate::{app_log::log_event, codex_sessions::lock_codex_session_io};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -208,7 +206,7 @@ pub(super) fn set_conversation_status_impl(
                     rollback_errors.push(err);
                 }
             }
-            log_session_sync_event(
+            log_event(
                 "session_manager_status_state_db_error",
                 json!({
                     "root": root.to_string_lossy().to_string(),
@@ -260,7 +258,7 @@ pub(super) fn set_conversation_status_impl(
         cleanup_errors.push(format!("清理被覆盖会话的 global state 失败: {err}"));
     }
     if !cleanup_errors.is_empty() {
-        log_session_sync_event(
+        log_event(
             "session_manager_status_cleanup_error",
             json!({
                 "root": root.to_string_lossy().to_string(),

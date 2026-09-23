@@ -2,7 +2,7 @@ use super::{
     ide_snapshot::{codex_desktop_display_name, detect_ide_app},
     process_control::root_pids,
 };
-use crate::session_sync_diagnostics::{log_session_sync_event, log_session_sync_event_once};
+use crate::app_log::{log_event, log_event_once};
 use crate::time_util::now_string;
 use serde_json::{json, Value};
 use std::{
@@ -143,7 +143,7 @@ pub(crate) fn expect_app_command_codex_app_open_for_executables(executables: &[S
 fn expect_codex_app_open_for_executables_from(executables: &[String], source: &str) {
     let keys = normalize_executable_keys(executables.iter().map(String::as_str));
     if keys.is_empty() {
-        log_session_sync_event(
+        log_event(
             "codex_app_watcher_expect_open_skip",
             json!({ "reason": "empty_executables", "source": source }),
         );
@@ -153,7 +153,7 @@ fn expect_codex_app_open_for_executables_from(executables: &[String], source: &s
         expected.executables = keys;
         expected.source = source.to_string();
         expected.until = Some(Instant::now() + StdDuration::from_millis(PENDING_RELAUNCH_TTL_MS));
-        log_session_sync_event(
+        log_event(
             "codex_app_watcher_expect_open_set",
             json!({
                 "executables": expected.executables.clone(),
@@ -174,7 +174,7 @@ pub(crate) fn clear_expected_codex_app_open_for_executables(executables: &[Strin
             expected.executables.clear();
             expected.source.clear();
             expected.until = None;
-            log_session_sync_event(
+            log_event(
                 "codex_app_watcher_expect_open_cleared",
                 json!({ "executables": keys }),
             );
@@ -187,7 +187,7 @@ pub(crate) fn suppress_next_codex_app_open_handler(source: &str) {
         suppressed.count = suppressed.count.saturating_add(1);
         suppressed.source = source.to_string();
         suppressed.until = Some(Instant::now() + StdDuration::from_millis(SUPPRESSED_OPEN_TTL_MS));
-        log_session_sync_event(
+        log_event(
             "codex_app_watcher_suppress_open_set",
             json!({
                 "source": suppressed.source.clone(),
@@ -208,7 +208,7 @@ pub(crate) fn clear_suppressed_codex_app_open_handler(source: &str) {
             suppressed.source.clear();
             suppressed.until = None;
         }
-        log_session_sync_event(
+        log_event(
             "codex_app_watcher_suppress_open_cleared",
             json!({
                 "source": source,
@@ -223,14 +223,14 @@ where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String> + Send + 'static,
 {
     if !cfg!(any(windows, target_os = "macos")) {
-        log_session_sync_event(
+        log_event(
             "codex_app_watcher_not_started",
             json!({ "reason": "unsupported_platform" }),
         );
         return;
     }
 
-    log_session_sync_event("codex_app_watcher_started", json!({}));
+    log_event("codex_app_watcher_started", json!({}));
     thread::spawn(move || {
         // Shared with manual close failures; only restarting Codex Switch resets this latch.
         loop {
@@ -242,7 +242,7 @@ where
                 .err()
                 .map(panic_payload_message)
                 .unwrap_or_else(|| "Watcher 意外退出".to_string());
-            log_session_sync_event(
+            log_event(
                 "codex_app_watcher_panic_error",
                 json!({
                     "error": panic,
@@ -279,7 +279,7 @@ where
             Ok(processes) => processes,
             Err(err) => {
                 // Scanned every 5 s: one lasting cause is recorded once per run.
-                log_session_sync_event_once(
+                log_event_once(
                     "codex_app_watcher_scan_error",
                     json!({ "error": err.clone() }),
                 );
@@ -302,14 +302,14 @@ where
                 && open_signature.is_some()
                 && open_absence_elapsed(&mut open_absence_since, now)
             {
-                log_session_sync_event(
+                log_event(
                     "codex_app_watcher_open_signature_reset",
                     json!({ "reason": "process_absence_elapsed" }),
                 );
                 open_signature = None;
             }
             if baseline_current_processes {
-                log_session_sync_event(
+                log_event(
                     "codex_app_watcher_baseline_empty",
                     json!({ "reason": "no_processes_on_first_scan" }),
                 );
@@ -325,7 +325,7 @@ where
         if let Some(expected_source) =
             take_expected_codex_app_open_source_if_matches(&executable_keys, now)
         {
-            log_session_sync_event(
+            log_event(
                 "codex_app_watcher_expected_open_matched",
                 json!({
                     "action": "skip_on_open_handler",
@@ -344,7 +344,7 @@ where
         if !pending_relaunch_executables.is_empty()
             && executable_keys == pending_relaunch_executables
         {
-            log_session_sync_event(
+            log_event(
                 "codex_app_watcher_pending_relaunch_matched",
                 json!({
                     "action": "mark_open_without_handler",
@@ -359,7 +359,7 @@ where
         }
 
         if baseline_current_processes {
-            log_session_sync_event(
+            log_event(
                 "codex_app_watcher_baseline_existing_processes",
                 json!({
                     "action": "set_open_signature_without_handler",
@@ -391,7 +391,7 @@ where
         }
 
         if periodic_reconcile {
-            log_session_sync_event(
+            log_event(
                 "codex_app_watcher_periodic_reconcile",
                 json!({
                     "signature": codex_open_signature_log_value(&signature),
@@ -402,7 +402,7 @@ where
             );
         } else {
             if !confirm_open_candidate(&mut candidate_signature, &signature) {
-                log_session_sync_event(
+                log_event(
                     "codex_app_watcher_open_candidate_seen",
                     json!({
                         "signature": codex_open_signature_log_value(&signature),
@@ -416,7 +416,7 @@ where
             }
 
             if let Some(source) = take_suppressed_codex_app_open_source(now) {
-                log_session_sync_event(
+                log_event(
                     "codex_app_watcher_suppressed_open_matched",
                     json!({
                         "action": "skip_on_open_handler",
@@ -434,7 +434,7 @@ where
             }
         }
 
-        log_session_sync_event(
+        log_event(
             "codex_app_watcher_on_open_invoke",
             json!({
                 "reason": if periodic_reconcile { "periodic_reconcile" } else { "new_process" },
@@ -447,7 +447,7 @@ where
             Some(outcome) if outcome.relaunch_expected => {
                 open_signature = Some(signature.clone());
                 last_open_handler_at = Instant::now();
-                log_session_sync_event(
+                log_event(
                     "codex_app_watcher_on_open_finish",
                     json!({
                         "relaunchExpected": true,
@@ -461,7 +461,7 @@ where
             Some(_) => {
                 open_signature = Some(signature.clone());
                 last_open_handler_at = Instant::now();
-                log_session_sync_event(
+                log_event(
                     "codex_app_watcher_on_open_finish",
                     json!({ "relaunchExpected": false }),
                 );
@@ -494,7 +494,7 @@ where
         ),
     };
     disabled.store(true, Ordering::SeqCst);
-    log_session_sync_event(
+    log_event(
         event,
         json!({
             "error": error,
@@ -506,18 +506,28 @@ where
     None
 }
 
+/// Processes grouped by executable. Codex runs a dozen processes from one executable, and
+/// repeating the full WindowsApps path for each made up most of a log line.
 pub(super) fn codex_processes_log_value(processes: &[CodexProcess]) -> Value {
+    let mut groups: Vec<(&str, Vec<Value>)> = Vec::new();
+    for process in processes {
+        let entry = json!({
+            "pid": process.pid,
+            "parentPid": process.parent_pid,
+            "startedAt": process.started_at
+        });
+        match groups
+            .iter_mut()
+            .find(|(path, _)| *path == process.executable_path)
+        {
+            Some((_, entries)) => entries.push(entry),
+            None => groups.push((process.executable_path.as_str(), vec![entry])),
+        }
+    }
     Value::Array(
-        processes
-            .iter()
-            .map(|process| {
-                json!({
-                    "pid": process.pid,
-                    "parentPid": process.parent_pid,
-                    "startedAt": process.started_at,
-                    "executablePath": process.executable_path.as_str()
-                })
-            })
+        groups
+            .into_iter()
+            .map(|(path, entries)| json!({ "executablePath": path, "processes": entries }))
             .collect(),
     )
 }
@@ -811,18 +821,18 @@ mod tests {
         }
         assert!(disabled.load(Ordering::SeqCst));
         assert_eq!(calls.get(), 1);
-        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        let logs = crate::app_log::get_dev_log_entries();
         let entry = logs
             .as_array()
             .unwrap()
             .iter()
             .find(|entry| {
-                entry["details"]["details"]["错误"]
+                entry["details"]["details"]["error"]
                     == "test watcher termination failed: exitCode=128; access denied"
             })
             .unwrap();
         assert_eq!(entry["details"]["event"], "codex_app_watcher_on_open_error");
-        assert_eq!(entry["details"]["details"]["将重试"], false);
+        assert_eq!(entry["details"]["details"]["retry"], false);
     }
 
     #[test]
@@ -838,18 +848,18 @@ mod tests {
         }
         assert!(disabled.load(Ordering::SeqCst));
         assert_eq!(calls.get(), 1);
-        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        let logs = crate::app_log::get_dev_log_entries();
         let entry = logs
             .as_array()
             .unwrap()
             .iter()
-            .find(|entry| entry["details"]["details"]["错误"] == "test watcher handler panic")
+            .find(|entry| entry["details"]["details"]["error"] == "test watcher handler panic")
             .unwrap();
         assert_eq!(
             entry["details"]["event"],
             "codex_app_watcher_on_open_panic_error"
         );
-        assert_eq!(entry["details"]["details"]["将重试"], false);
+        assert_eq!(entry["details"]["details"]["retry"], false);
     }
 
     #[test]

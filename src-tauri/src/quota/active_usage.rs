@@ -1,10 +1,10 @@
 use super::usage_store::update_active_account_usage_result;
 use crate::{
     accounts::{get_codex_state_value, profile_id_from_account, read_store_with_active_sync},
+    app_log::log_event_once,
     codex_session_usage,
     events::emit_store_updated,
     json_util::raw_string_field,
-    session_sync_diagnostics::log_session_sync_event_once,
     time_util::parse_rfc3339_seconds,
 };
 use serde_json::{json, Value};
@@ -110,7 +110,7 @@ fn refresh_active_account_usage_once(app: &AppHandle) -> Result<Value, String> {
 
 /// The timer runs every minute, so one lasting cause is recorded once per run and trigger.
 fn log_active_usage_sync_error(trigger: &str, error: String) {
-    log_session_sync_event_once(
+    log_event_once(
         "active_account_usage_sync_error",
         json!({ "trigger": trigger, "error": error }),
     );

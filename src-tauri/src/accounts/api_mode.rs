@@ -4,8 +4,8 @@ use super::{
 };
 use crate::{
     api_config::normalize_api_base_url,
+    app_log::log_event_once,
     json_util::string_field,
-    session_sync_diagnostics::log_session_sync_event_once,
     settings::{default_api_mode, read_settings_value},
 };
 use crate::{
@@ -76,7 +76,7 @@ fn read_config_for_state() -> Option<ConfigSnapshot> {
 
 /// The state is read on every store update, so one lasting cause is recorded once per run.
 fn log_codex_state_read_error(file: &str, handling: &str, error: String) {
-    log_session_sync_event_once(
+    log_event_once(
         "codex_state_read_error",
         json!({ "file": file, "handling": handling, "error": error }),
     );

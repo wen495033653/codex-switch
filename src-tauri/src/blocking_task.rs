@@ -1,4 +1,4 @@
-use crate::session_sync_diagnostics::log_session_sync_event;
+use crate::app_log::log_event;
 use serde_json::json;
 
 /// Tauri runs a non-async command on the main thread, so file, process or network work there
@@ -12,7 +12,7 @@ pub(crate) async fn run_blocking<T: Send + 'static>(
         .await
         .map_err(|err| {
             let raw = err.to_string();
-            log_session_sync_event(
+            log_event(
                 "command_blocking_task_error",
                 json!({ "action": action, "error": raw }),
             );

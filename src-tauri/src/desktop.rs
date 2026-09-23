@@ -1,6 +1,6 @@
 use crate::{
+    app_log::log_event_once,
     json_util::{bool_field, string_field},
-    session_sync_diagnostics::log_session_sync_event_once,
     settings::{read_settings_value, update_settings_value},
 };
 use serde_json::{json, Value};
@@ -349,7 +349,7 @@ pub(crate) fn handle_main_window_event(window: &tauri::Window, event: &WindowEve
 /// Resizing saves repeatedly, so one lasting cause (for example an unwritable settings.json) is
 /// recorded once per run and trigger instead of on every resize.
 fn log_window_state_save_error(trigger: &str, error: String) {
-    log_session_sync_event_once(
+    log_event_once(
         "window_state_save_error",
         json!({ "trigger": trigger, "error": error }),
     );

@@ -3,6 +3,7 @@ use crate::{
         find_store_account, profile_id_from_account, read_api_key_from_auth,
         read_api_key_from_provider_config,
     },
+    app_log::{log_event, log_event_once},
     json_file::write_json_file,
     json_util::string_field,
     model_instructions::{
@@ -10,7 +11,6 @@ use crate::{
     },
     paths::{app_data_dir, codex_dir},
     session_manager::migrate_legacy_codex_data_for_root,
-    session_sync_diagnostics::{log_session_sync_event, log_session_sync_event_once},
     settings::{default_api_mode, read_settings_value},
     time_util::now_string,
 };
@@ -77,7 +77,7 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
         paths.codex_home.to_string_lossy().to_string(),
     )];
 
-    log_session_sync_event(
+    log_event(
         "codex_app_multi_open_start",
         json!({
             "kind": channel.kind,
@@ -97,7 +97,7 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
     ) {
         Ok(launch) if launch.launched => {
             trigger_instance_legacy_migration(paths.codex_home.clone());
-            log_session_sync_event(
+            log_event(
                 "codex_app_multi_open_finish",
                 json!({
                     "kind": channel.kind,
@@ -155,7 +155,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
         return Err("独立 Codex 窗口未运行，请重新打开一次".to_string());
     }
     if let Err(err) = focus_instance_window(&pids) {
-        log_session_sync_event(
+        log_event(
             "codex_app_multi_open_show_window_error",
             json!({
                 "kind": target_kind,
@@ -167,7 +167,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
         );
         return Err(err);
     }
-    log_session_sync_event(
+    log_event(
         "codex_app_multi_open_show_window",
         json!({
             "kind": target_kind,
@@ -254,7 +254,7 @@ fn read_codex_app_instance_statuses(
         let (marker, marker_error) = match read_instance_marker(&root) {
             Ok(marker) => (marker, None),
             Err(err) => {
-                log_session_sync_event_once(
+                log_event_once(
                     "codex_app_instance_marker_error",
                     json!({ "instanceRoot": root.to_string_lossy(), "error": err }),
                 );
@@ -569,7 +569,7 @@ fn prepare_instance_paths(
         )
     })?;
     let migration_report = migrate_legacy_codex_data_for_root(&codex_home)?;
-    log_session_sync_event("codex_app_instance_data_migration", migration_report);
+    log_event("codex_app_instance_data_migration", migration_report);
     sync_instance_codex_home(app, &codex_home, channel)?;
     write_instance_marker(&root, channel)?;
 
@@ -587,13 +587,13 @@ fn trigger_instance_legacy_migration(codex_home: PathBuf) {
             match migrate_legacy_codex_data_for_root(&codex_home) {
                 Ok(report) => {
                     let completed = report.get("completed").and_then(Value::as_bool) == Some(true);
-                    log_session_sync_event("codex_app_instance_data_migration", report);
+                    log_event("codex_app_instance_data_migration", report);
                     if completed {
                         break;
                     }
                 }
                 Err(err) => {
-                    log_session_sync_event(
+                    log_event(
                         "codex_app_instance_data_migration_error",
                         json!({
                             "codexHome": codex_home.to_string_lossy(),

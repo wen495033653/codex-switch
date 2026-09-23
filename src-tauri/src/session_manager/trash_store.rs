@@ -20,7 +20,7 @@ use super::{
     },
     util::{backup_stamp, sha256_bytes, sha256_file, unique_sibling_path},
 };
-use crate::session_sync_diagnostics::log_session_sync_event;
+use crate::app_log::log_event;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -633,7 +633,7 @@ pub(super) fn restore_deleted_candidate(
                 &candidate.target_path,
                 overwrite_backup.as_deref(),
             );
-            log_session_sync_event(
+            log_event(
                 "session_manager_restore_state_db_error",
                 json!({
                     "deleteId": candidate.record.delete_id,

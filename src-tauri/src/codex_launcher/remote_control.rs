@@ -9,6 +9,7 @@ use crate::{
         read_store_value, set_api_mode, set_subscription_mode, write_account_auth,
     },
     api_config::API_PROVIDER_ID,
+    app_log::{account_label, log_event, log_event_once},
     blocking_task::run_blocking,
     codex_config::{
         read_root_config, read_table_config, remove_config_values, remove_remote_control_config,
@@ -16,7 +17,6 @@ use crate::{
     },
     json_util::string_field,
     paths::{app_data_dir, auth_path},
-    session_sync_diagnostics::{log_session_sync_event, log_session_sync_event_once},
     settings::{
         default_api_mode, read_settings_value, remote_control_config_enabled_from_settings,
         remote_control_enabled_from_settings, remote_control_suspended_by_subscription,
@@ -274,12 +274,12 @@ fn apply_remote_control_mixed_config(settings: &Value) -> Result<(), String> {
         remote_control_mixed_provider_config(&api_base_url, &api_key),
     )?;
     remove_remote_control_config()?;
-    log_session_sync_event(
+    log_event(
         "codex_remote_control_runtime_applied",
         json!({
             "mode": "api_remote_control",
             "remoteControl": true,
-            "accountId": account_id,
+            "account": account_label(&account_id),
             "provider": API_PROVIDER_ID
         }),
     );
@@ -550,19 +550,19 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
     let changed = remote_control_sync_changed(legacy_runtime_changed, runtime_config_changed);
 
     if let Some(issue) = account_issue {
-        log_session_sync_event(
+        log_event(
             "codex_remote_control_auto_disabled",
             json!({
                 "context": context,
                 "reason": issue.reason(),
-                "accountId": issue.account_id(),
+                "account": account_label(issue.account_id()),
                 "message": issue.message()
             }),
         );
     }
 
     if changed {
-        log_session_sync_event(
+        log_event(
             "codex_remote_control_runtime_updated",
             json!({
                 "context": context,
@@ -668,7 +668,7 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
     if !account_id.is_empty() {
         if let Err(err) = mark_account_auth_error(&account_id, "控制账号登录已过期，请重新登录")
         {
-            log_session_sync_event(
+            log_event(
                 "codex_remote_control_account_status_update_failed",
                 json!({
                     "reason": "login_expired",
@@ -723,10 +723,7 @@ pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
         // Polled every 4s while remote control is on; the UI shows every failure, the log keeps
         // each distinct one once.
         get_codex_remote_control_status_impl().inspect_err(|err| {
-            log_session_sync_event_once(
-                "codex_remote_control_status_error",
-                json!({ "error": err }),
-            );
+            log_event_once("codex_remote_control_status_error", json!({ "error": err }));
         })
     })
     .await
@@ -764,11 +761,11 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
             return Err(runtime_error.unwrap_or_else(|| "自动关闭远程控制失败，请重试".to_string()));
         }
         auto_disable_message = Some(issue.message());
-        log_session_sync_event(
+        log_event(
             "codex_remote_control_auto_disabled",
             json!({
                 "reason": issue.reason(),
-                "accountId": issue.account_id(),
+                "account": account_label(issue.account_id()),
                 "changed": changed,
                 "restartRequired": restart_required,
                 "runtimeError": runtime_error.clone(),
@@ -798,7 +795,7 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
             );
             status.insert("autoDisabled".to_string(), json!(true));
         }
-        log_session_sync_event(
+        log_event(
             "codex_remote_control_auto_disabled",
             json!({
                 "reason": "login_expired",

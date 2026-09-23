@@ -1,4 +1,4 @@
-use crate::session_sync_diagnostics::PROCESS_ELEVATION_WARNING;
+use crate::app_log::PROCESS_ELEVATION_WARNING;
 use std::{
     io,
     mem::size_of,

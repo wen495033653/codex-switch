@@ -1,6 +1,6 @@
 use super::capture_open_ide_snapshot;
 use super::{IdePending, IdeRuntime};
-use crate::{accounts::random_urlsafe, session_sync_diagnostics::log_session_sync_event};
+use crate::{accounts::random_urlsafe, app_log::log_event};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
@@ -50,7 +50,7 @@ pub(crate) fn build_ide_reopen_payload(
     let snapshot_id = create_ide_snapshot_id();
     let Ok(mut snapshots) = runtime.snapshots.lock() else {
         // Without a stored snapshot the confirm button could only fail, so no prompt is offered.
-        log_session_sync_event(
+        log_event(
             "ide_reopen_snapshot_store_error",
             json!({ "error": "编辑器快照状态锁异常", "entries": entries.len() }),
         );

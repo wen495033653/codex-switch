@@ -5,22 +5,22 @@
 //! refresh therefore also reads the subscription endpoint; the claim stays as the fallback
 //! for accounts whose endpoint read has never succeeded.
 
-use super::auth_refresh::account_log_label;
+use crate::app_log::account_label;
 use crate::{
     accounts::{
         access_token_from_account, account_id_from_account, account_with_custom,
         find_store_account, get_subscription, set_subscription_state, update_store_account,
     },
+    app_log::log_event,
     json_util::{raw_string_field, string_field, value_u64_field},
-    session_sync_diagnostics::log_session_sync_event,
 };
 use serde_json::{json, Value};
 
 fn log_subscription_error(profile_id: &str, error: &Value) {
-    log_session_sync_event(
+    log_event(
         "account_subscription_refresh_error",
         json!({
-            "account": account_log_label(profile_id),
+            "account": account_label(profile_id),
             "code": raw_string_field(error, "code"),
             "status": value_u64_field(error, "status"),
             "message": raw_string_field(error, "message"),
@@ -52,10 +52,10 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
     let account = match find_store_account(profile_id) {
         Ok(account) => account,
         Err(err) => {
-            log_session_sync_event(
+            log_event(
                 "account_subscription_account_read_error",
                 json!({
-                    "account": account_log_label(profile_id),
+                    "account": account_label(profile_id),
                     "error": err,
                     "handling": "skip_subscription_refresh"
                 }),
@@ -93,10 +93,10 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
     match update {
         Ok(_) if !changed => None,
         Ok(store) => {
-            log_session_sync_event(
+            log_event(
                 "account_subscription_updated",
                 json!({
-                    "account": account_log_label(profile_id),
+                    "account": account_label(profile_id),
                     "activeUntil": string_field(&subscription, "active_until"),
                     "willRenew": subscription["will_renew"],
                     "isDelinquent": subscription["is_delinquent"]
@@ -105,9 +105,9 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
             Some(store)
         }
         Err(err) => {
-            log_session_sync_event(
+            log_event(
                 "account_subscription_store_error",
-                json!({ "account": account_log_label(profile_id), "error": err }),
+                json!({ "account": account_label(profile_id), "error": err }),
             );
             None
         }

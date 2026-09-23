@@ -1,6 +1,5 @@
 use super::{
-    auth_refresh::{account_log_label, refresh_stored_account_tokens},
-    subscription::refresh_account_subscription,
+    auth_refresh::refresh_stored_account_tokens, subscription::refresh_account_subscription,
 };
 use crate::{
     accounts::{
@@ -9,10 +8,10 @@ use crate::{
         set_usage_result, update_active_store_account, update_store_account,
         INTERACTIVE_REQUEST_TIMEOUT_MS,
     },
+    app_log::{account_label, log_event, truncate_for_log},
     codex_session_usage::inherit_stored_usage_fields,
     events::emit_store_updated,
     json_util::{raw_string_field, value_u64_field},
-    session_sync_diagnostics::log_session_sync_event,
     time_util::now_string,
 };
 use serde_json::{json, Value};
@@ -37,10 +36,10 @@ pub(crate) fn sync_account_usage_in_background(
         match store_account_usage_result(&profile_id, usage_result) {
             Ok(store) => emit_store_updated(&app, store),
             Err(err) => {
-                log_session_sync_event(
+                log_event(
                     "account_usage_sync_store_error",
                     json!({
-                        "account": account_log_label(&profile_id),
+                        "account": account_label(&profile_id),
                         "usageOk": usage_ok,
                         "error": err
                     }),
@@ -71,14 +70,15 @@ pub(super) fn get_usage_with_auth_retry(
         Err(error) if error_state_is_auth_rejected(&error) => {
             // Evidence for the open question whether a 403 here is ever a Cloudflare page rather
             // than a rejected token (docs/development/account-store.md, "待定").
-            log_session_sync_event(
+            log_event(
                 "account_usage_rejected_error",
                 json!({
-                    "account": account_log_label(profile_id),
+                    "account": account_label(profile_id),
                     "status": value_u64_field(&error, "status"),
                     "code": raw_string_field(&error, "code"),
                     "message": raw_string_field(&error, "message"),
-                    "rawMessage": truncate_for_log(&raw_string_field(&error, "raw_message")),
+                    // Error bodies can be whole HTML pages; the start tells what answered.
+                    "rawMessage": truncate_for_log(&raw_string_field(&error, "raw_message"), 300),
                     "action": "rotate_tokens"
                 }),
             );
@@ -101,10 +101,10 @@ pub(super) fn get_usage_with_auth_retry(
                         }
                         Err(mark_err) => Some(mark_err),
                     };
-                    log_session_sync_event(
+                    log_event(
                         "account_auth_retry_refresh_error",
                         json!({
-                            "account": account_log_label(profile_id),
+                            "account": account_label(profile_id),
                             "error": refresh_err,
                             "markError": mark_error
                         }),
@@ -114,15 +114,6 @@ pub(super) fn get_usage_with_auth_retry(
             }
         }
         Err(error) => Err(error),
-    }
-}
-
-/// Error bodies can be whole HTML pages; the start is enough to tell what answered.
-fn truncate_for_log(text: &str) -> String {
-    const LIMIT: usize = 300;
-    match text.char_indices().nth(LIMIT) {
-        Some((index, _)) => format!("{}…（共 {} 字符）", &text[..index], text.chars().count()),
-        None => text.to_string(),
     }
 }
 
@@ -216,19 +207,6 @@ mod tests {
                 }
             }
         })
-    }
-
-    #[test]
-    fn long_error_bodies_are_cut_for_the_log() {
-        assert_eq!(truncate_for_log("short"), "short");
-        let page = "<html>".repeat(100);
-        let cut = truncate_for_log(&page);
-        assert!(cut.starts_with("<html><html>"));
-        assert!(cut.ends_with("…（共 600 字符）"), "{cut}");
-        assert_eq!(
-            cut.chars().count(),
-            300 + "…（共 600 字符）".chars().count()
-        );
     }
 
     #[test]

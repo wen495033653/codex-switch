@@ -16,12 +16,12 @@ use super::{
     },
 };
 use crate::{
+    app_log::log_event,
     codex_sessions::{
         preview_codex_sessions_to_current_mode_now_from,
         sync_codex_sessions_to_current_mode_now_from,
     },
     session_manager::migrate_legacy_codex_data_for_current_home,
-    session_sync_diagnostics::log_session_sync_event,
     settings::{read_settings_value, remote_control_enabled_from_settings},
 };
 use serde_json::{json, Value};
@@ -100,7 +100,7 @@ pub(crate) fn handle_codex_app_open(
     processes: &[CodexProcess],
 ) -> Result<CodexAppOpenOutcome, String> {
     let Some(_relaunch_guard) = try_lock_codex_relaunch() else {
-        log_session_sync_event(
+        log_event(
             "codex_app_open_handler_skip",
             json!({
                 "reason": "relaunch_in_progress",
@@ -111,7 +111,7 @@ pub(crate) fn handle_codex_app_open(
     };
     trigger_legacy_codex_data_migration();
     let actions = codex_app_open_actions()?;
-    log_session_sync_event(
+    log_event(
         "codex_app_open_handler_start",
         json!({
             "processes": codex_processes_log_value(processes),
@@ -120,7 +120,7 @@ pub(crate) fn handle_codex_app_open(
         }),
     );
     if !actions.enabled() {
-        log_session_sync_event(
+        log_event(
             "codex_app_open_handler_skip",
             json!({
                 "reason": "all_actions_disabled",
@@ -144,17 +144,17 @@ pub(crate) fn handle_codex_app_open(
     let Some(relaunch_mode) = codex_relaunch_mode_for_app_open(actions, status) else {
         if status.cdp_launch_applied && actions.remote_control_enabled {
             match inject_codex_mobile_no_replace_hook(processes) {
-                Ok(injected) => log_session_sync_event(
+                Ok(injected) => log_event(
                     "codex_app_open_handler_cdp_hook_injected",
                     json!({ "hook": "codex_mobile_no_replace", "injectedCount": injected }),
                 ),
-                Err(err) => log_session_sync_event(
+                Err(err) => log_event(
                     "codex_app_open_handler_cdp_hook_error",
                     json!({ "hook": "codex_mobile_no_replace", "error": err }),
                 ),
             }
         }
-        log_session_sync_event(
+        log_event(
             "codex_app_open_handler_finish",
             json!({ "relaunchExpected": false }),
         );
@@ -168,7 +168,7 @@ pub(crate) fn handle_codex_app_open(
         session_sync_pending,
         false,
     )?;
-    log_session_sync_event(
+    log_event(
         "codex_app_open_handler_finish",
         json!({ "relaunchExpected": restarted > 0 }),
     );
@@ -186,13 +186,13 @@ fn trigger_legacy_codex_data_migration() {
             match migrate_legacy_codex_data_for_current_home() {
                 Ok(report) => {
                     let completed = report.get("completed").and_then(Value::as_bool) == Some(true);
-                    log_session_sync_event("codex_desktop_data_migration", report);
+                    log_event("codex_desktop_data_migration", report);
                     if completed {
                         break;
                     }
                 }
                 Err(err) => {
-                    log_session_sync_event(
+                    log_event(
                         "codex_desktop_data_migration_error",
                         json!({ "error": err }),
                     );
@@ -241,7 +241,7 @@ fn session_sync_pending_for_relaunch(
         } else {
             json!({ "reason": "setting_disabled" })
         };
-        log_session_sync_event(event, details);
+        log_event(event, details);
         return Ok(false);
     }
 
@@ -264,7 +264,7 @@ fn session_sync_pending_for_relaunch(
                     "updated": updated
                 })
             };
-            log_session_sync_event(event, details);
+            log_event(event, details);
             Ok(true)
         }
         Ok(updated) => {
@@ -285,7 +285,7 @@ fn session_sync_pending_for_relaunch(
                     "updated": updated
                 })
             };
-            log_session_sync_event(event, details);
+            log_event(event, details);
             Ok(false)
         }
         Err(err) => {
@@ -305,7 +305,7 @@ fn session_sync_pending_for_relaunch(
                     "error": err
                 })
             };
-            log_session_sync_event(event, details);
+            log_event(event, details);
             Err(err)
         }
     }
@@ -345,7 +345,7 @@ fn remote_control_runtime_pending_from_preview(
                     "reason": "sync_after_process_exit"
                 })
             };
-            log_session_sync_event(event, details);
+            log_event(event, details);
             Ok(true)
         }
         Ok(false) => {
@@ -364,7 +364,7 @@ fn remote_control_runtime_pending_from_preview(
                     "reason": "runtime_current"
                 })
             };
-            log_session_sync_event(event, details);
+            log_event(event, details);
             Ok(false)
         }
         Err(err) => {
@@ -384,7 +384,7 @@ fn remote_control_runtime_pending_from_preview(
                     "error": err
                 })
             };
-            log_session_sync_event(event, details);
+            log_event(event, details);
             Err(err)
         }
     }
@@ -393,14 +393,14 @@ fn remote_control_runtime_pending_from_preview(
 fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
     match preview_remote_control_runtime_for_current_settings(trigger) {
         Ok(true) => match sync_remote_control_runtime_for_current_settings(trigger) {
-            Ok(changed) => log_session_sync_event(
+            Ok(changed) => log_event(
                 "codex_app_open_handler_remote_control_runtime_applied",
                 json!({
                     "reason": "runtime_pending",
                     "changed": changed
                 }),
             ),
-            Err(err) => log_session_sync_event(
+            Err(err) => log_event(
                 "codex_app_open_handler_remote_control_runtime_error",
                 json!({
                     "trigger": trigger,
@@ -408,11 +408,11 @@ fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
                 }),
             ),
         },
-        Ok(false) => log_session_sync_event(
+        Ok(false) => log_event(
             "codex_app_open_handler_remote_control_runtime_skip",
             json!({ "reason": "runtime_current" }),
         ),
-        Err(err) => log_session_sync_event(
+        Err(err) => log_event(
             "codex_app_open_handler_remote_control_runtime_error",
             json!({
                 "trigger": trigger,
@@ -426,7 +426,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     let command = "restart_current_codex_app_normal";
     let _relaunch_guard = lock_codex_relaunch();
     let processes = super::codex_app_watcher::refresh_current_codex_app_processes()?;
-    log_session_sync_event(
+    log_event(
         "codex_app_restart_command_start",
         json!({
             "command": command,
@@ -434,7 +434,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
         }),
     );
     if processes.is_empty() {
-        log_session_sync_event(
+        log_event(
             "codex_app_restart_command_skip",
             json!({
                 "command": command,
@@ -459,7 +459,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
         session_sync_pending,
         remote_control_runtime_pending,
     )?;
-    log_session_sync_event(
+    log_event(
         "codex_app_restart_command_finish",
         json!({
             "command": command,
@@ -486,7 +486,7 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
 ) -> Result<bool, String> {
     let path = Path::new(executable);
     if !path.exists() {
-        log_session_sync_event(
+        log_event(
             "codex_app_relaunch_executable_skip",
             json!({
                 "executable": executable,
@@ -497,7 +497,7 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
     }
     let mode = CodexRelaunchMode::Normal;
     let executables = vec![executable.to_string()];
-    log_session_sync_event(
+    log_event(
         "codex_app_relaunch_executable_expect_open",
         json!({
             "executable": executable,
@@ -507,7 +507,7 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
     super::codex_app_watcher::expect_codex_app_open_for_executables(&executables);
     match relaunch_codex_executable(executable, mode) {
         Ok(()) => {
-            log_session_sync_event(
+            log_event(
                 "codex_app_relaunch_executable_finish",
                 json!({
                     "executable": executable,
@@ -519,7 +519,7 @@ pub(crate) fn relaunch_codex_executable_for_current_settings(
         }
         Err(err) => {
             super::codex_app_watcher::clear_expected_codex_app_open_for_executables(&executables);
-            log_session_sync_event(
+            log_event(
                 "codex_app_relaunch_executable_error",
                 json!({
                     "executable": executable,
@@ -539,7 +539,7 @@ pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
 ) -> Result<CodexAppInstanceLaunch, String> {
     let path = Path::new(executable);
     if !path.exists() {
-        log_session_sync_event(
+        log_event(
             "codex_app_instance_launch_skip",
             json!({
                 "executable": executable,
@@ -549,7 +549,7 @@ pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
         return Ok(CodexAppInstanceLaunch { launched: false });
     }
     let mode = CodexRelaunchMode::Normal;
-    log_session_sync_event(
+    log_event(
         "codex_app_instance_launch_start",
         json!({
             "executable": executable,
@@ -586,7 +586,7 @@ fn relaunch_running_codex_processes(
             ));
         }
     }
-    log_session_sync_event(
+    log_event(
         "codex_app_relaunch_processes_start",
         json!({
             "origin": format!("{origin:?}"),
@@ -652,7 +652,7 @@ fn close_then_sync_or_relaunch(
         }
         None => format!("{close_error}；没有待同步的会话数据；未重启，不再自动尝试关闭"),
     };
-    log_session_sync_event(
+    log_event(
         "codex_app_relaunch_processes_close_error",
         json!({
             "origin": format!("{origin:?}"), "trigger": trigger, "pids": pids,
@@ -687,7 +687,7 @@ fn relaunch_codex_after_exit(
         },
         || relaunch_closed_codex(executables, mode, origin),
     )?;
-    log_session_sync_event(
+    log_event(
         "codex_app_relaunch_processes_finish",
         json!({
             "origin": format!("{origin:?}"),
@@ -732,7 +732,7 @@ fn relaunch_closed_codex(
     thread::sleep(StdDuration::from_millis(RELAUNCH_DELAY_MS));
 
     if origin == CodexRelaunchOrigin::AppCommand {
-        log_session_sync_event(
+        log_event(
             "codex_app_relaunch_processes_expect_open",
             json!({
                 "origin": format!("{origin:?}"),
@@ -753,7 +753,7 @@ fn relaunch_closed_codex(
                         executables,
                     );
                 }
-                log_session_sync_event(
+                log_event(
                     "codex_app_relaunch_processes_error",
                     json!({
                         "origin": format!("{origin:?}"),
@@ -777,7 +777,7 @@ fn apply_codex_config_after_process_exit(
         CodexRelaunchOrigin::Watcher => "codex_app_relaunch_after_exit_watcher",
         CodexRelaunchOrigin::AppCommand => "codex_app_relaunch_after_exit_app_command",
     };
-    log_session_sync_event(
+    log_event(
         "codex_app_relaunch_processes_post_exit_config_apply_start",
         json!({
             "origin": format!("{origin:?}"),
@@ -786,7 +786,7 @@ fn apply_codex_config_after_process_exit(
     );
     match apply_codex_config_for_current_settings(context, sync_remote_control_runtime) {
         Ok(details) => {
-            log_session_sync_event(
+            log_event(
                 "codex_app_relaunch_processes_post_exit_config_apply_finish",
                 json!({
                     "origin": format!("{origin:?}"),
@@ -797,7 +797,7 @@ fn apply_codex_config_after_process_exit(
             Ok(())
         }
         Err(err) => {
-            log_session_sync_event(
+            log_event(
                 "codex_app_relaunch_processes_post_exit_config_apply_error",
                 json!({
                     "origin": format!("{origin:?}"),
@@ -829,7 +829,7 @@ fn sync_remote_control_runtime_for_post_exit(context: &str) -> Result<Value, Str
     match sync_remote_control_runtime_for_current_settings(context) {
         Ok(changed) => Ok(json!({ "changed": changed })),
         Err(err) => {
-            log_session_sync_event(
+            log_event(
                 "codex_app_relaunch_processes_post_exit_remote_control_runtime_error",
                 json!({
                     "context": context,
@@ -846,7 +846,7 @@ fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) -> Result
         CodexRelaunchOrigin::Watcher => "codex_app_relaunch_after_exit_watcher",
         CodexRelaunchOrigin::AppCommand => "codex_app_relaunch_after_exit_app_command",
     };
-    log_session_sync_event(
+    log_event(
         "codex_app_relaunch_processes_post_exit_session_sync_start",
         json!({
             "origin": format!("{origin:?}"),
@@ -855,7 +855,7 @@ fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) -> Result
     );
     let result = sync_codex_sessions_to_current_mode_now_from(trigger);
     match &result {
-        Ok(updated) => log_session_sync_event(
+        Ok(updated) => log_event(
             "codex_app_relaunch_processes_post_exit_session_sync_finish",
             json!({
                 "origin": format!("{origin:?}"),
@@ -863,7 +863,7 @@ fn sync_codex_sessions_after_process_exit(origin: CodexRelaunchOrigin) -> Result
                 "updated": updated
             }),
         ),
-        Err(err) => log_session_sync_event(
+        Err(err) => log_event(
             "codex_app_relaunch_processes_post_exit_session_sync_error",
             json!({
                 "origin": format!("{origin:?}"),
@@ -909,7 +909,7 @@ mod tests {
     }
 
     fn close_failure_log(pid: u64) -> Value {
-        crate::session_sync_diagnostics::get_dev_log_entries()
+        crate::app_log::get_dev_log_entries()
             .as_array()
             .unwrap()
             .iter()
@@ -994,7 +994,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains(sync_error));
-        assert!(!error.contains(crate::session_sync_diagnostics::PROCESS_ELEVATION_WARNING));
+        assert!(!error.contains(crate::app_log::PROCESS_ELEVATION_WARNING));
         let entry = close_failure_log(910_010);
         assert_eq!(entry["level"], "error");
         let details = &entry["details"]["details"];
@@ -1168,12 +1168,12 @@ mod tests {
             remote_control_runtime_pending_from_preview(Err(error.into()), command, Some(command)),
             Err(error.to_string())
         );
-        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        let logs = crate::app_log::get_dev_log_entries();
         assert!(
             logs.as_array().unwrap().iter().any(|entry| {
                 entry["details"]["event"]
                     == "codex_app_restart_command_remote_control_runtime_error"
-                    && entry["details"]["details"]["错误"] == error
+                    && entry["details"]["details"]["error"] == error
             }),
             "{logs}"
         );

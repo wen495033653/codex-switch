@@ -1,5 +1,5 @@
 use super::support::GLOBAL_STATE_FILE_NAME;
-use crate::{atomic_file::write_file_atomically, session_sync_diagnostics::log_session_sync_event};
+use crate::{app_log::log_event, atomic_file::write_file_atomically};
 use serde_json::{json, Map, Value};
 use std::{
     collections::HashSet,
@@ -41,7 +41,7 @@ pub(super) fn preview_global_state_workspace_roots_with_diagnostics(
     let next = normalized_global_state_workspace_roots(&state);
     let updated = global_state_update_count(&state, &next);
     if let Some(trigger) = trigger {
-        log_session_sync_event(
+        log_event(
             "session_sync_preflight_global_state_summary",
             json!({
                 "trigger": trigger,
@@ -108,7 +108,7 @@ pub(super) fn sync_global_state_workspace_roots_with_diagnostics(
 ) -> Result<usize, String> {
     if !path.exists() {
         if let Some(trigger) = trigger {
-            log_session_sync_event(
+            log_event(
                 "session_sync_global_state_missing",
                 json!({
                     "trigger": trigger,
@@ -133,7 +133,7 @@ pub(super) fn sync_global_state_workspace_roots_with_diagnostics(
         updated
     })?;
     if let Some(trigger) = trigger {
-        log_session_sync_event(
+        log_event(
             "session_sync_global_state_summary",
             json!({
                 "trigger": trigger,

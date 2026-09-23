@@ -56,11 +56,15 @@ TODO(verify): command 移出主线程后没有在真实界面上运行过。原�
 
 ## 日志
 
-- 后端运行日志只走 `session_sync_diagnostics::log_session_sync_event`，不用 `eprintln!`：正式版是 `windows_subsystem = "windows"` 的窗口程序，没有控制台，stderr 的内容会全部丢失。唯一的例外是日志文件本身写不进去时的那一行。测试代码不受限制。
-- 失败事件名以 `_error` 结尾，才会追加到数据目录的 `logs/codex-switch-errors.jsonl`（5MB 轮转一次，保留一代）。其他事件只在 debug 构建的开发日志窗口里显示。
-- 事件详情要写判断依据：错误原文、HTTP status/code、原始响应的开头（长正文截到 300 字符）、处理方式（`handling`，例如 `skipped`、`use_defaults`）。账号只记 profile id 的前 8 位（`quota::auth_refresh::account_log_label`），不记完整 id、邮箱或 token。
-- 按分钟、按秒轮询的路径（watcher 扫描、当前账号额度同步、会话用量扫描、token 统计、状态读取）用 `log_session_sync_event_once`：同一事件加同一详情在一次运行里只记一次，避免持续失败时刷满日志。
-- 开发日志窗口里，没有专门摘要的错误事件也会原样显示，来源按事件名前缀归类（`account_`、`session_manager_`、`usage_stats_` 等）。
+- 后端运行日志只走 `app_log::log_event`（或 `log_event_once`），不用 `eprintln!`：正式版是 `windows_subsystem = "windows"` 的窗口程序，没有控制台，stderr 的内容会全部丢失。唯一的例外是日志文件本身写不进去时的那一行。测试代码不受限制。
+- 数据目录 `logs/` 下两个文件，都是一行一个 JSON（`timestamp`、`version`、`pid`、`event`、`level`、`details`），各自 5MB 轮转一次、保留一代：
+  - `codex-switch-errors.jsonl`：事件名以 `_error` 结尾的失败事件。
+  - `codex-switch-events.jsonl`：时间线。失败事件加上 `app_log::TIMELINE_EVENTS` 里的关键事件（`level: info`），例如重启 Codex、结束进程树、会话同步完成与状态库摘要、多开、远程控制自动关闭、订阅更新。每次用户操作或状态变化才记一条，按定时器触发的事件（watcher 60 秒一次的打开处理、同步预检查）不进时间线。要看某个失败之前发生了什么，读这个文件。
+- 新增关键事件时，加进 `TIMELINE_EVENTS` 和 `EVENT_MESSAGES`（开发日志里的中文说明）；先确认它不会按定时器反复触发。不在任何名单里的事件只是细粒度步骤，不落盘也不显示。
+- 事件详情要写判断依据：错误原文、HTTP status/code、原始响应的开头（`app_log::truncate_for_log`，HTTP 正文截到 300 字符，命令输出每路截到 2000 字符）、处理方式（`handling`，例如 `skipped`、`use_defaults`）。账号只记 `app_log::account_label` 给出的前 8 位，不记完整 profile id（末尾是邮箱）、邮箱或 token。本机文件路径照原样记录。
+- 命令输出（例如 taskkill）按系统 OEM 代码页解码后再记录，中文 Windows 上是 GBK；只有任何代码页都解不开的字节才保留为 base64。
+- 按分钟、按秒轮询的路径（watcher 扫描、当前账号额度同步、会话用量扫描、token 统计、状态读取）用 `log_event_once`：同一事件加同一详情在一次运行里只记一次，避免持续失败时刷满日志。
+- 开发日志窗口（debug 构建）显示失败事件、时间线事件和 `DEV_ONLY_EVENTS`，详情一律原样显示，来源按事件名前缀归类。
 
 ## 怎么验证
 

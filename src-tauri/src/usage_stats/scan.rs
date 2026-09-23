@@ -8,7 +8,7 @@ use super::{
     parse::parse_session_file,
     pricing::estimate_cost,
 };
-use crate::session_sync_diagnostics::log_session_sync_event_once;
+use crate::app_log::log_event_once;
 use rusqlite::{params, Connection, Transaction};
 use serde_json::json;
 use std::{
@@ -21,7 +21,7 @@ use std::{
 /// An unreadable session file is left out of the statistics. The page refreshes every 30 s,
 /// so each distinct failure is recorded once per run.
 fn log_scan_file_error(stage: &str, error: String) {
-    log_session_sync_event_once(
+    log_event_once(
         "usage_stats_scan_file_error",
         json!({ "stage": stage, "error": error, "handling": "skipped" }),
     );

@@ -15,10 +15,10 @@
 - 远程控制“配置已应用 / 存在”的判断：没选账号、账号已删除、`auth.json` 不存在、`model_provider` 不是 `api` 仍是“否”；`accounts.json`、`auth.json`、`config.toml` 读取或解析失败改为返回错误。状态轮询因此显示错误而不是“重启 Codex 后生效”；重启和同步流程在应用配置前就返回该错误。`auth.json` 解析失败以前会被当成“未应用”再被覆盖写入，现在要先处理这个错误。
 - 显示多开窗口：激活失败记 `codex_app_multi_open_show_window_error`。macOS 上 `osascript` 失败时返回每个 PID 的退出码和 stderr；删掉了其后的 `open -a ChatGPT/Codex` 兜底，它激活的是默认实例而不是这个实例，却按成功返回。
 - 远程控制桌面状态查询：响应体读取失败以前被当成空字符串，表现为“HTTP 500 body: ”或 JSON 解析错误；现在返回“读取 ChatGPT 桌面状态响应失败: HTTP 状态码: 原始错误”，经已有的 `lookup_failed` 显示为“桌面状态查询失败”，原文在 `raw`。请求地址写死为 chatgpt.com，没有可注入的测试入口，只过了编译和 Clippy。
-- 日志：设置页每 3–4 秒轮询这些状态，同一个事件加同样的内容在一次运行里只写一次（`log_session_sync_event_once`）：`codex_desktop_install_lookup_error`、`codex_app_instance_marker_error`、`codex_remote_control_status_error`。
+- 日志：设置页每 3–4 秒轮询这些状态，同一个事件加同样的内容在一次运行里只写一次（`log_event_once`）：`codex_desktop_install_lookup_error`、`codex_app_instance_marker_error`、`codex_remote_control_status_error`。
 - 验证：`install_lookup_error_is_reported_unless_a_running_host_decides`（运行中主进程优先、三种查询失败、全部为空仍是 missing）、`package_registry_lookup_reads_the_current_user_key`（本机只读，读到 1 个 `OpenAI.Codex_*` 包，与 PowerShell 读注册表一致）、`unreadable_instance_marker_is_reported_with_the_instance`（临时目录真实文件）、`polled_failure_is_logged_once_per_distinct_details`。远程控制判断会读正式的 `accounts.json`、`auth.json`、`config.toml`，按要求没有写单元测试，只过了编译和 Clippy。macOS 分支本地编不了，以 CI `Check Tauri (macos-latest)` 为准。没有真实运行界面。
 
-TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 做隔离真实运行时，在沙盒里放一个内容为 `{` 的 `auth.json` 并开启远程控制，另建一个标记文件损坏的多开实例目录；或数据目录 `logs/codex-switch-errors.jsonl` 出现 `codex_desktop_install_lookup_error`、`codex_app_instance_marker_error`、`codex_remote_control_status_error`。通过判据：远程控制状态显示“解析 auth.json 失败…”而不是“重启 Codex 后生效”；`get_codex_app_instance_status` 返回该实例并带 `markerError`；每种错误在 JSONL 里只出现一次。判据不成立时，从 `remote_control.rs` 的 `get_codex_remote_control_status` 和 `session_sync_diagnostics.rs` 的 `log_session_sync_event_once` 继续。
+TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 做隔离真实运行时，在沙盒里放一个内容为 `{` 的 `auth.json` 并开启远程控制，另建一个标记文件损坏的多开实例目录；或数据目录 `logs/codex-switch-errors.jsonl` 出现 `codex_desktop_install_lookup_error`、`codex_app_instance_marker_error`、`codex_remote_control_status_error`。通过判据：远程控制状态显示“解析 auth.json 失败…”而不是“重启 Codex 后生效”；`get_codex_app_instance_status` 返回该实例并带 `markerError`；每种错误在 JSONL 里只出现一次。判据不成立时，从 `remote_control.rs` 的 `get_codex_remote_control_status` 和 `app_log.rs` 的 `log_event_once` 继续。
 
 ## 模型指令文件 `gpt-unrestricted.md`（2026-09-06）
 

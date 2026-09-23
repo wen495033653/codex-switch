@@ -6,8 +6,8 @@ use super::{
 };
 use crate::{
     accounts::ImportTokenResult,
+    app_log::log_event,
     json_util::{raw_string_field, string_field},
-    session_sync_diagnostics::log_session_sync_event,
 };
 use serde_json::{json, Value};
 use std::{collections::HashSet, thread};
@@ -106,7 +106,7 @@ pub(crate) fn import_accounts_from_refresh_tokens(
             .unwrap_or_else(|_| failed_import("导入线程异常退出".to_string()));
         if let Some(error) = &result.error {
             // The position in the import file identifies the entry; the token is never logged.
-            log_session_sync_event(
+            log_event(
                 "account_import_token_error",
                 json!({ "index": index, "error": error }),
             );

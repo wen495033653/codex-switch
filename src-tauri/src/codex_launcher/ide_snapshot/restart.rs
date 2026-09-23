@@ -4,11 +4,11 @@ use super::detect::{
     process_entry_start_time,
 };
 use crate::{
+    app_log::log_event,
     codex_launcher::process_control::{
         kill_root_process_trees, relaunch_executable_with_retry, wait_for_pids_exit,
     },
     json_util::string_field,
-    session_sync_diagnostics::log_session_sync_event,
 };
 use serde_json::{json, Value};
 use std::{collections::HashSet, thread, time::Duration as StdDuration};
@@ -42,7 +42,7 @@ where
             .iter()
             .map(process_entry_pid)
             .collect::<HashSet<_>>();
-        log_session_sync_event(
+        log_event(
             "ide_reopen_snapshot_process_gone",
             json!({
                 "skippedPids": entries

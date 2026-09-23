@@ -3,8 +3,8 @@ use super::{
     util::{dedupe_strings, first_non_empty, non_empty},
 };
 use crate::{
-    codex_sessions::rewrite_global_state_file, json_util::raw_string_field, paths::codex_dir,
-    session_sync_diagnostics::log_session_sync_event,
+    app_log::log_event, codex_sessions::rewrite_global_state_file, json_util::raw_string_field,
+    paths::codex_dir,
 };
 use serde_json::{json, Value};
 use std::{
@@ -230,7 +230,7 @@ pub(super) fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> Ses
         if let Some(err) = &read_error {
             warnings.push(err.clone());
         }
-        log_session_sync_event(
+        log_event(
             "session_manager_session_index_read_error",
             json!({
                 "path": path.to_string_lossy().to_string(),

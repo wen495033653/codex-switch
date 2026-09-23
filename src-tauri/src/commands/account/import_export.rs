@@ -5,8 +5,8 @@ use crate::{
         import_accounts_from_refresh_tokens, local_date_for_filename, read_store_with_active_sync,
         store_payload_from_store,
     },
+    app_log::log_event,
     json_util::raw_string_field,
-    session_sync_diagnostics::log_session_sync_event,
 };
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -54,7 +54,7 @@ pub(super) fn import_accounts_impl(app: AppHandle) -> Result<Value, String> {
 
     let payload = import_accounts_from_refresh_tokens(refresh_tokens, false)?;
     if let Err(err) = read_store_with_active_sync() {
-        log_session_sync_event("account_import_active_sync_error", json!({ "error": err }));
+        log_event("account_import_active_sync_error", json!({ "error": err }));
     }
     Ok(payload)
 }

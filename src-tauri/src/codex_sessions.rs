@@ -10,9 +10,9 @@ pub(crate) use global_state::rewrite_global_state_file;
 use crate::{
     accounts::{get_codex_state_value, restore_api_mode_if_selected},
     api_config::API_PROVIDER_ID,
+    app_log::log_event,
     json_util::raw_string_field,
     paths::codex_dir,
-    session_sync_diagnostics::log_session_sync_event,
 };
 use serde_json::json;
 use std::{
@@ -78,12 +78,12 @@ fn normalize_target_provider(target_provider: &str) -> Result<String, String> {
 }
 
 pub(crate) fn sync_codex_sessions_to_current_mode_now_from(trigger: &str) -> Result<usize, String> {
-    log_session_sync_event(
+    log_event(
         "session_sync_current_mode_resolve_start",
         json!({ "trigger": trigger }),
     );
     let target_provider = current_session_provider()?;
-    log_session_sync_event(
+    log_event(
         "session_sync_current_mode_resolved",
         json!({
             "trigger": trigger,
@@ -96,12 +96,12 @@ pub(crate) fn sync_codex_sessions_to_current_mode_now_from(trigger: &str) -> Res
 pub(crate) fn preview_codex_sessions_to_current_mode_now_from(
     trigger: &str,
 ) -> Result<usize, String> {
-    log_session_sync_event(
+    log_event(
         "session_sync_preflight_current_mode_resolve_start",
         json!({ "trigger": trigger }),
     );
     let target_provider = current_session_provider()?;
-    log_session_sync_event(
+    log_event(
         "session_sync_preflight_current_mode_resolved",
         json!({
             "trigger": trigger,
@@ -116,7 +116,7 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
     trigger: &str,
 ) -> Result<usize, String> {
     let target_provider = normalize_target_provider(target_provider)?;
-    log_session_sync_event(
+    log_event(
         "session_sync_preflight_start",
         json!({
             "trigger": trigger,
@@ -153,7 +153,7 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
     }
 
     if errors.is_empty() {
-        log_session_sync_event(
+        log_event(
             "session_sync_preflight_finish",
             json!({
                 "trigger": trigger,
@@ -166,7 +166,7 @@ pub(crate) fn preview_codex_sessions_to_provider_now_from(
         );
         Ok(updated)
     } else {
-        log_session_sync_event(
+        log_event(
             "session_sync_preflight_error",
             json!({
                 "trigger": trigger,
@@ -190,7 +190,7 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
     trigger: &str,
 ) -> Result<usize, String> {
     let target_provider = normalize_target_provider(target_provider)?;
-    log_session_sync_event(
+    log_event(
         "session_sync_start",
         json!({
             "trigger": trigger,
@@ -227,7 +227,7 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
     }
 
     if errors.is_empty() {
-        log_session_sync_event(
+        log_event(
             "session_sync_finish",
             json!({
                 "trigger": trigger,
@@ -240,7 +240,7 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
         );
         Ok(updated)
     } else {
-        log_session_sync_event(
+        log_event(
             "session_sync_error",
             json!({
                 "trigger": trigger,

@@ -12,8 +12,8 @@ use super::{
     zip::{write_zip_store, ZipArchiveLite},
 };
 use crate::{
-    codex_sessions::lock_codex_session_io, paths::codex_state_db_path_for_root,
-    session_sync_diagnostics::log_session_sync_event, time_util::now_string,
+    app_log::log_event, codex_sessions::lock_codex_session_io, paths::codex_state_db_path_for_root,
+    time_util::now_string,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -432,7 +432,7 @@ pub(super) fn apply_import_candidates(
     }
 
     if !outcome.errors.is_empty() || outcome.sqlite_error.is_some() {
-        log_session_sync_event(
+        log_event(
             "session_manager_import_apply_error",
             json!({
                 "root": root.to_string_lossy().to_string(),

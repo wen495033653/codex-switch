@@ -1,5 +1,5 @@
 use super::shell::hide_command_window;
-use crate::session_sync_diagnostics::log_session_sync_event;
+use crate::app_log::log_event;
 use serde_json::json;
 use std::process::Child;
 use std::{
@@ -28,7 +28,7 @@ pub(crate) fn kill_process_tree(pid: u64) -> Result<bool, String> {
             kill_process_tree_impl(pid)
         })
     };
-    log_session_sync_event(
+    log_event(
         if result.is_err() {
             "codex_app_process_kill_error"
         } else {
@@ -88,7 +88,7 @@ fn kill_roots_after_preflight(
     // Check every root before touching any tree, including when several Codex instances exist.
     for &pid in roots {
         if let Err(error) = preflight(pid) {
-            log_session_sync_event(
+            log_event(
                 "codex_app_process_kill_error",
                 json!({"pid": pid, "callerPid": std::process::id(),
                     "stage": "permission_preflight", "terminationAttempted": false,
@@ -127,7 +127,7 @@ fn process_tree_kill_outcome(
         ));
     }
     if let Err(err) = termination {
-        log_session_sync_event(
+        log_event(
             "codex_app_process_kill_tree_exited",
             json!({"pid": pid, "treePids": tree_pids, "confirmMs": PROCESS_TREE_EXIT_CONFIRM_MS,
                 "terminationError": err}),
@@ -187,6 +187,71 @@ fn process_tree_pids(system: &System, root_pid: u64) -> Vec<u64> {
     tree
 }
 
+/// Longest stretch of one output stream kept in an error; taskkill prints a line per process,
+/// and the first few already say why (for example "原因: 拒绝访问").
+#[cfg(any(windows, test))]
+const COMMAND_OUTPUT_LOG_CHARS: usize = 2_000;
+
+/// Console tools such as taskkill write in the OEM code page (936 on Chinese Windows), not
+/// UTF-8. Such output used to be kept as base64, which made the error log unreadable; it is
+/// decoded instead, and base64 remains only for bytes no code page can read.
+#[cfg(any(windows, test))]
+fn decode_command_output(bytes: &[u8]) -> String {
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => match decode_oem_code_page(bytes) {
+            Some(text) => text,
+            None => {
+                use base64::Engine as _;
+                format!(
+                    "non-UTF8 output; rawBase64={}",
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                )
+            }
+        },
+    };
+    crate::app_log::truncate_for_log(&text, COMMAND_OUTPUT_LOG_CHARS)
+}
+
+#[cfg(windows)]
+fn decode_oem_code_page(bytes: &[u8]) -> Option<String> {
+    use windows_sys::Win32::Globalization::{MultiByteToWideChar, CP_OEMCP, MB_ERR_INVALID_CHARS};
+    let len = i32::try_from(bytes.len()).ok()?;
+    // SAFETY: the input pointer and length describe `bytes`; the first call only measures, and
+    // the second writes at most `wide.len()` UTF-16 units into `wide`.
+    unsafe {
+        let needed = MultiByteToWideChar(
+            CP_OEMCP,
+            MB_ERR_INVALID_CHARS,
+            bytes.as_ptr(),
+            len,
+            std::ptr::null_mut(),
+            0,
+        );
+        if needed <= 0 {
+            return None;
+        }
+        let mut wide = vec![0u16; usize::try_from(needed).ok()?];
+        let written = MultiByteToWideChar(
+            CP_OEMCP,
+            MB_ERR_INVALID_CHARS,
+            bytes.as_ptr(),
+            len,
+            wide.as_mut_ptr(),
+            needed,
+        );
+        if written != needed {
+            return None;
+        }
+        String::from_utf16(&wide).ok()
+    }
+}
+
+#[cfg(all(not(windows), test))]
+fn decode_oem_code_page(_bytes: &[u8]) -> Option<String> {
+    None
+}
+
 // Drain both pipes concurrently, so a full pipe cannot turn the timeout into a deadlock.
 // Pipe collection and timeout cleanup are themselves bounded, including inherited handles.
 #[cfg(any(windows, test))]
@@ -200,16 +265,7 @@ fn run_bounded_command(command: &mut Command, timeout: StdDuration) -> Result<()
                 let mut stream = stream;
                 stream.read_to_end(&mut bytes)
             };
-            let text = match String::from_utf8(bytes.clone()) {
-                Ok(text) => text,
-                Err(_) => {
-                    use base64::Engine as _;
-                    format!(
-                        "non-UTF8 output; rawBase64={}",
-                        base64::engine::general_purpose::STANDARD.encode(&bytes)
-                    )
-                }
-            };
+            let text = decode_command_output(&bytes);
             let result = result
                 .map(|_| text.clone())
                 .map_err(|err| format!("{err}; partial={text}"));
@@ -356,7 +412,7 @@ pub(crate) fn launch_codex_process_with_options(
     let mut child = spawn_executable(executable_path, args, envs)?;
     let pid = child.id();
     let result = confirm_launched_process(&mut child, StdDuration::from_millis(LAUNCH_CONFIRM_MS));
-    log_session_sync_event(
+    log_event(
         if result.is_err() {
             "codex_app_launch_confirmation_error"
         } else {
@@ -430,7 +486,7 @@ mod tests {
         assert_eq!(checked, [41, 42]);
         assert!(terminated.is_empty());
         assert!(error.contains("targetElevated=true"));
-        let entries = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entries = crate::app_log::get_dev_log_entries();
         assert!(
             entries.as_array().unwrap().iter().any(|entry| {
                 entry["details"]["event"] == "codex_app_process_kill_error"
@@ -595,6 +651,32 @@ mod tests {
     }
 
     #[test]
+    fn command_output_is_decoded_and_kept_short() {
+        assert_eq!(decode_command_output("ok\n".as_bytes()), "ok\n");
+        let long = "成功: 已终止进程。\n".repeat(400);
+        let kept = decode_command_output(long.as_bytes());
+        assert!(kept.starts_with("成功: 已终止进程。"));
+        assert!(kept.contains("…（共"), "{kept}");
+
+        // "成功" in GBK, as taskkill writes it on Chinese Windows.
+        let gbk = [0xB3, 0xC9, 0xB9, 0xA6];
+        let decoded = decode_command_output(&gbk);
+        #[cfg(windows)]
+        {
+            assert!(!decoded.starts_with("non-UTF8"), "{decoded}");
+            // SAFETY: GetOEMCP takes no arguments and only reads the system setting.
+            if unsafe { windows_sys::Win32::Globalization::GetOEMCP() } == 936 {
+                assert_eq!(decoded, "成功");
+            }
+        }
+        #[cfg(not(windows))]
+        assert!(
+            decoded.starts_with("non-UTF8 output; rawBase64="),
+            "{decoded}"
+        );
+    }
+
+    #[test]
     fn actual_launch_wrapper_reports_error_and_logs_exit_code() {
         let executable = std::env::current_exe()
             .unwrap()
@@ -608,7 +690,7 @@ mod tests {
         let envs = vec![("CODEX_SWITCH_PROCESS_FIXTURE".into(), "error".into())];
         let error = launch_codex_process_with_options(&executable, &args, &envs).unwrap_err();
         assert!(error.contains("Some(23)"), "{error}");
-        let entries = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entries = crate::app_log::get_dev_log_entries();
         assert!(
             entries.as_array().unwrap().iter().any(|entry| {
                 entry["details"]["event"] == "codex_app_launch_confirmation_error"
@@ -634,7 +716,7 @@ mod tests {
 
         assert!(kill_process_tree_impl(pid).unwrap());
 
-        let entries = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entries = crate::app_log::get_dev_log_entries();
         assert!(
             entries.as_array().unwrap().iter().any(|entry| {
                 entry["details"]["event"] == "codex_app_process_kill_tree_exited"
@@ -695,7 +777,7 @@ mod tests {
             child_exit_status(&mut parent).is_some(),
             "parent was not terminated"
         );
-        let entries = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entries = crate::app_log::get_dev_log_entries();
         let killed_pids = entries
             .as_array()
             .unwrap()
@@ -731,7 +813,7 @@ mod tests {
     #[test]
     fn kill_invalid_pid_is_returned_and_logged() {
         assert!(kill_process_tree(0).unwrap_err().contains("PID: 0"));
-        let entries = crate::session_sync_diagnostics::get_dev_log_entries();
+        let entries = crate::app_log::get_dev_log_entries();
         assert!(entries.as_array().unwrap().iter().any(|entry| {
             entry["details"]["event"] == "codex_app_process_kill_error"
                 && entry["details"]["details"]["pid"] == 0

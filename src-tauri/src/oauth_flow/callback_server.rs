@@ -1,5 +1,5 @@
 use super::{OAUTH_CALLBACK_PORT, OAUTH_CANCEL_MESSAGE};
-use crate::{accounts::exchange_oauth_code, session_sync_diagnostics::log_session_sync_event};
+use crate::{accounts::exchange_oauth_code, app_log::log_event};
 use serde_json::json;
 use std::{
     io::{Read, Write},
@@ -48,7 +48,7 @@ pub(super) fn wait_for_oauth_exchange(
                 let url = match read_callback_request(&mut stream) {
                     Ok(value) => value,
                     Err(err) => {
-                        log_session_sync_event(
+                        log_event(
                             "oauth_callback_request_error",
                             json!({ "error": err, "action": "skip_connection" }),
                         );

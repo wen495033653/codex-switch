@@ -10,10 +10,10 @@ mod tests;
 
 use crate::{
     accounts::get_codex_state_value,
+    app_log::log_event_once,
     blocking_task::run_blocking,
     json_util::{raw_string_field, string_field},
     paths::codex_dir,
-    session_sync_diagnostics::log_session_sync_event_once,
     settings::read_settings_value,
     time_util::{now_string, parse_rfc3339_seconds},
 };
@@ -46,9 +46,8 @@ pub(crate) async fn usage_stats_get() -> Result<Value, String> {
     // or a refresh that keeps failing would go unnoticed. It polls every 30 s, so each distinct
     // failure is recorded once per run.
     run_blocking("读取 token 统计", || {
-        usage_stats_get_impl().inspect_err(|err| {
-            log_session_sync_event_once("usage_stats_refresh_error", json!({ "error": err }))
-        })
+        usage_stats_get_impl()
+            .inspect_err(|err| log_event_once("usage_stats_refresh_error", json!({ "error": err })))
     })
     .await
 }

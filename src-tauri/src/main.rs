@@ -6,6 +6,7 @@ use tauri::Manager;
 
 mod accounts;
 mod api_config;
+mod app_log;
 mod atomic_file;
 mod blocking_task;
 mod codex_app_server;
@@ -24,7 +25,6 @@ mod paths;
 mod proxy_config;
 mod quota;
 mod session_manager;
-mod session_sync_diagnostics;
 mod settings;
 mod time_util;
 mod updater;
@@ -67,15 +67,15 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
-            session_sync_diagnostics::init_session_sync_diagnostics(app.handle().clone());
-            session_sync_diagnostics::log_session_sync_event("app_start", json!({}));
+            app_log::init_app_log(app.handle().clone());
+            app_log::log_event("app_start", json!({}));
             restore_main_window_state(app.handle()).map_err(setup_error)?;
             setup_tray(app.handle()).map_err(setup_error)?;
             let launch_args: Vec<String> = std::env::args().collect();
             apply_main_window_startup_behavior(app.handle(), &launch_args).map_err(setup_error)?;
             // 独立 Dev 预览只执行用户手动操作，不在启动时同步正式版状态。
             if dev_preview {
-                session_sync_diagnostics::log_session_sync_event(
+                app_log::log_event(
                     "app_dev_preview",
                     json!({ "automaticSync": false, "dataDir": paths::app_data_dir().map_err(setup_error)?, "codexHome": paths::codex_dir().map_err(setup_error)? }),
                 );
@@ -105,7 +105,7 @@ fn main() {
             ];
             for (step, result) in startup_steps {
                 if let Err(err) = result {
-                    session_sync_diagnostics::log_session_sync_event(
+                    app_log::log_event(
                         "app_start_step_error",
                         json!({ "step": step, "error": err }),
                     );
@@ -116,17 +116,17 @@ fn main() {
                 .get("supported")
                 .and_then(serde_json::Value::as_bool)
                 == Some(true);
-            session_sync_diagnostics::log_session_sync_event(
+            app_log::log_event(
                 "codex_desktop_support_status",
                 codex_desktop_status,
             );
             if codex_desktop_supported {
                 match session_manager::migrate_legacy_codex_data_for_current_home() {
-                    Ok(report) => session_sync_diagnostics::log_session_sync_event(
+                    Ok(report) => app_log::log_event(
                         "codex_desktop_data_migration",
                         report,
                     ),
-                    Err(err) => session_sync_diagnostics::log_session_sync_event(
+                    Err(err) => app_log::log_event(
                         "codex_desktop_data_migration_error",
                         json!({ "error": err }),
                     ),
@@ -134,7 +134,7 @@ fn main() {
                 if let Err(err) =
                     codex_launcher::sync_remote_control_runtime_for_current_settings("app_start")
                 {
-                    session_sync_diagnostics::log_session_sync_event(
+                    app_log::log_event(
                         "codex_remote_control_helper_error",
                         json!({
                             "context": "app_start",
@@ -182,7 +182,7 @@ fn main() {
             codex_launcher::get_codex_app_instance_status,
             codex_launcher::ide_snapshot::restart_open_ides,
             codex_launcher::ide_snapshot::discard_ide_snapshot,
-            session_sync_diagnostics::get_dev_log_entries,
+            app_log::get_dev_log_entries,
             commands::account::import_accounts,
             commands::account::export_accounts,
             commands::quota::refresh_all_quotas,
