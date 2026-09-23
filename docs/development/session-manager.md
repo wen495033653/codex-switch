@@ -118,6 +118,12 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - 本地检查（HEAD `3a7eb2f`）：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 288 passed / 5 ignored。测试进程的 `USERPROFILE`/`HOME`/`APPDATA` 指向临时目录。
 - 未验证：没有在真实数据规模上测量耗时（上千个 rollout、上百 MB）；性能收益只来自读取量和系统调用次数的推算。
 
+### 2026-09-23：逐个提交的完整检查与备份文件名竞争
+
+- 对 `347da53..83c7bf9` 的每个提交分别检出并运行 fmt、Clippy all-targets 和完整 `cargo test`：除 `71bb037` 外全部通过，测试数从 267 逐步增加到 288（均 5 ignored）。`71bb037` 那一次是 269 passed / 1 failed，耗时 7.26s（其余约 3.5s）；失败输出没有保存，之后在该提交上重跑 17 次都通过，没能确认是哪个用例。
+- 排查中证实了一个真实的竞争：备份文件名只精确到秒，并用“先检查是否存在再创建”选名。8 个线程并发备份（同一 reason）时 160 次里 133 次失败，报 `table threads already exists`。正式运行中所有备份都在会话 I/O 锁内顺序执行，不受影响；但单元测试直接并行调用不加锁的内部函数。修复为先用 `create_new` 占住文件名再写入（`backup::reserve_reason_backup_file`），并加了并发测试 `concurrent_backups_with_the_same_reason_get_distinct_files`。
+- 修复后（`664fafc`）完整 `cargo test` 289 passed / 5 ignored，连续 6 次均通过。`71bb037` 那次失败是否就是这个竞争，仍是推断。
+
 ## 待验证
 
 TODO(verify): 真实 Codex 的 `state_5.sqlite` 中 thread 子表是否声明了外键、声明方式（`ON UPDATE` 动作、是否 `DEFERRABLE`）还没有看过；本次按测试夹具和现有删除逻辑推断。触发条件：下一次在正式版里用“修改 ID”处理归档/取消归档冲突，且该会话有动态工具或子代理关系。检查：返回 `ok=true`；数据目录 `logs/codex-switch-errors.jsonl` 没有 `session_manager_status_state_db_error`；只读查询 `SELECT thread_id FROM thread_dynamic_tools` / `thread_spawn_edges` 中不再出现旧 id。判据不成立（日志 `error` 含 `FOREIGN KEY` 或其他 SQLite 错误）时，从 `state_db::rename_thread_references` 与该日志的 `rollbackErrors` 继续；用户可用 `sqlite3 state_5.sqlite ".schema thread_dynamic_tools"` 只读提供真实建表语句。
