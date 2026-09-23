@@ -1803,6 +1803,31 @@ fn state_db_backup_includes_uncheckpointed_wal_pages() {
 }
 
 #[test]
+fn preview_falls_back_to_rollout_when_state_db_has_no_row() {
+    let root = temp_path("preview-fallback");
+    let session_id = "019e20f9-34b7-7a82-a95b-fe461de89805";
+    let relative = PathBuf::from("sessions/2026/05/13").join(session_file_name(session_id));
+    write_test_session(&root, &relative, session_id, "fallback title");
+    drop(create_current_state_db(&root));
+
+    let result = preview_conversation_impl(
+        root.to_string_lossy().to_string(),
+        path_to_slash(&relative),
+        None,
+        None,
+        Some(10),
+        None,
+        None,
+    )
+    .unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(result["conversation"]["id"], session_id);
+    assert_eq!(result["conversation"]["title"], "fallback title");
+    assert_eq!(result["messages"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn delete_state_threads_removes_related_rows() {
     let root = temp_path("delete-state-related");
     fs::create_dir_all(&root).unwrap();

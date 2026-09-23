@@ -72,9 +72,12 @@ pub(super) fn preview_conversation_impl(
     let mut index_warnings = Vec::new();
     let session_index = read_session_index(&root, &mut index_warnings);
     let status = status_from_relative_path(&relative)?;
-    let item = current_state_conversation_for_path(&root, &path, &session_index)?.unwrap_or(
-        conversation_from_path(&root, &path, &status, false, &session_index)?,
-    );
+    // The file-based fallback parses the rollout; only run it (and only let it fail the preview)
+    // when the state DB has no row for this path.
+    let item = match current_state_conversation_for_path(&root, &path, &session_index)? {
+        Some(item) => item,
+        None => conversation_from_path(&root, &path, &status, false, &session_index)?,
+    };
     let page = read_preview_message_page(
         &path,
         before_cursor,
