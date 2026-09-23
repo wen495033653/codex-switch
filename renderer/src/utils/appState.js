@@ -78,6 +78,16 @@ export const getFallbackPageSize = (viewportHeight) => {
   return 9;
 };
 
+// How many cards of `cardHeight` fit in a grid of `clientHeight`; null until the card height
+// CSS variable is known.
+export const getGridPageMetrics = ({ templateColumns, rowGap, cardHeight, clientHeight }) => {
+  if (!cardHeight) return null;
+  const columnText = String(templateColumns || '').trim();
+  const columns = Math.max(1, columnText ? columnText.split(/\s+/).filter(Boolean).length : 1);
+  const rows = Math.max(1, Math.floor((clientHeight + rowGap) / (cardHeight + rowGap)));
+  return { columns, rows };
+};
+
 export const normalizeBackgroundRefreshInterval = (value) => {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES;

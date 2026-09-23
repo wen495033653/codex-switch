@@ -10,6 +10,7 @@ import {
   runApiProfilePrecheck,
   withInFlightApiTests,
 } from '../utils/apiPrecheck';
+import Pagination from './Pagination';
 import UsageStatsSummary from './UsageStatsSummary';
 import { useI18n } from '../i18n';
 import {
@@ -357,30 +358,15 @@ export default function ApiModePage({
                 )}
               </div>
 
-              <div className="panel-footer">
-                <div className="footer-info">
-                  {t('显示第 {start} 到 {end} 条，共 {total} 条', {
-                    start: total === 0 ? 0 : startIdx + 1,
-                    end: Math.min(startIdx + pageSize, total),
-                    total
-                  })}
-                </div>
-                {totalPages > 1 && (
-                  <div className="pagination">
-                    <button type="button" className="page-btn" aria-label={t('上页')} disabled={page === 1} onClick={() => setPage(Math.max(1, page - 1))}>
-                      &lt;
-                    </button>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(item => (
-                      <button type="button" key={item} className={`page-btn ${page === item ? 'active' : ''}`} aria-current={page === item ? 'page' : undefined} onClick={() => setPage(item)}>
-                        {item}
-                      </button>
-                    ))}
-                    <button type="button" className="page-btn" aria-label={t('下页')} disabled={page === totalPages} onClick={() => setPage(Math.min(totalPages, page + 1))}>
-                      &gt;
-                    </button>
-                  </div>
-                )}
-              </div>
+              <Pagination
+                hideSinglePage
+                onPageChange={setPage}
+                page={page}
+                pageSize={pageSize}
+                startIdx={startIdx}
+                total={total}
+                totalPages={totalPages}
+              />
             </div>
           </div>
         </div>

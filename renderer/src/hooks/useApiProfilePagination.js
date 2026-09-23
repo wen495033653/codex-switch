@@ -1,67 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { getFallbackPageSize } from '../utils/appState';
-
-function getApiProfileHeight(grid) {
-  const styles = window.getComputedStyle(grid);
-  return Number.parseFloat(styles.getPropertyValue('--account-card-height')) || 0;
-}
+import { useEffect, useMemo, useState } from 'react';
+import { useGridPageSize } from './useGridPageSize';
 
 export function useApiProfilePagination({
   activeId,
   profiles
 }) {
-  const apiProfileGridRef = useRef(null);
-  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  const { gridRef: apiProfileGridRef, pageSize } = useGridPageSize();
   const [page, setPage] = useState(1);
-  const [gridPageMetrics, setGridPageMetrics] = useState({ columns: 0, rows: 0 });
-
-  const pageSize = useMemo(() => {
-    if (gridPageMetrics.columns > 0 && gridPageMetrics.rows > 0) {
-      return gridPageMetrics.columns * gridPageMetrics.rows;
-    }
-    return getFallbackPageSize(viewportHeight);
-  }, [gridPageMetrics, viewportHeight]);
-
-  useEffect(() => {
-    const handleResize = () => setViewportHeight(window.innerHeight);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    const updateGridPageMetrics = () => {
-      const grid = apiProfileGridRef.current;
-      if (!grid) return;
-
-      const styles = window.getComputedStyle(grid);
-      const templateColumns = String(styles.gridTemplateColumns || '').trim();
-      const columns = Math.max(1, templateColumns ? templateColumns.split(/\s+/).filter(Boolean).length : 1);
-      const rowGap = Number.parseFloat(styles.rowGap || styles.gap || '0') || 0;
-      const cardHeight = getApiProfileHeight(grid);
-      if (!cardHeight) return;
-
-      const rows = Math.max(1, Math.floor((grid.clientHeight + rowGap) / (cardHeight + rowGap)));
-      setGridPageMetrics(prev => (
-        prev.columns === columns && prev.rows === rows
-          ? prev
-          : { columns, rows }
-      ));
-    };
-
-    const frameId = window.requestAnimationFrame(updateGridPageMetrics);
-    let observer = null;
-    if (typeof ResizeObserver === 'function' && apiProfileGridRef.current) {
-      observer = new ResizeObserver(() => updateGridPageMetrics());
-      observer.observe(apiProfileGridRef.current);
-    }
-    window.addEventListener('resize', updateGridPageMetrics);
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      if (observer) observer.disconnect();
-      window.removeEventListener('resize', updateGridPageMetrics);
-    };
-  }, [viewportHeight]);
 
   const sortedProfiles = useMemo(() => {
     const list = [...(Array.isArray(profiles) ? profiles : [])];

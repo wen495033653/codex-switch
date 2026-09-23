@@ -1,4 +1,5 @@
 import AccountCard from './AccountCard';
+import Pagination from './Pagination';
 import { getAccountId } from '../utils/auth';
 import { useI18n } from '../i18n';
 
@@ -135,30 +136,14 @@ export default function AccountsPage({
                     )}
                 </div>
 
-                <div className="panel-footer">
-                    <div className="footer-info">
-                        {t('显示第 {start} 到 {end} 条，共 {total} 条', {
-                            start: total === 0 ? 0 : startIdx + 1,
-                            end: Math.min(startIdx + pageSize, total),
-                            total
-                        })}
-                    </div>
-                    {totalPages > 0 && (
-                        <div className="pagination">
-                            <button type="button" className="page-btn" aria-label={t('上页')} disabled={page === 1} onClick={() => onPageChange(Math.max(1, page - 1))}>
-                                &lt;
-                            </button>
-                            {Array.from({ length: totalPages }, (_, i) => i + 1).map(item => (
-                                <button type="button" key={item} className={`page-btn ${page === item ? 'active' : ''}`} aria-current={page === item ? 'page' : undefined} onClick={() => onPageChange(item)}>
-                                    {item}
-                                </button>
-                            ))}
-                            <button type="button" className="page-btn" aria-label={t('下页')} disabled={page === totalPages} onClick={() => onPageChange(Math.min(totalPages, page + 1))}>
-                                &gt;
-                            </button>
-                        </div>
-                    )}
-                </div>
+                <Pagination
+                    onPageChange={onPageChange}
+                    page={page}
+                    pageSize={pageSize}
+                    startIdx={startIdx}
+                    total={total}
+                    totalPages={totalPages}
+                />
             </div>
         </>
     );
