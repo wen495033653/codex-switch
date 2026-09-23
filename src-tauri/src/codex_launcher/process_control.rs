@@ -574,7 +574,16 @@ mod tests {
         confirmed.unwrap();
         assert!(killed.unwrap());
         assert!(wait_for_pids_exit(&[u64::from(child.id())], 2000).is_empty());
-        assert!(child.try_wait().unwrap().is_some());
+        // On macOS a SIGKILLed process drops out of the process list (its KERN_PROCARGS2 read
+        // fails) while it is still tearing down, a moment before waitpid can reap it, so the
+        // exit status is polled instead of read once.
+        let deadline = Instant::now() + StdDuration::from_secs(5);
+        let mut status = child.try_wait().unwrap();
+        while status.is_none() && Instant::now() < deadline {
+            thread::sleep(StdDuration::from_millis(20));
+            status = child.try_wait().unwrap();
+        }
+        assert!(status.is_some(), "child was not terminated");
     }
 
     #[test]
