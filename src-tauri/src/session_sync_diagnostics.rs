@@ -1,6 +1,7 @@
 use crate::time_util::now_string;
 use serde_json::{json, Map, Value};
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -636,6 +637,20 @@ pub(crate) fn log_session_sync_event(event: &str, details: Value) {
     }
 }
 
+/// For status reads the UI polls every few seconds: the same failure would be appended to the
+/// error log on every poll, so each distinct event and details pair is logged once per run.
+pub(crate) fn log_session_sync_event_once(event: &str, details: Value) {
+    static LOGGED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let first = LOGGED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map(|mut logged| logged.insert(format!("{event}\n{details}")))
+        .unwrap_or(true);
+    if first {
+        log_session_sync_event(event, details);
+    }
+}
+
 #[tauri::command]
 pub(crate) fn get_dev_log_entries() -> Value {
     let entries = dev_log_buffer()
@@ -676,6 +691,28 @@ mod tests {
             ),
             "error"
         );
+    }
+
+    #[test]
+    fn polled_failure_is_logged_once_per_distinct_details() {
+        let count = |root: &str| {
+            get_dev_log_entries()
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["details"]["details"]["Codex home"] == root)
+                .count()
+        };
+        let event = "codex_app_instance_data_migration_error";
+        for _ in 0..3 {
+            log_session_sync_event_once(
+                event,
+                json!({"codexHome": "fixture-once-a", "error": "x"}),
+            );
+        }
+        log_session_sync_event_once(event, json!({"codexHome": "fixture-once-b", "error": "x"}));
+        assert_eq!(count("fixture-once-a"), 1);
+        assert_eq!(count("fixture-once-b"), 1);
     }
 
     fn unique_temp_log_path(name: &str) -> PathBuf {

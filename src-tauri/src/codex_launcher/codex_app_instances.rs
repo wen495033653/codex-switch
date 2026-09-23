@@ -10,7 +10,7 @@ use crate::{
     },
     paths::{app_data_dir, codex_dir},
     session_manager::migrate_legacy_codex_data_for_root,
-    session_sync_diagnostics::log_session_sync_event,
+    session_sync_diagnostics::{log_session_sync_event, log_session_sync_event_once},
     settings::{default_api_mode, read_settings_value},
     time_util::now_string,
 };
@@ -154,7 +154,19 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
     if pids.is_empty() {
         return Err("独立 Codex 窗口未运行，请重新打开一次".to_string());
     }
-    focus_instance_window(&pids)?;
+    if let Err(err) = focus_instance_window(&pids) {
+        log_session_sync_event(
+            "codex_app_multi_open_show_window_error",
+            json!({
+                "kind": target_kind,
+                "targetId": target_id,
+                "userDataDir": user_data_dir.to_string_lossy(),
+                "pids": pids,
+                "error": err
+            }),
+        );
+        return Err(err);
+    }
     log_session_sync_event(
         "codex_app_multi_open_show_window",
         json!({
@@ -237,7 +249,18 @@ fn read_codex_app_instance_statuses(
             continue;
         }
 
-        let marker = read_instance_marker(&root).unwrap_or_else(|_| json!({}));
+        // A missing marker is normal; an unreadable one is reported with the instance, whose
+        // key, kind and running state still come from its directory and processes.
+        let (marker, marker_error) = match read_instance_marker(&root) {
+            Ok(marker) => (marker, None),
+            Err(err) => {
+                log_session_sync_event_once(
+                    "codex_app_instance_marker_error",
+                    json!({ "instanceRoot": root.to_string_lossy(), "error": err }),
+                );
+                (json!({}), Some(err))
+            }
+        };
         let kind = first_non_empty(vec![
             string_field(&marker, "kind"),
             instance_kind_from_key(&instance_key).to_string(),
@@ -261,6 +284,7 @@ fn read_codex_app_instance_statuses(
             "channel": channel,
             "running": !pids.is_empty(),
             "pids": pids,
+            "markerError": marker_error,
             "instanceRoot": root.to_string_lossy().to_string(),
             "codexHome": codex_home.to_string_lossy().to_string(),
             "userDataDir": user_data_dir.to_string_lossy().to_string()
@@ -400,34 +424,30 @@ fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
     Ok(())
 }
 
+// `open -a ChatGPT` used to follow a failed osascript and report success, although it brings the
+// app's default instance forward rather than this instance's window.
 #[cfg(target_os = "macos")]
 fn focus_instance_window(pids: &[u64]) -> Result<(), String> {
+    let mut failures = Vec::new();
     for pid in pids {
         let script = format!(
             "tell application \"System Events\" to set frontmost of first process whose unix id is {pid} to true"
         );
-        let status = std::process::Command::new("osascript")
+        match std::process::Command::new("osascript")
             .args(["-e", &script])
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if status.is_ok_and(|status| status.success()) {
-            return Ok(());
+            .output()
+        {
+            Ok(output) if output.status.success() => return Ok(()),
+            Ok(output) => failures.push(format!(
+                "pid={pid} exitCode={:?} stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(err) => failures.push(format!("pid={pid} osascript 启动失败: {err}")),
         }
     }
-    for app_name in ["ChatGPT", "Codex"] {
-        let status = std::process::Command::new("open")
-            .args(["-a", app_name])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if status.is_ok_and(|status| status.success()) {
-            return Ok(());
-        }
-    }
-    Err("未能激活独立 Codex 窗口".to_string())
+    Err(format!("未能激活独立 Codex 窗口: {}", failures.join("; ")))
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -748,6 +768,43 @@ mod tests {
             "api-api-profile-main"
         );
         assert!(instance_key_for_target("other", "target").is_err());
+    }
+
+    #[test]
+    fn unreadable_instance_marker_is_reported_with_the_instance() {
+        let instances_dir = std::env::temp_dir().join(format!(
+            "codex-switch-instance-marker-{}",
+            std::process::id()
+        ));
+        let broken = instances_dir.join("api-broken");
+        let valid = instances_dir.join("account-valid");
+        fs::create_dir_all(&broken).unwrap();
+        fs::create_dir_all(&valid).unwrap();
+        fs::write(broken.join("codex-switch-instance.json"), "{").unwrap();
+        fs::write(
+            valid.join("codex-switch-instance.json"),
+            r#"{"kind":"account","targetId":"profile-1","channel":"订阅账号 profile-1"}"#,
+        )
+        .unwrap();
+
+        let statuses = read_codex_app_instance_statuses(&instances_dir, &[]).unwrap();
+        fs::remove_dir_all(&instances_dir).unwrap();
+
+        let broken = statuses
+            .iter()
+            .find(|status| status["instanceKey"] == "api-broken")
+            .unwrap();
+        assert_eq!(broken["kind"], "api");
+        assert_eq!(broken["targetId"], "");
+        assert!(broken["markerError"]
+            .as_str()
+            .is_some_and(|error| error.contains("解析 Codex 多开实例标记失败")));
+        let valid = statuses
+            .iter()
+            .find(|status| status["instanceKey"] == "account-valid")
+            .unwrap();
+        assert_eq!(valid["targetKey"], "account:profile-1");
+        assert!(valid["markerError"].is_null());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::json_util::string_field;
 #[cfg(target_os = "macos")]
 use crate::paths::home_dir;
+use crate::session_sync_diagnostics::log_session_sync_event_once;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -28,13 +29,17 @@ const CODEX_APP_PACKAGE_FAMILY_SUFFIX: &str = "__2p2nqsd0c76g0";
 #[cfg(windows)]
 const CODEX_APP_PACKAGE_REGISTRY_KEY: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
 
+// Running hosts come first; the installed packages are looked up only when none of them fits, so
+// an unreadable registry does not block a Codex that is already running.
 pub(super) fn codex_app_executable() -> Result<String, String> {
     let mut candidates = Vec::new();
     extend_unique_paths(&mut candidates, running_codex_app_executables()?);
-    extend_unique_paths(
-        &mut candidates,
-        installed_codex_app_desktop_executable_candidates(),
-    );
+    if !candidates.iter().any(|path| Path::new(path).exists()) {
+        extend_unique_paths(
+            &mut candidates,
+            installed_codex_app_desktop_executable_candidates()?,
+        );
+    }
     candidates
         .into_iter()
         .find(|path| Path::new(path).exists())
@@ -45,39 +50,32 @@ pub(super) fn codex_app_executable() -> Result<String, String> {
 }
 
 pub(crate) fn codex_desktop_cli_source_path() -> Result<PathBuf, String> {
-    let mut desktop_candidates = running_codex_app_executables().unwrap_or_default();
+    let mut hosts = running_codex_app_executables()?;
+    if let Some(cli_path) = first_existing_cli_path(&hosts) {
+        return Ok(cli_path);
+    }
     extend_unique_paths(
-        &mut desktop_candidates,
-        installed_codex_app_desktop_executable_candidates(),
+        &mut hosts,
+        installed_codex_app_desktop_executable_candidates()?,
     );
 
-    let mut cli_candidates = Vec::new();
-    for desktop_executable in desktop_candidates {
-        let cli_path = codex_desktop_cli_path_for_host(Path::new(&desktop_executable));
-        let cli_path = cli_path.to_string_lossy().to_string();
-        if cli_candidates
-            .iter()
-            .any(|candidate: &String| executable_paths_equal(candidate, &cli_path))
-        {
-            continue;
+    first_existing_cli_path(&hosts).ok_or_else(|| {
+        let status = codex_desktop_support_status();
+        let message = string_field(&status, "message");
+        if message.is_empty() {
+            "当前 Codex Desktop 安装缺少 resources/codex 可执行文件，请更新 Codex Desktop"
+                .to_string()
+        } else {
+            message
         }
-        cli_candidates.push(cli_path);
-    }
+    })
+}
 
-    cli_candidates
-        .into_iter()
-        .map(PathBuf::from)
+fn first_existing_cli_path(hosts: &[String]) -> Option<PathBuf> {
+    hosts
+        .iter()
+        .map(|host| codex_desktop_cli_path_for_host(Path::new(host)))
         .find(|path| path.is_file())
-        .ok_or_else(|| {
-            let status = codex_desktop_support_status();
-            let message = string_field(&status, "message");
-            if message.is_empty() {
-                "当前 Codex Desktop 安装缺少 resources/codex 可执行文件，请更新 Codex Desktop"
-                    .to_string()
-            } else {
-                message
-            }
-        })
 }
 
 #[cfg(windows)]
@@ -147,55 +145,47 @@ fn running_codex_app_executables() -> Result<Vec<String>, String> {
 }
 
 #[cfg(windows)]
-fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
-    installed_codex_app_package_names()
-        .into_iter()
-        .map(|package_name| {
-            PathBuf::from(r"C:\Program Files\WindowsApps")
-                .join(&package_name)
-                .join("app")
-                .join(WINDOWS_CODEX_DESKTOP_EXECUTABLE_NAME)
-                .to_string_lossy()
-                .to_string()
-        })
-        .collect()
+fn installed_codex_app_desktop_executable_candidates() -> Result<Vec<String>, String> {
+    Ok(installed_executable_candidates_for_packages(
+        &installed_codex_app_package_names()?,
+        WINDOWS_CODEX_DESKTOP_EXECUTABLE_NAME,
+    ))
 }
 
 #[cfg(target_os = "macos")]
-fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
-    MACOS_CODEX_DESKTOP_APP_NAMES
+fn installed_codex_app_desktop_executable_candidates() -> Result<Vec<String>, String> {
+    Ok(MACOS_CODEX_DESKTOP_APP_NAMES
         .iter()
         .flat_map(|app_name| {
             macos_app_executable_candidates(app_name, MACOS_CODEX_DESKTOP_EXECUTABLE_NAME)
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn installed_codex_app_desktop_executable_candidates() -> Vec<String> {
-    Vec::new()
+fn installed_codex_app_desktop_executable_candidates() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
 }
 
 #[cfg(windows)]
-fn installed_legacy_codex_app_desktop_executable_candidates() -> Vec<String> {
-    let packages = installed_codex_app_package_names();
-    installed_executable_candidates_for_packages(
-        &packages,
+fn installed_legacy_codex_app_desktop_executable_candidates() -> Result<Vec<String>, String> {
+    Ok(installed_executable_candidates_for_packages(
+        &installed_codex_app_package_names()?,
         WINDOWS_LEGACY_CODEX_DESKTOP_EXECUTABLE_NAME,
-    )
+    ))
 }
 
 #[cfg(target_os = "macos")]
-fn installed_legacy_codex_app_desktop_executable_candidates() -> Vec<String> {
-    macos_app_executable_candidates(
+fn installed_legacy_codex_app_desktop_executable_candidates() -> Result<Vec<String>, String> {
+    Ok(macos_app_executable_candidates(
         MACOS_LEGACY_CODEX_DESKTOP_APP_NAME,
         MACOS_LEGACY_CODEX_DESKTOP_EXECUTABLE_NAME,
-    )
+    ))
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn installed_legacy_codex_app_desktop_executable_candidates() -> Vec<String> {
-    Vec::new()
+fn installed_legacy_codex_app_desktop_executable_candidates() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
 }
 
 pub(crate) fn codex_desktop_support_status() -> Value {
@@ -208,13 +198,47 @@ pub(crate) fn codex_desktop_support_status() -> Value {
             "message": "当前系统暂不支持 ChatGPT Desktop 集成"
         });
     }
-    let mut current = running_codex_app_executables().unwrap_or_default();
-    extend_unique_paths(
-        &mut current,
-        installed_codex_app_desktop_executable_candidates(),
+    let status = codex_desktop_support_status_from_lookup(
+        running_codex_app_executables(),
+        installed_codex_app_desktop_executable_candidates,
+        installed_legacy_codex_app_desktop_executable_candidates,
     );
-    let legacy = installed_legacy_codex_app_desktop_executable_candidates();
-    codex_desktop_support_status_from_candidates(&current, &legacy)
+    if let Some(error) = status.get("lookupError") {
+        // The settings page polls this status every 3s.
+        log_session_sync_event_once(
+            "codex_desktop_install_lookup_error",
+            json!({ "error": error }),
+        );
+    }
+    status
+}
+
+// A running ChatGPT host is enough; otherwise the installed and legacy candidates decide, and a
+// failed lookup is reported as such instead of as "not installed".
+fn codex_desktop_support_status_from_lookup(
+    running: Result<Vec<String>, String>,
+    installed: impl FnOnce() -> Result<Vec<String>, String>,
+    legacy: impl FnOnce() -> Result<Vec<String>, String>,
+) -> Value {
+    let lookup = running.and_then(|running| {
+        if running.iter().any(|path| Path::new(path).exists()) {
+            return Ok((running, Vec::new()));
+        }
+        let mut current = running;
+        extend_unique_paths(&mut current, installed()?);
+        Ok((current, legacy()?))
+    });
+    match lookup {
+        Ok((current, legacy)) => codex_desktop_support_status_from_candidates(&current, &legacy),
+        Err(error) => json!({
+            "status": "lookup_failed",
+            "supported": false,
+            "requiresUpdate": false,
+            "executable": Value::Null,
+            "message": error,
+            "lookupError": error
+        }),
+    }
 }
 
 #[cfg(windows)]
@@ -283,11 +307,13 @@ fn codex_desktop_support_status_from_candidates(current: &[String], legacy: &[St
     })
 }
 
+// Only a missing key means "no packages"; any other registry error is returned instead of being
+// reported as "ChatGPT Desktop is not installed".
 #[cfg(windows)]
-fn installed_codex_app_package_names() -> Vec<String> {
+fn installed_codex_app_package_names() -> Result<Vec<String>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
-        Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS},
+        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS},
         System::Registry::{
             RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
         },
@@ -297,11 +323,17 @@ fn installed_codex_app_package_names() -> Vec<String> {
     let key_name = wide_null(CODEX_APP_PACKAGE_REGISTRY_KEY);
     let open_result =
         unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key_name.as_ptr(), 0, KEY_READ, &mut key) };
+    if open_result == ERROR_FILE_NOT_FOUND {
+        return Ok(Vec::new());
+    }
     if open_result != ERROR_SUCCESS {
-        return Vec::new();
+        return Err(format!(
+            "读取 ChatGPT Desktop 安装信息失败: RegOpenKeyExW HKCU\\{CODEX_APP_PACKAGE_REGISTRY_KEY} 错误码 {open_result}"
+        ));
     }
 
     let mut packages = Vec::new();
+    let mut enum_error = None;
     let mut index = 0u32;
     loop {
         let mut name = vec![0u16; 512];
@@ -321,13 +353,17 @@ fn installed_codex_app_package_names() -> Vec<String> {
         if result == ERROR_NO_MORE_ITEMS {
             break;
         }
-        if result == ERROR_SUCCESS {
-            let package = String::from_utf16_lossy(&name[..len as usize]);
-            if is_codex_app_package_name(&package) {
-                packages.push(package);
-            }
-        } else if result != ERROR_MORE_DATA {
+        // Key names are at most 255 characters, so the 512-unit buffer rules out
+        // ERROR_MORE_DATA; any failure ends the enumeration as an error.
+        if result != ERROR_SUCCESS {
+            enum_error = Some(format!(
+                "读取 ChatGPT Desktop 安装信息失败: RegEnumKeyExW HKCU\\{CODEX_APP_PACKAGE_REGISTRY_KEY} index={index} 错误码 {result}"
+            ));
             break;
+        }
+        let package = String::from_utf16_lossy(&name[..len as usize]);
+        if is_codex_app_package_name(&package) {
+            packages.push(package);
         }
         index += 1;
     }
@@ -335,8 +371,11 @@ fn installed_codex_app_package_names() -> Vec<String> {
     unsafe {
         RegCloseKey(key);
     }
+    if let Some(error) = enum_error {
+        return Err(error);
+    }
     packages.sort_by(|left, right| right.cmp(left));
-    packages
+    Ok(packages)
 }
 
 #[cfg(any(windows, test))]
@@ -438,6 +477,68 @@ mod tests {
             codex_desktop_cli_path_for_host(host),
             PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex")
         );
+    }
+
+    // Read-only: an installed package list and a machine without the key both succeed.
+    #[cfg(windows)]
+    #[test]
+    fn package_registry_lookup_reads_the_current_user_key() {
+        let packages = installed_codex_app_package_names().unwrap();
+        assert!(packages
+            .iter()
+            .all(|package| is_codex_app_package_name(package)));
+    }
+
+    #[test]
+    fn install_lookup_error_is_reported_unless_a_running_host_decides() {
+        let root = std::env::temp_dir().join(format!(
+            "codex-switch-desktop-lookup-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let running = root.join("ChatGPT.exe").to_string_lossy().to_string();
+        let missing = root.join("missing").to_string_lossy().to_string();
+        fs::write(&running, []).unwrap();
+        let registry_error = "fixture RegOpenKeyExW 错误码 5".to_string();
+
+        let status = codex_desktop_support_status_from_lookup(
+            Ok(vec![running.clone()]),
+            || panic!("a running host must not need the install lookup"),
+            || panic!("a running host must not need the legacy lookup"),
+        );
+        assert_eq!(status["status"], "current");
+        assert_eq!(status["executable"], running);
+
+        for (running, installed, legacy) in [
+            (Err(registry_error.clone()), Ok(vec![]), Ok(vec![])),
+            (
+                Ok(vec![missing.clone()]),
+                Err(registry_error.clone()),
+                Ok(vec![]),
+            ),
+            (
+                Ok(vec![missing.clone()]),
+                Ok(vec![]),
+                Err(registry_error.clone()),
+            ),
+        ] {
+            let status = codex_desktop_support_status_from_lookup(running, || installed, || legacy);
+            assert_eq!(status["status"], "lookup_failed", "{status}");
+            assert_eq!(status["supported"], false);
+            assert_eq!(status["requiresUpdate"], false);
+            assert_eq!(status["message"], registry_error);
+            assert_eq!(status["lookupError"], registry_error);
+        }
+
+        let status = codex_desktop_support_status_from_lookup(
+            Ok(vec![missing.clone()]),
+            || Ok(vec![]),
+            || Ok(vec![]),
+        );
+        assert_eq!(status["status"], "missing");
+        assert!(status.get("lookupError").is_none());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -15,8 +15,8 @@ use crate::{
         remove_table_config, set_config_values, set_table_config,
     },
     json_util::string_field,
-    paths::app_data_dir,
-    session_sync_diagnostics::log_session_sync_event,
+    paths::{app_data_dir, auth_path},
+    session_sync_diagnostics::{log_session_sync_event, log_session_sync_event_once},
     settings::{
         default_api_mode, read_settings_value, remote_control_config_enabled_from_settings,
         remote_control_enabled_from_settings, remote_control_suspended_by_subscription,
@@ -420,69 +420,63 @@ fn provider_string_field(provider: &serde_json::Map<String, Value>, key: &str) -
         .to_string()
 }
 
-fn active_auth_matches_remote_control_account(settings: &Value) -> bool {
+// The applied/present checks answer "does the live config already match". An absent selection,
+// account, auth.json or provider table is a "no"; a file or store that cannot be read or parsed
+// is returned as an error instead of being read as "not applied".
+fn active_auth_matches_remote_control_account(settings: &Value) -> Result<bool, String> {
     let account_id = remote_control_account_id_from_settings(settings);
     if account_id.is_empty() {
-        return false;
+        return Ok(false);
     }
-    let Ok(account) = remote_control_account(&account_id) else {
-        return false;
+    let Some(account) = lookup_store_account(&account_id)? else {
+        return Ok(false);
     };
-    let Ok(expected_profile_id) = profile_id_from_account(&account) else {
-        return false;
-    };
+    let expected_profile_id = profile_id_from_account(&account)?;
 
-    let Ok(auth) = read_auth_value() else {
-        return false;
-    };
+    if !auth_path()?.exists() {
+        return Ok(false);
+    }
+    let auth = read_auth_value()?;
     if string_field(&auth, "auth_mode") != "chatgpt" {
-        return false;
+        return Ok(false);
     }
 
-    profile_id_from_tokens_value(auth.get("tokens"))
-        .map(|profile_id| profile_id == expected_profile_id)
-        .unwrap_or(false)
+    Ok(profile_id_from_tokens_value(auth.get("tokens"))? == expected_profile_id)
 }
 
-fn remote_control_mixed_config_applied(settings: &Value) -> bool {
+fn remote_control_mixed_config_applied(settings: &Value) -> Result<bool, String> {
+    // Without a complete API profile the mixed config cannot have been applied.
     let Ok((api_base_url, api_key)) = remote_control_api_session_profile_from_settings(settings)
     else {
-        return false;
+        return Ok(false);
     };
-    if !active_auth_matches_remote_control_account(settings) {
-        return false;
+    if !active_auth_matches_remote_control_account(settings)? {
+        return Ok(false);
     }
 
-    let Ok(root_config) = read_root_config() else {
-        return false;
-    };
+    let root_config = read_root_config()?;
     if root_config.get("model_provider").and_then(Value::as_str) != Some(API_PROVIDER_ID) {
-        return false;
+        return Ok(false);
     }
 
-    let Ok(provider) = read_table_config(&format!("model_providers.{API_PROVIDER_ID}")) else {
-        return false;
-    };
+    let provider = read_table_config(&format!("model_providers.{API_PROVIDER_ID}"))?;
 
-    provider_string_field(&provider, "base_url") == api_base_url
+    Ok(provider_string_field(&provider, "base_url") == api_base_url
         && provider_string_field(&provider, "wire_api") == API_WIRE
         && provider_bool_field(&provider, "requires_openai_auth")
-        && provider_string_field(&provider, "experimental_bearer_token") == api_key
+        && provider_string_field(&provider, "experimental_bearer_token") == api_key)
 }
 
-fn remote_control_mixed_config_present() -> bool {
-    let Ok(root_config) = read_root_config() else {
-        return false;
-    };
+fn remote_control_mixed_config_present() -> Result<bool, String> {
+    let root_config = read_root_config()?;
     if root_config.get("model_provider").and_then(Value::as_str) != Some(API_PROVIDER_ID) {
-        return false;
+        return Ok(false);
     }
-    read_table_config(&format!("model_providers.{API_PROVIDER_ID}"))
-        .ok()
-        .is_some_and(|provider| {
-            !provider_string_field(&provider, "experimental_bearer_token").is_empty()
-                && provider_bool_field(&provider, "requires_openai_auth")
-        })
+    let provider = read_table_config(&format!("model_providers.{API_PROVIDER_ID}"))?;
+    Ok(
+        !provider_string_field(&provider, "experimental_bearer_token").is_empty()
+            && provider_bool_field(&provider, "requires_openai_auth"),
+    )
 }
 
 pub(crate) fn preview_remote_control_runtime_for_current_settings(
@@ -494,18 +488,16 @@ pub(crate) fn preview_remote_control_runtime_for_current_settings(
     }
     if remote_control_enabled_from_settings(&settings) {
         validate_remote_control_enable_prerequisites()?;
-        return Ok(!remote_control_mixed_config_applied(&settings));
+        return Ok(!remote_control_mixed_config_applied(&settings)?);
     }
 
-    Ok(remote_control_mixed_config_present()
-        || legacy_remote_control_home_removed_pending()
+    Ok(remote_control_mixed_config_present()?
+        || legacy_remote_control_home_removed_pending()?
         || !legacy_remote_control_helper_pids().is_empty())
 }
 
-fn legacy_remote_control_home_removed_pending() -> bool {
-    app_data_dir()
-        .map(|dir| dir.join("remote-control-codex-home").exists())
-        .unwrap_or(false)
+fn legacy_remote_control_home_removed_pending() -> Result<bool, String> {
+    Ok(app_data_dir()?.join("remote-control-codex-home").exists())
 }
 
 pub(crate) fn sync_remote_control_runtime_for_current_settings(
@@ -538,18 +530,18 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
 
     let runtime_config_changed = match runtime_target {
         RemoteControlRuntimeTarget::MixedApi => {
-            let pending = !remote_control_mixed_config_applied(&settings);
+            let pending = !remote_control_mixed_config_applied(&settings)?;
             apply_remote_control_mixed_config(&settings)?;
             pending
         }
         RemoteControlRuntimeTarget::Subscription => {
-            let pending = remote_control_mixed_config_present();
+            let pending = remote_control_mixed_config_present()?;
             set_subscription_mode()?;
             remove_remote_control_config()?;
             pending
         }
         RemoteControlRuntimeTarget::Api => {
-            let pending = remote_control_mixed_config_present();
+            let pending = remote_control_mixed_config_present()?;
             restore_api_config_after_remote_control_disabled(&settings)?;
             remove_remote_control_config()?;
             pending
@@ -588,85 +580,88 @@ pub(crate) fn restart_remote_control_runtime_for_current_settings(
     sync_remote_control_runtime_for_current_settings(context)
 }
 
-fn remote_control_backend_environment_status(settings: &Value) -> Option<Value> {
+fn remote_control_backend_environment_status(settings: &Value) -> Result<Option<Value>, String> {
     if !remote_control_enabled_from_settings(settings)
-        || !remote_control_mixed_config_applied(settings)
+        || !remote_control_mixed_config_applied(settings)?
     {
-        return None;
+        return Ok(None);
     }
 
     let account_id = remote_control_account_id_from_settings(settings);
     let status = remote_control_account(&account_id)
         .and_then(|account| fetch_remote_control_backend_environment_status(&account));
-    match status {
+    Ok(match status {
         Ok(status) => Some(status),
         Err(err) => Some(json!({
             "status": "lookup_failed",
             "message": "桌面状态查询失败",
             "raw": truncate_remote_control_error_text(&err)
         })),
-    }
+    })
 }
 
-fn remote_control_status_value(settings: &Value, backend_environment: Option<&Value>) -> Value {
+fn remote_control_status_value(
+    settings: &Value,
+    backend_environment: Option<&Value>,
+) -> Result<Value, String> {
     if !remote_control_config_enabled_from_settings(settings) {
-        return json!({
+        return Ok(json!({
             "state": "muted",
             "status": "disabled",
             "message": "未启用"
-        });
+        }));
     }
     if remote_control_suspended_by_subscription(settings) {
-        return json!({
+        return Ok(json!({
             "state": "muted",
             "status": "subscription_mode",
             "message": "订阅模式不可用"
-        });
+        }));
     }
 
     let account_id = remote_control_account_id_from_settings(settings);
     if account_id.is_empty() {
-        return json!({
+        return Ok(json!({
             "state": "error",
             "status": "missing_account",
             "message": "需要选择订阅账号"
-        });
+        }));
     }
     if let Err(err) = validate_remote_control_account_id(&account_id) {
-        return json!({
+        return Ok(json!({
             "state": "error",
             "status": "invalid_account",
             "message": "订阅账号无效",
             "raw": err
-        });
+        }));
     }
     if let Err(err) = remote_control_api_session_profile_from_settings(settings) {
-        return json!({
+        return Ok(json!({
             "state": "error",
             "status": "missing_api",
             "message": "缺少 API 配置",
             "raw": err
-        });
+        }));
     }
-    if remote_control_mixed_config_applied(settings) {
+    if remote_control_mixed_config_applied(settings)? {
         if let Some(environment) = backend_environment {
             if let Some(status) = remote_control_status_from_backend_environment(environment) {
-                return status;
+                return Ok(status);
             }
         }
-        return json!({
+        return Ok(json!({
             "state": "active",
             "status": "applied",
             "message": "配置已应用"
-        });
+        }));
     }
 
-    json!({
+    Ok(json!({
         "state": "warning",
         "status": "pending_restart",
         "message": "重启 Codex 后生效",
         "raw": "远程控制配置待应用"
-    })
+    }))
 }
 
 fn remote_control_status_is_login_expired(status: &Value) -> bool {
@@ -730,7 +725,17 @@ fn attach_remote_control_auto_disabled_response(
 
 #[tauri::command]
 pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
-    run_blocking("检测远程控制状态", get_codex_remote_control_status_impl).await
+    run_blocking("检测远程控制状态", || {
+        // Polled every 4s while remote control is on; the UI shows every failure, the log keeps
+        // each distinct one once.
+        get_codex_remote_control_status_impl().inspect_err(|err| {
+            log_session_sync_event_once(
+                "codex_remote_control_status_error",
+                json!({ "error": err }),
+            );
+        })
+    })
+    .await
 }
 
 fn get_codex_remote_control_status_impl() -> Result<Value, String> {
@@ -778,9 +783,9 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
         );
     }
 
-    let backend_environment = remote_control_backend_environment_status(&settings);
+    let backend_environment = remote_control_backend_environment_status(&settings)?;
     let mut connection_status =
-        remote_control_status_value(&settings, backend_environment.as_ref());
+        remote_control_status_value(&settings, backend_environment.as_ref())?;
 
     if auto_disable_message.is_none()
         && remote_control_status_is_login_expired(&connection_status)
