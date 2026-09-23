@@ -272,8 +272,24 @@ fn session_sync_pending_for_relaunch(
     }
 }
 
-fn remote_control_runtime_pending_for_relaunch(trigger: &str, command: Option<&str>) -> bool {
-    match preview_remote_control_runtime_for_current_settings(trigger) {
+fn remote_control_runtime_pending_for_relaunch(
+    trigger: &str,
+    command: Option<&str>,
+) -> Result<bool, String> {
+    remote_control_runtime_pending_from_preview(
+        preview_remote_control_runtime_for_current_settings(trigger),
+        trigger,
+        command,
+    )
+}
+
+// Like the session sync preflight: a failed check is returned before Codex is closed.
+fn remote_control_runtime_pending_from_preview(
+    preview: Result<bool, String>,
+    trigger: &str,
+    command: Option<&str>,
+) -> Result<bool, String> {
+    match preview {
         Ok(true) => {
             let event = if command.is_some() {
                 "codex_app_restart_command_remote_control_runtime_deferred"
@@ -291,7 +307,7 @@ fn remote_control_runtime_pending_for_relaunch(trigger: &str, command: Option<&s
                 })
             };
             log_session_sync_event(event, details);
-            true
+            Ok(true)
         }
         Ok(false) => {
             let event = if command.is_some() {
@@ -310,7 +326,7 @@ fn remote_control_runtime_pending_for_relaunch(trigger: &str, command: Option<&s
                 })
             };
             log_session_sync_event(event, details);
-            false
+            Ok(false)
         }
         Err(err) => {
             let event = if command.is_some() {
@@ -330,7 +346,7 @@ fn remote_control_runtime_pending_for_relaunch(trigger: &str, command: Option<&s
                 })
             };
             log_session_sync_event(event, details);
-            false
+            Err(err)
         }
     }
 }
@@ -395,7 +411,7 @@ pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     let session_sync_pending =
         session_sync_pending_for_relaunch(command, actions.session_sync_enabled, Some(command))?;
     let remote_control_runtime_pending =
-        remote_control_runtime_pending_for_relaunch(command, Some(command));
+        remote_control_runtime_pending_for_relaunch(command, Some(command))?;
     let restarted = relaunch_running_codex_processes(
         &processes,
         CodexRelaunchMode::Normal,
@@ -620,14 +636,59 @@ fn relaunch_codex_after_exit(
     post_exit_session_sync: bool,
     post_exit_remote_control_runtime_sync: bool,
 ) -> Result<usize, String> {
-    apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync)?;
+    let restarted = reopen_after_post_exit_steps(
+        || apply_codex_config_after_process_exit(origin, post_exit_remote_control_runtime_sync),
+        || {
+            if post_exit_session_sync {
+                sync_codex_sessions_after_process_exit(origin)
+            } else {
+                Ok(())
+            }
+        },
+        || relaunch_closed_codex(executables, mode, origin),
+    )?;
+    log_session_sync_event(
+        "codex_app_relaunch_processes_finish",
+        json!({
+            "origin": format!("{origin:?}"),
+            "mode": format!("{mode:?}"),
+            "restartedCount": restarted
+        }),
+    );
+    Ok(restarted)
+}
 
-    let session_sync_result = if post_exit_session_sync {
-        sync_codex_sessions_after_process_exit(origin)
+// Codex is already closed here. A failed config apply or session sync still reopens it once;
+// the failure is returned afterwards so the watcher records it and stops retrying.
+fn reopen_after_post_exit_steps(
+    apply_config: impl FnOnce() -> Result<(), String>,
+    sync_sessions: impl FnOnce() -> Result<(), String>,
+    relaunch: impl FnOnce() -> Result<usize, String>,
+) -> Result<usize, String> {
+    let config_result = apply_config();
+    let session_sync_result = sync_sessions();
+    let relaunch_result = relaunch();
+    let errors = [
+        relaunch_result.as_ref().err(),
+        config_result.as_ref().err(),
+        session_sync_result.as_ref().err(),
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .collect::<Vec<_>>();
+    if errors.is_empty() {
+        relaunch_result
     } else {
-        Ok(())
-    };
+        Err(errors.join("；"))
+    }
+}
 
+fn relaunch_closed_codex(
+    executables: &[String],
+    mode: CodexRelaunchMode,
+    origin: CodexRelaunchOrigin,
+) -> Result<usize, String> {
     thread::sleep(StdDuration::from_millis(RELAUNCH_DELAY_MS));
 
     if origin == CodexRelaunchOrigin::AppCommand {
@@ -672,16 +733,6 @@ fn relaunch_codex_after_exit(
         }
         return Err(format!("未能重新打开 Codex，可执行路径: {executables:?}"));
     }
-    // Reopen the already-closed app once, but report sync failure so the watcher stops retrying.
-    session_sync_result?;
-    log_session_sync_event(
-        "codex_app_relaunch_processes_finish",
-        json!({
-            "origin": format!("{origin:?}"),
-            "mode": format!("{mode:?}"),
-            "restartedCount": restarted
-        }),
-    );
     Ok(restarted)
 }
 
@@ -731,7 +782,7 @@ fn apply_codex_config_for_current_settings(
     sync_remote_control_runtime: bool,
 ) -> Result<Value, String> {
     let remote_control_changed = if sync_remote_control_runtime {
-        sync_remote_control_runtime_for_post_exit(context)
+        sync_remote_control_runtime_for_post_exit(context)?
     } else {
         json!({ "changed": false, "skipped": true })
     };
@@ -741,19 +792,18 @@ fn apply_codex_config_for_current_settings(
     }))
 }
 
-fn sync_remote_control_runtime_for_post_exit(context: &str) -> Value {
+fn sync_remote_control_runtime_for_post_exit(context: &str) -> Result<Value, String> {
     match sync_remote_control_runtime_for_current_settings(context) {
-        Ok(changed) => json!({ "changed": changed }),
+        Ok(changed) => Ok(json!({ "changed": changed })),
         Err(err) => {
-            let error = err.clone();
             log_session_sync_event(
                 "codex_app_relaunch_processes_post_exit_remote_control_runtime_error",
                 json!({
                     "context": context,
-                    "error": error
+                    "error": err
                 }),
             );
-            json!({ "changed": false, "error": err })
+            Err(err)
         }
     }
 }
@@ -1004,6 +1054,78 @@ mod tests {
         assert_eq!(entry["details"]["details"]["restarted"], false);
         assert_eq!(entry["details"]["details"]["retry"], false);
         println!("{entry}");
+    }
+
+    #[test]
+    fn post_exit_failures_still_reopen_once_then_return_every_cause() {
+        let config_error = "fixture remote control runtime: config.toml locked";
+        let sync_error = "fixture SQLite error: database is locked (code 5)";
+        let launch_error = "fixture launch: early exit Some(1)";
+        for (config, sync, launch, expected) in [
+            (Ok(()), Ok(()), Ok(1), Ok(1)),
+            (Err(config_error), Ok(()), Ok(1), Err(vec![config_error])),
+            (Ok(()), Err(sync_error), Ok(1), Err(vec![sync_error])),
+            (
+                Err(config_error),
+                Err(sync_error),
+                Ok(1),
+                Err(vec![config_error, sync_error]),
+            ),
+            (
+                Err(config_error),
+                Ok(()),
+                Err(launch_error),
+                Err(vec![launch_error, config_error]),
+            ),
+        ] {
+            let calls = RefCell::new(Vec::new());
+            let result = reopen_after_post_exit_steps(
+                || {
+                    calls.borrow_mut().push("config");
+                    config.map_err(str::to_string)
+                },
+                || {
+                    calls.borrow_mut().push("sync");
+                    sync.map_err(str::to_string)
+                },
+                || {
+                    calls.borrow_mut().push("launch");
+                    launch.map_err(str::to_string)
+                },
+            );
+            assert_eq!(*calls.borrow(), ["config", "sync", "launch"]);
+            match expected {
+                Ok(restarted) => assert_eq!(result, Ok(restarted)),
+                Err(causes) => assert_eq!(result.unwrap_err(), causes.join("；")),
+            }
+        }
+    }
+
+    #[test]
+    fn remote_control_preflight_error_is_returned_before_closing() {
+        let command = "restart_current_codex_app_normal";
+        assert_eq!(
+            remote_control_runtime_pending_from_preview(Ok(true), command, Some(command)),
+            Ok(true)
+        );
+        assert_eq!(
+            remote_control_runtime_pending_from_preview(Ok(false), command, Some(command)),
+            Ok(false)
+        );
+        let error = "fixture preflight: settings.json invalid json at line 3";
+        assert_eq!(
+            remote_control_runtime_pending_from_preview(Err(error.into()), command, Some(command)),
+            Err(error.to_string())
+        );
+        let logs = crate::session_sync_diagnostics::get_dev_log_entries();
+        assert!(
+            logs.as_array().unwrap().iter().any(|entry| {
+                entry["details"]["event"]
+                    == "codex_app_restart_command_remote_control_runtime_error"
+                    && entry["details"]["details"]["错误"] == error
+            }),
+            "{logs}"
+        );
     }
 
     #[test]

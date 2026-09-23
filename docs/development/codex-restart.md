@@ -9,7 +9,7 @@
 - 普通模式启动后，确认同一个子进程句柄持续存活 1500ms；提前退出（包括 `exitCode=0`）按失败返回，不重试、不伪装成功。这只证明进程存活，不代表窗口或业务就绪。CDP 模式用实际的 CDP 注入来确认。
 - 相关日志事件：`codex_app_process_kill_error` / `_finish`、`codex_app_process_kill_tree_exited`、`codex_app_launch_confirmation_error` / `_finish`、`codex_app_restart_command_error`、`codex_app_watcher_on_open_error`。`*_error` 事件从 v5.4.12 起会写入数据目录下的 `logs/codex-switch-errors.jsonl`。
 - 自动处理失败后，本次 Codex Switch 运行期间不再调用自动打开处理，即使 Codex PID 改变、周期检查到期或 watcher 线程恢复也不重试；继续更新进程状态。手动“重启 Codex”仍可主动触发，但其关闭失败同样设置这个共享停用标记，阻止后台再次尝试。标记只在重启 Codex Switch 后重置。
-- 同步预检查失败直接返回错误，不结束 Codex；若 Codex 已关闭后同步失败，仍完成这一次重新打开，再返回同步错误，禁止 watcher 将它当成成功而再次重启。
+- 同步预检查失败直接返回错误，不结束 Codex；若 Codex 已关闭后同步失败，仍完成这一次重新打开，再返回同步错误，禁止 watcher 将它当成成功而再次重启。“重启 Codex”的远程控制运行时预检查同样如此：失败直接返回错误，不结束 Codex（2026-09-23 起；以前记 `codex_app_restart_command_remote_control_runtime_error` 后按“无需同步”继续重启）。Codex 关闭后应用远程控制配置失败（`codex_app_relaunch_processes_post_exit_config_apply_error`）与会话同步失败一样：仍重新打开一次，再把重新打开、配置、同步三者中的全部错误用“；”连接后返回（以前配置失败只记日志，调用方收到的永远是成功）。
 - 关闭失败（权限预检查拒绝、终止失败或退出等待超时）时，停止后续关闭和重新打开操作；若设置开启且预检查发现会话差异，只直接同步文件一次。复用现有会话 I/O 锁与同步入口，不执行要求进程退出的配置应用、CDP 或启动操作。同步失败显式返回错误，不再重试；文件写入完成不代表正在运行的 Codex 已重新加载。
 - Windows 在执行任何终止命令前先只读查询调用者和所有根进程的 `TokenElevation`。普通权限 Codex Switch 遇到管理员进程时返回 `PROCESS_ELEVATION_MISMATCH`，不调用 taskkill，也不先结束可访问的子进程或其他根进程；权限查询失败同样停止终止操作，不假定可以终止。随后按上一条执行直接同步。权限不匹配记为 `warn`，记录双方 PID / elevated 值、`terminationAttempted=false`；若后续文件同步也失败，该同步终态及向上传播的错误记为 `error`，原权限原因单独保留。
 
@@ -37,6 +37,12 @@
 - IDE 快照 `capture_open_ide_snapshot` 本来就只刷新 cmd 和 exe，没有用 `new_all`。试过先按名称筛候选再读 cmd/exe，本机 380 个进程下 235ms 对 236–385ms，开销主要在逐进程打开句柄取启动时间，收益不明显，没有提交。
 
 ## 验证记录
+
+### 2026-09-23：远程控制运行时的错误不再被当成成功
+
+- 代码确认：`apply_codex_config_for_current_settings` 以前总返回 `Ok`，`codex_app_relaunch_processes_post_exit_config_apply_error` 分支不可达；`remote_control_runtime_pending_for_relaunch` 遇到错误返回 `false`。
+- 单元测试：`post_exit_failures_still_reopen_once_then_return_every_cause` 覆盖配置失败、同步失败、两者都失败、重新打开失败，均按“配置 → 同步 → 重新打开”各调用一次，错误全部保留；`remote_control_preflight_error_is_returned_before_closing` 确认预检查错误原样返回并记日志。完整 `cargo test`、fmt、Clippy all-targets 通过。
+- 没有真实运行：没有结束或重启真实 Codex，也没有构造真实的配置写入失败。
 
 ### 2026-09-23：进程枚举
 
@@ -105,6 +111,8 @@
 TODO(verify): watcher 路径的 CDP 重启和注入还没有在最终实现上验证，正式安装包里的 watcher 完整链路也没有运行过。原因：01:01 的测试进程缺 rustls crypto provider，在注入时 panic；01:22 补验时 Codex 正在执行任务，不能重启；23:33 走的是“重启 Codex”路径。触发条件：安装 v6.0.0 或更新版本后，下一次在 API 模式和订阅模式之间切换（使会话 provider 与目标不一致）并打开 Codex。检查：codex-switch 只发出一次针对 `ChatGPT.exe` 根进程的 `taskkill /F /T`；打开后约 40 秒内 Codex 只被重启一次，新的 `ChatGPT.exe` 命令行含 `--remote-debugging-port` 并持续运行（CDP 注入失败时 `launch_codex_with_cdp_hooks` 会结束新进程）；`state_5.sqlite` 中 `threads.model_provider` 全部等于目标 provider。出错时看数据目录下 `logs/codex-switch-errors.jsonl` 里的 `codex_app_process_kill_error`、`codex_app_watcher_on_open_error`。判据不成立时，从该 taskkill 的原始输出和存活 PID 继续定位。
 
 TODO(verify): 会话文件里残留的旧 provider 是否有影响，还不知道。事实：数据库的同步是全量的，会话文件只改写最近活动的 50 个（`SESSION_SYNC_RECENT_ROLLOUT_LIMIT`）。前后两次同步的“最近 50 个”范围不同，2026-09-17 晚同步回 `openai` 之后，仍有 16 个会话（最后更新在 09-14 21:10 到 09-15 21:26 之间）的文件首行 `session_meta.payload.model_provider` 是 `api`，而数据库里是 `openai`。未知：Codex 恢复会话时取的是数据库还是文件里的值。触发条件：在订阅模式下打开这个时间段内的任意一个会话。通过判据：能正常继续对话，说明文件里的旧标记无害，删除本条并在这里记下结果。判据不成立（仍报 “Model provider `api` not found”）时，从 `codex_sessions/rollouts.rs` 的 `collect_recent_rollout_files_from_dirs` 继续：文件同步的范围需要覆盖所有被上一次同步改写过的会话，而不只是当前最近的 50 个。
+
+TODO(verify): 远程控制运行时出错时的真实表现还没有运行过（2026-09-23 的改动只有单元测试）。触发条件：数据目录下 `logs/codex-switch-errors.jsonl` 出现 `codex_app_restart_command_remote_control_runtime_error` 或 `codex_app_relaunch_processes_post_exit_config_apply_error`。检查：前者出现时，同一次操作里没有 `codex_app_process_kill_*` 记录，Codex 进程未被结束，界面显示该错误；后者出现时，随后有新的 ChatGPT 主进程启动，`codex_app_restart_command_error` 或 `codex_app_watcher_on_open_error` 的 `error` 字段包含同一条配置错误。判据不成立时，从 `codex_app_open.rs` 的 `restart_current_codex_app_normal` 和 `reopen_after_post_exit_steps` 继续。
 
 ## 回退
 
