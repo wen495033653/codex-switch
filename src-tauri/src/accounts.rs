@@ -9,6 +9,7 @@ const OAUTH_SCOPE: &str = "openid profile email offline_access";
 pub(crate) struct ImportTokenResult {
     pub(crate) account: Option<Value>,
     pub(crate) usage_ok: bool,
+    pub(crate) error: Option<String>,
 }
 
 mod account_builders;
