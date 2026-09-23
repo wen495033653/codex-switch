@@ -1828,6 +1828,35 @@ fn preview_falls_back_to_rollout_when_state_db_has_no_row() {
 }
 
 #[test]
+fn session_index_skips_non_utf8_lines_and_keeps_reading() {
+    let root = temp_path("session-index-non-utf8");
+    fs::create_dir_all(&root).unwrap();
+    let mut content =
+        format!("{}\n", json!({"id": "before", "thread_name": "Before"})).into_bytes();
+    content.extend_from_slice(b"{\"id\":\"broken\",\"thread_name\":\"\xff\xfe\"}\n");
+    content.extend_from_slice(
+        format!("{}\n", json!({"id": "after", "thread_name": "After"})).as_bytes(),
+    );
+    fs::write(root.join("session_index.jsonl"), content).unwrap();
+
+    let mut warnings = Vec::new();
+    let index = read_session_index(&root, &mut warnings);
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(
+        session_index_title(&index, "before").as_deref(),
+        Some("Before")
+    );
+    assert_eq!(
+        session_index_title(&index, "after").as_deref(),
+        Some("After")
+    );
+    assert!(session_index_title(&index, "broken").is_none());
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("第 2 行"), "{warnings:?}");
+}
+
+#[test]
 fn delete_state_threads_removes_related_rows() {
     let root = temp_path("delete-state-related");
     fs::create_dir_all(&root).unwrap();

@@ -2,8 +2,10 @@ use super::{
     backup::backup_file_with_reason,
     util::{dedupe_strings, first_non_empty, non_empty},
 };
-use crate::{json_util::raw_string_field, paths::codex_dir};
-use serde_json::Value;
+use crate::{
+    json_util::raw_string_field, paths::codex_dir, session_sync_diagnostics::log_session_sync_event,
+};
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -174,8 +176,34 @@ pub(super) fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> Ses
             return map;
         }
     };
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+    // Read raw lines: `lines()` turns one non-UTF-8 line into an I/O error, which used to end the
+    // loop and silently drop every entry after it. A bad line is now reported and skipped.
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    let mut line_number = 0usize;
+    let mut skipped_lines = Vec::new();
+    let mut read_error = None;
+    loop {
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) => break,
+            Ok(_) => line_number += 1,
+            Err(err) => {
+                read_error = Some(format!(
+                    "读取 session_index.jsonl 第 {} 行失败，已停止读取剩余内容: {err}",
+                    line_number + 1
+                ));
+                break;
+            }
+        }
+        let line = match std::str::from_utf8(&buffer) {
+            Ok(line) => line,
+            Err(err) => {
+                skipped_lines.push(format!("第 {line_number} 行不是有效 UTF-8（{err}）"));
+                continue;
+            }
+        };
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let id = raw_string_field(&value, "id");
@@ -200,6 +228,28 @@ pub(super) fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> Ses
         for variant in session_id_variants(&id) {
             map.insert(variant, entry.clone());
         }
+    }
+    if !skipped_lines.is_empty() || read_error.is_some() {
+        if !skipped_lines.is_empty() {
+            warnings.push(format!(
+                "session_index.jsonl 有 {} 行无法解码，已跳过：{}",
+                skipped_lines.len(),
+                skipped_lines.join("；")
+            ));
+        }
+        if let Some(err) = &read_error {
+            warnings.push(err.clone());
+        }
+        log_session_sync_event(
+            "session_manager_session_index_read_error",
+            json!({
+                "path": path.to_string_lossy().to_string(),
+                "linesRead": line_number,
+                "entries": map.len(),
+                "skippedLines": skipped_lines,
+                "readError": read_error
+            }),
+        );
     }
     map
 }

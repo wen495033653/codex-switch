@@ -98,7 +98,7 @@ pub(super) fn preview_conversation_impl(
             "file_size": page.file_size,
             "limit": normalize_preview_limit(limit)
         },
-        "warnings": [],
+        "warnings": index_warnings,
         "parse_error": null
     }))
 }
