@@ -45,6 +45,13 @@
 - 删除只转调 `sync_remote_control_runtime_for_current_settings` 的别名 `restart_remote_control_runtime_for_current_settings`，唯一调用方（保存代理后的远程控制同步）改为直接调用，行为不变。
 - 验证：`relaunch_retry_waits_once_and_returns_both_failures`（不存在的可执行文件，耗时 300–600ms，两次错误都在）；`process_control::tests` 真实子进程用例和完整 `cargo test`、fmt、Clippy all-targets 通过。没有真实重启 Codex 或 VS Code。
 
+## 重开编辑器：确认时校验进程身份（2026-09-23）
+
+- 切换账号或模式时拍下的编辑器快照会一直等到用户点确认，没有时限。以前确认时直接对快照里的 PID 执行 `taskkill /F /T`；这期间 IDE 若已关闭、PID 被系统复用，结束的就是一个无关进程及其子进程。
+- 现在快照记录每个进程的启动时间，确认时重新扫描，只结束 PID、启动时间、可执行路径都一致的进程；已经不在的条目记 `ide_reopen_snapshot_process_gone`（`skippedPids`、`livePids`），它们的可执行文件照旧重新打开，与以前对已退出进程的处理相同。
+- 待确认快照最多 20 个，超出时按创建时间淘汰最旧的；以前按 HashMap 的任意顺序淘汰，可能恰好删掉刚交给界面的那个。快照状态锁异常时不再返回一个并未保存的快照 id，而是不弹提示并记 `ide_reopen_snapshot_store_error`。
+- 验证（离线）：`only_the_same_live_process_is_confirmed` 用测试进程自身构造三条快照（正确启动时间、启动时间差 1 秒、可执行路径不同），只有第一条被确认；`overflow_drops_the_oldest_snapshots` 覆盖淘汰顺序。没有在真实编辑器上运行。
+
 ## 验证记录
 
 ### 2026-09-23：watcher 候选确认

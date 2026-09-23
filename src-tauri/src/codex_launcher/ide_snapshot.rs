@@ -86,6 +86,7 @@ pub(crate) fn capture_open_ide_snapshot() -> Result<Value, String> {
             Some(json!({
                 "pid": u64::from(pid.as_u32()),
                 "parentPid": process.parent().map(|pid| u64::from(pid.as_u32())).unwrap_or(0),
+                "startTime": process.start_time(),
                 "name": name,
                 "executablePath": executable_path,
                 "commandLine": command_line,

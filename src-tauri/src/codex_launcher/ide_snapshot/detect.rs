@@ -89,6 +89,11 @@ pub(crate) fn process_entry_parent_pid(value: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// Process start time in seconds since the epoch, as sysinfo reports it; 0 when unknown.
+pub(crate) fn process_entry_start_time(value: &Value) -> u64 {
+    value_u64_field(value, "startTime").unwrap_or(0)
+}
+
 fn process_entry_name(value: &Value) -> String {
     let name = raw_string_field(value, "name");
     if name.is_empty() {
@@ -134,6 +139,7 @@ pub(crate) fn normalize_ide_entries(items: Vec<Value>) -> Vec<Value> {
         entries.push(json!({
             "pid": pid,
             "parentPid": process_entry_parent_pid(&item),
+            "startTime": process_entry_start_time(&item),
             "name": name,
             "executablePath": executable_path,
             "commandLine": command_line,
