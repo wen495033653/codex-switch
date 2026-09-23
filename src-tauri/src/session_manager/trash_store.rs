@@ -11,13 +11,13 @@ use super::{
     },
     model::{ConflictStrategy, ManifestSession, SessionSummary},
     rollout::{
-        conversation_title_from_summary, copy_session_with_new_id, new_session_id,
-        parse_session_file_for_list,
+        conversation_title_from_summary, new_session_id, parse_session_file_for_list,
+        rewrite_session_id_content,
     },
     state_db::{
         delete_state_threads_for_sessions, thread_metadata_from_manifest, upsert_state_threads,
     },
-    util::{backup_stamp, sha256_file, unique_sibling_path},
+    util::{backup_stamp, sha256_bytes, sha256_file, unique_sibling_path},
 };
 use crate::session_sync_diagnostics::log_session_sync_event;
 use serde::{Deserialize, Serialize};
@@ -88,7 +88,10 @@ pub(super) fn save_deleted_session_record(
     let result = (|| {
         let session_file = record_dir.join("session.jsonl");
         let temp_file = temporary_sibling_path(&session_file, "delete-copy")?;
-        let sha256 = copy_file_verified(&candidate.source_path, &temp_file, None)?;
+        // Hash of what landed in the backup. The caller compares it with a fresh hash of the
+        // source right before deleting the source, which proves the copy is faithful and that
+        // the source did not change in between.
+        let sha256 = copy_file_hashing_target(&candidate.source_path, &temp_file)?;
         fs::rename(&temp_file, &session_file).map_err(|err| {
             format!(
                 "保存已删除会话备份失败 {} -> {}: {err}",
@@ -131,7 +134,13 @@ pub(super) fn save_deleted_session_record(
         write_deleted_session_record(&record_dir, &record)?;
         let stored_record = read_deleted_session_record(&record_dir)?;
         validate_deleted_record_identity(&record.delete_id, &stored_record)?;
-        verify_deleted_session_backup(&stored_record, &session_file)?;
+        // The backup bytes were hashed a moment ago; only the metadata round trip is new here.
+        if stored_record.sha256 != record.sha256 || stored_record.size_bytes != record.size_bytes {
+            return Err(format!(
+                "已删除会话元数据回读不一致: {}",
+                record_dir.join("metadata.json").display()
+            ));
+        }
         Ok(record)
     })();
     if result.is_err() {
@@ -172,11 +181,9 @@ pub(super) fn discard_uncommitted_deleted_record(record_dir: &Path, errors: &mut
     }
 }
 
-fn copy_file_verified(
-    source: &Path,
-    target: &Path,
-    expected_sha256: Option<&str>,
-) -> Result<String, String> {
+/// Copies `source` to `target`, flushes it and returns the SHA-256 of the bytes in `target`.
+/// Callers compare that hash with a trusted value (the record, or a hash of the source).
+fn copy_file_hashing_target(source: &Path, target: &Path) -> Result<String, String> {
     fs::copy(source, target).map_err(|err| {
         format!(
             "复制会话文件失败 {} -> {}: {err}",
@@ -185,24 +192,21 @@ fn copy_file_verified(
         )
     })?;
     sync_file_contents(target)?;
-    let source_sha = sha256_file(source)?;
-    let target_sha = sha256_file(target)?;
-    if source_sha != target_sha {
-        let _ = fs::remove_file(target);
-        return Err(format!(
-            "会话备份 SHA-256 校验失败 {} -> {}",
-            source.display(),
-            target.display()
-        ));
+    sha256_file(target)
+}
+
+fn discard_unverified_copy(target: &Path, mut message: String) -> String {
+    match fs::remove_file(target) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            message.push_str(&format!(
+                "；清理未完成的恢复副本失败 {}: {err}",
+                target.display()
+            ));
+        }
     }
-    if expected_sha256.is_some_and(|expected| expected != target_sha) {
-        let _ = fs::remove_file(target);
-        return Err(format!(
-            "已删除会话备份 SHA-256 不匹配: {}",
-            source.display()
-        ));
-    }
-    Ok(target_sha)
+    message
 }
 
 fn sync_file_contents(path: &Path) -> Result<(), String> {
@@ -298,7 +302,7 @@ pub(super) fn read_deleted_session_records_from_dir(
                 return Ok(None);
             };
             let session_file = deleted_record_session_path(&entry.path(), &record)?;
-            verify_deleted_session_backup(&record, &session_file)?;
+            check_deleted_session_backup_size(&record, &session_file)?;
             Ok(Some(record))
         }) {
             Ok(Some(record)) => records.push(record),
@@ -404,7 +408,10 @@ pub(super) fn deleted_record_session_path(
     Ok(record_dir.join(relative))
 }
 
-pub(super) fn verify_deleted_session_backup(
+/// Cheap presence/size check for listing, previewing and planning a restore. The content hash is
+/// verified once, on the copy that a restore is about to put in place
+/// (`prepare_restored_temp_file`), so a damaged backup can never be restored.
+pub(super) fn check_deleted_session_backup_size(
     record: &DeletedSessionRecord,
     session_file: &Path,
 ) -> Result<(), String> {
@@ -416,15 +423,6 @@ pub(super) fn verify_deleted_session_backup(
     })?;
     if metadata.len() != record.size_bytes {
         return Err(format!("已删除会话备份大小不匹配: {}", record.delete_id));
-    }
-    if let Some(expected) = record.sha256.as_deref() {
-        let actual = sha256_file(session_file)?;
-        if actual != expected {
-            return Err(format!(
-                "已删除会话备份 SHA-256 不匹配: {}",
-                record.delete_id
-            ));
-        }
     }
     Ok(())
 }
@@ -440,7 +438,7 @@ pub(super) fn build_restore_deleted_candidate(
     let record = recover_deleted_session_record_state(&record_dir, record)?
         .ok_or_else(|| "删除操作尚未完成，原会话文件仍然存在".to_string())?;
     let source_file = deleted_record_session_path(&record_dir, &record)?;
-    verify_deleted_session_backup(&record, &source_file)?;
+    check_deleted_session_backup_size(&record, &source_file)?;
     let root_path = record.root_path.trim();
     if root_path.is_empty() {
         return Err(format!("已删除会话缺少原 Codex 数据目录: {}", record.title));
@@ -531,7 +529,7 @@ pub(super) fn restore_deleted_candidate(
     candidate: RestoreCandidate,
     conflict_strategy: ConflictStrategy,
 ) -> Result<(usize, bool, Vec<String>), String> {
-    verify_deleted_session_backup(&candidate.record, &candidate.source_file)?;
+    check_deleted_session_backup_size(&candidate.record, &candidate.source_file)?;
     let parent = candidate
         .target_path
         .parent()
@@ -547,8 +545,7 @@ pub(super) fn restore_deleted_candidate(
 
     let temp_path = temporary_sibling_path(&candidate.target_path, "restore")?;
     if let Err(err) = prepare_restored_temp_file(&candidate, &temp_path) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(err);
+        return Err(discard_unverified_copy(&temp_path, err));
     }
     let overwrite_backup = if candidate.target_path.exists() {
         let backup = status_overwrite_backup_path(&candidate.target_path, &candidate.target_id);
@@ -618,12 +615,10 @@ pub(super) fn restore_deleted_candidate(
             .or_else(|| summary.updated_at.clone()),
         status: candidate.record.original_status.clone(),
         relative_path: path_to_slash(&candidate.target_relative),
-        size_bytes: candidate
-            .target_path
-            .metadata()
-            .map(|metadata| metadata.len())
-            .unwrap_or(0),
-        sha256: sha256_file(&candidate.target_path).unwrap_or_default(),
+        // Only id/title/updated_at/status feed thread_metadata_from_manifest; the file's size and
+        // hash have no consumer here (the restored content was verified in the temp file).
+        size_bytes: 0,
+        sha256: String::new(),
     };
     let thread_metadata =
         thread_metadata_from_manifest(&manifest, &candidate.target_path, &summary);
@@ -686,35 +681,65 @@ pub(super) fn restore_deleted_candidate(
     Ok((sqlite_updated, trash_removed, warnings))
 }
 
+/// Writes the restore copy next to the target. This is where the backup's integrity is proven:
+/// the plain copy is hashed after it is written and must equal the recorded SHA-256; for a new
+/// id the backup is read once into memory, that snapshot is checked against the record and the
+/// rewrite is made from it. Legacy records without a hash fall back to comparing with the backup.
 fn prepare_restored_temp_file(
     candidate: &RestoreCandidate,
     temp_path: &Path,
 ) -> Result<(), String> {
+    let mismatch = || {
+        format!(
+            "已删除会话备份 SHA-256 不匹配: {}",
+            candidate.record.delete_id
+        )
+    };
     if let Some((old_id, new_id)) = &candidate.rewrite_id {
-        let source_sha_before = sha256_file(&candidate.source_file)?;
-        copy_session_with_new_id(&candidate.source_file, temp_path, old_id, new_id)?;
-        sync_file_contents(temp_path)?;
-        let source_sha_after = sha256_file(&candidate.source_file)?;
-        if source_sha_before != source_sha_after {
-            let _ = fs::remove_file(temp_path);
-            return Err(format!(
-                "恢复期间已删除会话备份发生变化: {}",
-                candidate.record.delete_id
-            ));
+        let bytes = fs::read(&candidate.source_file).map_err(|err| {
+            format!(
+                "读取已删除会话备份失败 {}: {err}",
+                candidate.source_file.display()
+            )
+        })?;
+        if candidate
+            .record
+            .sha256
+            .as_deref()
+            .is_some_and(|expected| expected != sha256_bytes(&bytes))
+        {
+            return Err(mismatch());
         }
+        let content = String::from_utf8(bytes).map_err(|err| {
+            format!(
+                "读取已删除会话备份失败 {}: {err}",
+                candidate.source_file.display()
+            )
+        })?;
+        let output = rewrite_session_id_content(&content, old_id, new_id)?;
+        fs::write(temp_path, output).map_err(|err| {
+            format!(
+                "写入修改 ID 后的会话失败 {} -> {}: {err}",
+                candidate.source_file.display(),
+                temp_path.display()
+            )
+        })?;
+        sync_file_contents(temp_path)?;
         let summary = parse_session_file_for_list(temp_path)?;
         if summary.id.as_deref() != Some(new_id.as_str()) {
-            let _ = fs::remove_file(temp_path);
             return Err(format!("修改恢复会话 ID 失败: {}", candidate.record.title));
         }
         Ok(())
     } else {
-        copy_file_verified(
-            &candidate.source_file,
-            temp_path,
-            candidate.record.sha256.as_deref(),
-        )
-        .map(|_| ())
+        let copied = copy_file_hashing_target(&candidate.source_file, temp_path)?;
+        let expected = match candidate.record.sha256.as_deref() {
+            Some(expected) => expected.to_string(),
+            None => sha256_file(&candidate.source_file)?,
+        };
+        if copied != expected {
+            return Err(mismatch());
+        }
+        Ok(())
     }
 }
 

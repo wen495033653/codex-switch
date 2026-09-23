@@ -385,7 +385,11 @@ pub(super) fn copy_session_with_new_id(
     })
 }
 
-fn rewrite_session_id_content(content: &str, old_id: &str, new_id: &str) -> Result<String, String> {
+pub(super) fn rewrite_session_id_content(
+    content: &str,
+    old_id: &str,
+    new_id: &str,
+) -> Result<String, String> {
     let mut output = String::with_capacity(content.len());
     for segment in content.split_inclusive('\n') {
         let (line, line_ending) = split_line_ending(segment);

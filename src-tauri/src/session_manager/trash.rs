@@ -11,13 +11,13 @@ use super::{
     rollout::{conversation_title_from_summary, parse_session_file_for_list},
     state_db::delete_state_threads_for_sessions,
     trash_store::{
-        build_restore_deleted_candidate, deleted_record_session_path,
-        deleted_session_record_dir_at, deleted_sessions_dir, discard_uncommitted_deleted_record,
-        mark_deleted_session_ready, read_deleted_session_record,
-        read_deleted_session_records_from_dir, reassign_restore_candidate,
-        recover_deleted_session_record_state, restore_deleted_candidate,
-        save_deleted_session_record, should_rebuild_deleted_title,
-        validate_deleted_record_identity, verify_deleted_session_backup, DeleteCandidate,
+        build_restore_deleted_candidate, check_deleted_session_backup_size,
+        deleted_record_session_path, deleted_session_record_dir_at, deleted_sessions_dir,
+        discard_uncommitted_deleted_record, mark_deleted_session_ready,
+        read_deleted_session_record, read_deleted_session_records_from_dir,
+        reassign_restore_candidate, recover_deleted_session_record_state,
+        restore_deleted_candidate, save_deleted_session_record, should_rebuild_deleted_title,
+        validate_deleted_record_identity, DeleteCandidate,
     },
     util::{dedupe_strings, sha256_file, system_time_to_rfc3339},
 };
@@ -144,9 +144,11 @@ pub(super) fn delete_conversations_locked(
                 continue;
             }
         };
+        // This single comparison proves both that the backup copy is faithful and that the
+        // session did not change since it was copied.
         if source_sha != expected_sha {
             errors.push(format!(
-                "删除前会话内容发生变化，已保留原文件: {}",
+                "删除前复核失败：会话内容与回收站备份不一致（复制期间发生变化或复制不完整），已保留原文件: {}",
                 candidate.relative_path.display()
             ));
             discard_uncommitted_deleted_record(&record_dir, &mut errors);
@@ -485,7 +487,7 @@ pub(super) fn preview_deleted_conversation_from_dir(
     if !session_file.exists() {
         return Err(format!("已删除会话备份文件缺失: {}", record.title));
     }
-    verify_deleted_session_backup(&record, &session_file)?;
+    check_deleted_session_backup_size(&record, &session_file)?;
     let summary = parse_session_file_for_list(&session_file).unwrap_or_default();
     let size_bytes = session_file
         .metadata()

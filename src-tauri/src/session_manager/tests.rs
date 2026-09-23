@@ -2134,3 +2134,92 @@ fn legacy_state_metadata_migration_preserves_current_rows_and_backfills_recency(
     drop(current);
     fs::remove_dir_all(root).unwrap();
 }
+
+fn corrupt_first_byte(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    bytes[0] = if bytes[0] == b'{' { b'[' } else { b'{' };
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn restore_rejects_a_same_size_corrupted_backup() {
+    let base = temp_path("restore-corrupted-backup");
+    let root = base.join("codex");
+    let deleted_root = base.join("deleted-sessions");
+    let relative = PathBuf::from("sessions/2026/07/13/rollout-corrupted.jsonl");
+    let source = write_test_session(
+        &root,
+        &relative,
+        "019f0000-0000-7000-8000-000000000031",
+        "corrupted",
+    );
+    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+    let backup = deleted_root.join(&delete_id).join("session.jsonl");
+    corrupt_first_byte(&backup);
+
+    // Listing only checks presence and size, so the damaged record is still listed ...
+    let listed = list_deleted_sessions_from_dir(&deleted_root).unwrap();
+    // ... but neither a plain restore nor a restore under a new id may put it in place.
+    let plain = restore_deleted_sessions_locked(
+        &deleted_root,
+        vec![delete_id.clone()],
+        ConflictStrategy::Ask,
+    )
+    .unwrap();
+    let plain_target_exists = source.exists();
+    fs::write(&source, b"existing target\n").unwrap();
+    let modified = restore_deleted_sessions_locked(
+        &deleted_root,
+        vec![delete_id.clone()],
+        ConflictStrategy::ModifyId,
+    )
+    .unwrap();
+    let session_dir_files = count_files(source.parent().unwrap());
+    let trash_kept = backup.exists();
+    fs::remove_dir_all(&base).unwrap();
+
+    assert_eq!(listed["deleted"].as_array().unwrap().len(), 1, "{listed}");
+    for result in [&plain, &modified] {
+        assert_eq!(result["report"]["restored"], 0, "{result}");
+        assert!(result["report"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("SHA-256 不匹配"));
+    }
+    assert!(!plain_target_exists);
+    assert_eq!(session_dir_files, 1, "no restore copy may be left behind");
+    assert!(trash_kept);
+}
+
+#[test]
+fn restore_legacy_record_without_hash_still_restores() {
+    let base = temp_path("restore-legacy-record");
+    let root = base.join("codex");
+    let deleted_root = base.join("deleted-sessions");
+    let relative = PathBuf::from("sessions/2026/07/13/rollout-legacy.jsonl");
+    let source = write_test_session(
+        &root,
+        &relative,
+        "019f0000-0000-7000-8000-000000000032",
+        "legacy",
+    );
+    let original = fs::read(&source).unwrap();
+    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+    let metadata_path = deleted_root.join(&delete_id).join("metadata.json");
+    let mut metadata: Value =
+        serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    metadata.as_object_mut().unwrap().remove("sha256");
+    fs::write(&metadata_path, metadata.to_string()).unwrap();
+
+    let result = restore_deleted_sessions_locked(
+        &deleted_root,
+        vec![delete_id.clone()],
+        ConflictStrategy::Ask,
+    )
+    .unwrap();
+    let restored = fs::read(&source).unwrap();
+    fs::remove_dir_all(&base).unwrap();
+
+    assert_eq!(result["report"]["restored"], 1, "{result}");
+    assert_eq!(restored, original);
+}
