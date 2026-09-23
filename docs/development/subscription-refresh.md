@@ -50,7 +50,7 @@ User-Agent: codex_cli_rs/...
 ## 当前实现
 
 1. `accounts/usage/client.rs::get_subscription` 请求上述接口（HTTP/1.1 + Codex 身份头），`accounts/usage/state/subscription.rs` 归一化为 `custom.subscription`：`active_until`、`plan_type`、`will_renew`、`is_delinquent`、`fetched_at`。缺 `active_until` 视为无效，不写入。
-2. `quota/subscription.rs::refresh_account_subscription` 从 store 读取当前凭据（而不是由调用方传入，避免用到已轮换的 token），拉取成功且内容变化才写回。失败时保留上一次快照，并把 code、status、message、原始响应写入 stderr（`[subscription]` 前缀，账号只记前 8 位）。
+2. `quota/subscription.rs::refresh_account_subscription` 从 store 读取当前凭据（而不是由调用方传入，避免用到已轮换的 token），拉取成功且内容变化才写回。比较时不算 `fetched_at`：接口不返回这个字段，归一化时每次都填当前时间，2026-09-23 之前的比较因此永远不相等，每次刷新都会写盘并打印“订阅信息已更新”。失败时保留上一次快照，并把 code、status、message、原始响应写入 stderr（`[subscription]` 前缀，账号只记前 8 位）。
 3. 调用点：手动“刷新配额”、“刷新所有配额”与定时刷新、导入账号后的后台同步。都不额外重签 token。
 4. `normalize_usage_info` 保留 `plan_type` 和 `reset_credits`；Codex 会话 `token_count` 事件解析 `rate_limits.plan_type`，该来源没有重置券信息，当前账号从会话同步时沿用上一次 API 返回的值。
 5. 前端 `parseAuthInfo`：到期日优先取 `custom.subscription.active_until`，接口从未成功过才回退 id_token claim；套餐优先取 `usage_info.plan_type`，其次 `subscription.plan_type`，最后 claim。

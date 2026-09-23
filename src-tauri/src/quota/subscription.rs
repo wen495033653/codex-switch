@@ -29,6 +29,19 @@ fn log_subscription_error(profile_id: &str, error: &Value) {
     );
 }
 
+/// `fetched_at` is stamped locally on every read (the endpoint does not send one), so it is
+/// left out of the comparison; otherwise every refresh would count as a change.
+fn same_subscription_snapshot(previous: &Value, next: &Value) -> bool {
+    let without_fetched_at = |value: &Value| {
+        let mut value = value.clone();
+        if let Some(object) = value.as_object_mut() {
+            object.remove("fetched_at");
+        }
+        value
+    };
+    without_fetched_at(previous) == without_fetched_at(next)
+}
+
 /// Reads the subscription snapshot for one stored account and persists it. Credentials are
 /// taken from the store rather than from the caller, so a token rotated during the quota
 /// refresh is used here too. A failed read keeps the previous snapshot instead of clearing
@@ -65,7 +78,7 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
             .get("custom")
             .and_then(|custom| custom.get("subscription"))
             .unwrap_or(&Value::Null);
-        if *previous == subscription {
+        if same_subscription_snapshot(previous, &subscription) {
             return Ok(latest.clone());
         }
         changed = true;
@@ -97,6 +110,26 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn snapshot_comparison_ignores_the_local_fetch_time() {
+        let stored = json!({
+            "active_until": "2026-10-10T13:30:31Z",
+            "plan_type": "pro",
+            "will_renew": true,
+            "is_delinquent": false,
+            "fetched_at": "2026-09-14T07:00:00Z"
+        });
+        let mut refetched = stored.clone();
+        refetched["fetched_at"] = json!("2026-09-23T07:00:00Z");
+        let mut renewed = refetched.clone();
+        renewed["active_until"] = json!("2026-11-10T13:30:31Z");
+
+        assert!(same_subscription_snapshot(&stored, &refetched));
+        assert!(!same_subscription_snapshot(&stored, &renewed));
+        assert!(!same_subscription_snapshot(&Value::Null, &refetched));
+    }
     use crate::accounts::{decode_jwt_payload, BACKGROUND_REQUEST_TIMEOUT_MS};
     use std::env;
 
