@@ -107,6 +107,20 @@ fn backup_state_database_for_status(
     backup_state_database_with_reason(connection, "status")
 }
 
+/// Consistent snapshot of a live (possibly WAL-mode) state database. A plain file copy of
+/// `state_5.sqlite` misses pages that still live in `state_5.sqlite-wal`.
+pub(super) fn backup_state_database_file(state_db: &Path, reason: &str) -> Result<PathBuf, String> {
+    let connection = Connection::open_with_flags(
+        state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("打开 Codex state 数据库失败 {}: {err}", state_db.display()))?;
+    connection
+        .busy_timeout(Duration::from_millis(3000))
+        .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
+    backup_state_database_with_reason(&connection, reason)
+}
+
 pub(super) fn backup_state_database_with_reason(
     connection: &Connection,
     reason: &str,

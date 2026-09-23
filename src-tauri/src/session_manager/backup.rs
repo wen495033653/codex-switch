@@ -72,10 +72,6 @@ pub(super) fn sanitize_backup_reason(reason: &str) -> String {
     }
 }
 
-pub(super) fn backup_file(path: &Path) -> Result<PathBuf, String> {
-    backup_file_with_reason(path, "")
-}
-
 pub(super) fn backup_file_with_reason(path: &Path, reason: &str) -> Result<PathBuf, String> {
     let file_name = path
         .file_name()

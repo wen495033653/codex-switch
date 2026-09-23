@@ -1656,6 +1656,152 @@ fn export_bundle_manifest_matches_exported_bytes_and_imports_cleanly() {
     }
 }
 
+fn import_candidate(
+    root: &Path,
+    relative: &str,
+    id: &str,
+    action: ImportAction,
+) -> ImportCandidate {
+    let data = format!(
+        "{}\n",
+        json!({
+            "timestamp": "2026-07-13T00:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": id, "cwd": "C:\\work"}
+        })
+    )
+    .into_bytes();
+    ImportCandidate {
+        manifest: ManifestSession {
+            id: id.to_string(),
+            title: format!("title-{id}"),
+            updated_at: Some("2026-07-13T00:00:00Z".to_string()),
+            status: "active".to_string(),
+            relative_path: relative.to_string(),
+            size_bytes: data.len() as u64,
+            sha256: sha256_bytes(&data),
+        },
+        target_path: root.join(relative),
+        data,
+        action,
+    }
+}
+
+#[test]
+fn import_apply_never_overwrites_late_files_and_indexes_what_was_written() {
+    let root = temp_path("import-apply");
+    drop(create_current_state_db(&root));
+    let written = import_candidate(
+        &root,
+        "sessions/2026/07/13/rollout-written.jsonl",
+        "import-written",
+        ImportAction::Import,
+    );
+    let late = import_candidate(
+        &root,
+        "sessions/2026/07/13/rollout-late.jsonl",
+        "import-late",
+        ImportAction::Import,
+    );
+    let blocked = import_candidate(
+        &root,
+        "sessions/2026/07/blocked/rollout-blocked.jsonl",
+        "import-blocked",
+        ImportAction::Import,
+    );
+    let same = import_candidate(
+        &root,
+        "sessions/2026/07/13/rollout-same.jsonl",
+        "import-same",
+        ImportAction::SkipSame,
+    );
+    fs::create_dir_all(late.target_path.parent().unwrap()).unwrap();
+    // Appeared after the dialog classified it as new.
+    fs::write(&late.target_path, b"written by someone else\n").unwrap();
+    // A file where the parent directory should be makes the write fail.
+    fs::write(root.join("sessions/2026/07/blocked"), b"not a directory").unwrap();
+    fs::write(&same.target_path, &same.data).unwrap();
+
+    let outcome = apply_import_candidates(
+        &root,
+        &[written.clone(), late.clone(), blocked.clone(), same.clone()],
+    )
+    .unwrap();
+    let late_bytes = fs::read(&late.target_path).unwrap();
+    let written_bytes = fs::read(&written.target_path).unwrap();
+    let backup_exists = outcome
+        .state_backup_path
+        .as_ref()
+        .is_some_and(|path| path.exists());
+    let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
+    let mut ids = connection
+        .prepare("SELECT id FROM threads ORDER BY id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    ids.sort();
+    drop(connection);
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(outcome.imported, 1);
+    assert_eq!(outcome.skipped, 1);
+    assert_eq!(outcome.conflicts.len(), 1);
+    assert_eq!(
+        outcome.conflicts[0]["relative_path"],
+        late.manifest.relative_path
+    );
+    assert_eq!(outcome.errors.len(), 1, "{:?}", outcome.errors);
+    assert!(outcome.errors[0].contains("rollout-blocked.jsonl"));
+    assert_eq!(outcome.sqlite_error, None);
+    assert_eq!(outcome.sqlite_updated, 2);
+    assert_eq!(ids, vec!["import-same", "import-written"]);
+    assert_eq!(late_bytes, b"written by someone else\n");
+    assert_eq!(written_bytes, written.data);
+    assert!(backup_exists);
+}
+
+#[test]
+fn state_db_backup_includes_uncheckpointed_wal_pages() {
+    let root = temp_path("state-db-wal-backup");
+    fs::create_dir_all(&root).unwrap();
+    let state_db = root.join("state_5.sqlite");
+    let writer = Connection::open(&state_db).unwrap();
+    let mode: String = writer
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .unwrap();
+    writer
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY);
+             INSERT INTO threads (id) VALUES ('a'), ('b'), ('c');",
+        )
+        .unwrap();
+    // Premise: while the writer is open the rows live in state_5.sqlite-wal, so a plain copy of
+    // the main file does not contain them.
+    let plain_copy = root.join("plain-copy.sqlite");
+    fs::copy(&state_db, &plain_copy).unwrap();
+    let plain_rows = Connection::open(&plain_copy)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM threads", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .ok();
+
+    let backup = backup_state_database_file(&state_db, "wal-test").unwrap();
+    let backup_rows: i64 = Connection::open(&backup)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
+        .unwrap();
+    drop(writer);
+    fs::remove_file(&backup).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(mode.to_ascii_lowercase(), "wal");
+    assert_ne!(plain_rows, Some(3));
+    assert_eq!(backup_rows, 3);
+}
+
 #[test]
 fn delete_state_threads_removes_related_rows() {
     let root = temp_path("delete-state-related");
