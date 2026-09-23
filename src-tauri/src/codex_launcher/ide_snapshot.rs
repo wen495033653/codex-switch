@@ -141,6 +141,8 @@ fn restart_open_ides_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<Val
     );
     let session_sync_provider = pending.session_sync_provider.clone();
     let mut session_sync_warning = None;
+    // The snapshot usually includes Codex, which the watcher may be ending and relaunching too.
+    let _relaunch_guard = super::codex_app_open::lock_codex_relaunch();
     let result = restart_from_ide_snapshot(&pending.snapshot, || {
         if let Some(target_provider) = session_sync_provider.as_deref() {
             if let Err(err) =

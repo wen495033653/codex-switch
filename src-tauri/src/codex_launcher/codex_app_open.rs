@@ -25,9 +25,38 @@ use crate::{
     settings::{read_settings_value, remote_control_enabled_from_settings},
 };
 use serde_json::{json, Value};
-use std::{path::Path, thread, time::Duration as StdDuration};
+use std::{
+    path::Path,
+    sync::{Mutex, MutexGuard, TryLockError},
+    thread,
+    time::Duration as StdDuration,
+};
 
 const RELAUNCH_DELAY_MS: u64 = 1_500;
+
+/// Held for a whole "end Codex → sync → reopen" run. The watcher's automatic handling, the
+/// "restart Codex" button and reopening editors after an account switch each end and relaunch
+/// Codex; two of them at once would end each other's freshly launched process or open Codex
+/// twice. The lock guards no data, so a poisoned lock is simply taken over.
+static CODEX_RELAUNCH_LOCK: Mutex<()> = Mutex::new(());
+
+/// Waits for any running end-and-relaunch to finish. User actions call this and then read the
+/// current processes, so they act on what the previous run left behind.
+pub(crate) fn lock_codex_relaunch() -> MutexGuard<'static, ()> {
+    CODEX_RELAUNCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// For the watcher: `None` while a user-triggered run is in progress. That run relaunches Codex
+/// itself, and the watcher sees the new processes on a later scan.
+fn try_lock_codex_relaunch() -> Option<MutexGuard<'static, ()>> {
+    match CODEX_RELAUNCH_LOCK.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CodexRelaunchMode {
@@ -70,6 +99,16 @@ impl CodexAppOpenActions {
 pub(crate) fn handle_codex_app_open(
     processes: &[CodexProcess],
 ) -> Result<CodexAppOpenOutcome, String> {
+    let Some(_relaunch_guard) = try_lock_codex_relaunch() else {
+        log_session_sync_event(
+            "codex_app_open_handler_skip",
+            json!({
+                "reason": "relaunch_in_progress",
+                "processes": codex_processes_log_value(processes)
+            }),
+        );
+        return Ok(CodexAppOpenOutcome::default());
+    };
     trigger_legacy_codex_data_migration();
     let actions = codex_app_open_actions()?;
     log_session_sync_event(
@@ -385,6 +424,7 @@ fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
 
 pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     let command = "restart_current_codex_app_normal";
+    let _relaunch_guard = lock_codex_relaunch();
     let processes = super::codex_app_watcher::refresh_current_codex_app_processes()?;
     log_session_sync_event(
         "codex_app_restart_command_start",
@@ -846,6 +886,27 @@ fn relaunch_codex_executable(executable: &str, mode: CodexRelaunchMode) -> Resul
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn watcher_skips_while_a_user_relaunch_runs_and_user_actions_wait() {
+        let guard = lock_codex_relaunch();
+        let watcher_attempt = thread::spawn(|| try_lock_codex_relaunch().is_some());
+        assert!(!watcher_attempt.join().unwrap());
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiting_user_action = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let _guard = lock_codex_relaunch();
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(StdDuration::from_millis(100)).is_err());
+        drop(guard);
+        done_rx.recv_timeout(StdDuration::from_secs(5)).unwrap();
+        waiting_user_action.join().unwrap();
+        assert!(try_lock_codex_relaunch().is_some());
+    }
 
     fn close_failure_log(pid: u64) -> Value {
         crate::session_sync_diagnostics::get_dev_log_entries()

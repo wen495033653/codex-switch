@@ -45,6 +45,12 @@
 - 删除只转调 `sync_remote_control_runtime_for_current_settings` 的别名 `restart_remote_control_runtime_for_current_settings`，唯一调用方（保存代理后的远程控制同步）改为直接调用，行为不变。
 - 验证：`relaunch_retry_waits_once_and_returns_both_failures`（不存在的可执行文件，耗时 300–600ms，两次错误都在）；`process_control::tests` 真实子进程用例和完整 `cargo test`、fmt、Clippy all-targets 通过。没有真实重启 Codex 或 VS Code。
 
+## 结束并重开 Codex 的互斥（2026-09-23）
+
+- watcher 自动处理、界面“重启 Codex”、切换账号后“重新打开编辑器”三条路径都会结束并重开 Codex，以前彼此没有互斥：同时发生时，一方可能结束另一方刚启动的 Codex，或者把 Codex 打开两次。
+- 现在三者共用 `codex_app_open.rs` 的 `CODEX_RELAUNCH_LOCK`，覆盖整个“结束 → 同步 → 重开”过程。两个用户操作会阻塞等待，拿到锁后再读取当前进程，处理的是上一轮留下的状态；watcher 遇到锁被占用时跳过本轮，记 `codex_app_open_handler_skip`（`reason: relaunch_in_progress`），用户操作重开的新进程会在之后的扫描里按原有的“预期打开”规则处理。
+- 验证（离线）：`watcher_skips_while_a_user_relaunch_runs_and_user_actions_wait` 覆盖“watcher 在锁被占用时拿不到锁、用户操作阻塞到锁释放”。没有在真实 Codex 上同时触发两条路径。
+
 ## 重开编辑器：确认时校验进程身份（2026-09-23）
 
 - 切换账号或模式时拍下的编辑器快照会一直等到用户点确认，没有时限。以前确认时直接对快照里的 PID 执行 `taskkill /F /T`；这期间 IDE 若已关闭、PID 被系统复用，结束的就是一个无关进程及其子进程。
