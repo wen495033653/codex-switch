@@ -27,6 +27,7 @@ pub(crate) use remote_control::{
     remote_control_codex_app_running, reset_remote_control_to_api_mode_settings,
     sync_remote_control_runtime_for_current_settings,
 };
+pub(crate) use shell::hide_command_window;
 
 pub(crate) fn start_codex_app_watcher() {
     codex_app_watcher::start_codex_app_open_watcher(codex_app_open::handle_codex_app_open);

@@ -1,4 +1,7 @@
-use crate::{codex_launcher::codex_desktop_cli_source_path, paths::app_data_dir};
+use crate::{
+    codex_launcher::{codex_desktop_cli_source_path, hide_command_window},
+    paths::app_data_dir,
+};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -769,15 +772,6 @@ fn normalized_path(path: &Path) -> String {
     };
     value.trim_end_matches('/').to_string()
 }
-
-#[cfg(windows)]
-fn hide_command_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x08000000);
-}
-
-#[cfg(not(windows))]
-fn hide_command_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
