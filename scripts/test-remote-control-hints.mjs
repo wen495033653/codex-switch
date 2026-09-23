@@ -8,6 +8,7 @@ import { createServer } from 'vite';
 let server;
 let ProxySettingsTab;
 let I18nProvider;
+let EMPTY_REMOTE_CONTROL_STATUS;
 
 before(async () => {
   server = await createServer({
@@ -18,6 +19,7 @@ before(async () => {
   });
   ({ default: ProxySettingsTab } = await server.ssrLoadModule('/src/components/settings/ProxySettingsTab.jsx'));
   ({ I18nProvider } = await server.ssrLoadModule('/src/i18n.jsx'));
+  ({ EMPTY_REMOTE_CONTROL_STATUS } = await server.ssrLoadModule('/src/hooks/useRemoteControlStatus.js'));
 });
 
 after(async () => { await server?.close(); });
@@ -43,6 +45,7 @@ function renderRemote({ subscription = false, enabled = false, selected = 'fixtu
       accounts,
       subscriptionModeActive: subscription,
       codexRemoteControlPendingEnabled: pending,
+      remoteControlStatus: EMPTY_REMOTE_CONTROL_STATUS,
       settingsDraft: { codex_remote_control_enabled: enabled, codex_remote_control_account_id: selected }
     })));
   const section = html.match(/<section class="[^"]*settings-remote-control-section[^"]*">([\s\S]*?)<\/section>/)?.[1];

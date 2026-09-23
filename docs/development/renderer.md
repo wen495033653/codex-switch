@@ -67,3 +67,12 @@
   - 离线：`scripts/test-codex-app-instances.mjs`（只保留运行中的实例；结果不变时比较相等）。
   - 渲染检查（替身后端，页面报成可见，各页面停留 9 秒，React 提交次数用 DevTools hook 计数）：修改前每个页面都请求 3 次，账号、API、设置页各提交 3 次，Codex 页 6 次（另 3 次来自进程卡片自己的轮询）；修改后会话、设置、Codex 页不再请求，账号页请求 3 次、提交 0 次，Codex 页只剩进程卡片的提交。替身返回一个运行中的实例时，对应账号卡片显示“窗口运行中”，从设置页回到账号页时立即请求一次。
   - TODO(verify)：真实应用里没有看过。触发条件：下次在开发版里开一个独立 Codex 窗口时。通过判据：账号页和 API 页上的“窗口运行中”在窗口打开、关闭后 3 秒内更新；停留在会话页时开发日志里没有 `get_codex_app_instance_status` 请求。
+
+## Codex 页的状态轮询（2026-09-23）
+
+- `CodexPage` 是这一页的控制器：进程状态（`get_current_codex_app_processes`，每 3 秒）和远程控制连接状态（`get_codex_remote_control_status`，开启远程控制时每 4 秒）分别在 `hooks/useCodexProcessStatus.js`、`hooks/useRemoteControlStatus.js` 里轮询，结果通过 props 交给 `CodexProcessCard` 和 `ProxySettingsTab`。这两个视图区块不再直接调用后端。
+- 行为不变：轮询间隔、远程控制关闭时清空状态、自动关闭只通知一次、失败时的文案都和原来一样。hook 里保存后端原文，视图显示时再翻译（原来保存时翻译一次、显示时又翻译一次）。
+- 验证：
+  - 离线：`scripts/test-remote-control-hints.mjs` 改为把空状态作为 prop 传入，其余断言不变。
+  - 渲染检查（替身后端）：9 种情形（正常、需要更新、远程控制开启后等待连接 / 已连接 / 字符串错误 / Error 对象 / 英文、需要更新英文、自动关闭弹窗）下，改动前后 Codex 页的 DOM、弹窗文字、请求次数逐字相同。开启远程控制时 8 秒内进程和远程状态各请求 2 次，关闭后远程状态不再请求。
+  - TODO(verify)：真实应用里没有看过。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时打开 Codex 页。通过判据：当前 Codex PID 正常显示并每 3 秒刷新；页面无 `console.error`。

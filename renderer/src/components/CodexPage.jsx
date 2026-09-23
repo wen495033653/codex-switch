@@ -1,6 +1,10 @@
 import ProxySettingsTab, { CodexProcessCard } from './settings/ProxySettingsTab';
+import { useCodexProcessStatus, useRemoteControlStatus } from '../hooks';
 import { useI18n } from '../i18n';
 import ModelInstructionsConfirmModal from './ModelInstructionsConfirmModal';
+
+// Controller of the Codex page: it runs the page's status polls and hands the results to
+// the view sections.
 
 export default function CodexPage({
     accounts,
@@ -32,6 +36,12 @@ export default function CodexPage({
 }) {
     const { t } = useI18n();
     const modelInstructionsEnabled = settingsDraft.codex_model_instructions_enabled !== false;
+    const codexAppProcessStatus = useCodexProcessStatus();
+    const remoteControlStatus = useRemoteControlStatus({
+        enabled: settingsDraft.codex_remote_control_enabled === true,
+        accountId: String(settingsDraft.codex_remote_control_account_id || '').trim(),
+        onAutoDisabled: onCodexRemoteControlAutoDisabled
+    });
 
     return (
         <div className="settings-page codex-page">
@@ -49,6 +59,7 @@ export default function CodexPage({
 
                 <div className="settings-modal settings-page-content-split">
                     <CodexProcessCard
+                        codexAppProcessStatus={codexAppProcessStatus}
                         onOpenCodexDesktopUpdate={onOpenCodexDesktopUpdate}
                         restartingCodexApp={restartingCodexApp}
                         restartCurrentCodexAppNormal={restartCurrentCodexAppNormal}
@@ -86,7 +97,7 @@ export default function CodexPage({
                         savingCodexSessionSync={savingCodexSessionSync}
                         savingProxySettings={savingProxySettings}
                         codexRemoteControlPendingEnabled={codexRemoteControlPendingEnabled}
-                        onCodexRemoteControlAutoDisabled={onCodexRemoteControlAutoDisabled}
+                        remoteControlStatus={remoteControlStatus}
                         setSettingsDraft={setSettingsDraft}
                         setCodexProxyEnvEnabled={setCodexProxyEnvEnabled}
                         setCodexRemoteControlAccountId={setCodexRemoteControlAccountId}

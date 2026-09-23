@@ -1,15 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { getAccountId, getChatgptAccountId, isApiModeAccount } from '../../utils/auth/account';
 import { getAccountName, isAuthSessionInvalid, maskAccountDisplayName, parseAuthInfo } from '../../utils/auth/info';
 import { useI18n } from '../../i18n';
-
-function normalizePids(value) {
-    if (!Array.isArray(value)) return [];
-    return value
-        .map(pid => Number(pid))
-        .filter(pid => Number.isInteger(pid) && pid > 0);
-}
 
 function formatRemoteControlAccountLabel(account, maskAccountName, t) {
     const accountId = getAccountId(account);
@@ -35,66 +26,12 @@ function remoteControlRawMessage(...items) {
 }
 
 export function CodexProcessCard({
+    codexAppProcessStatus,
     onOpenCodexDesktopUpdate,
     restartingCodexApp,
     restartCurrentCodexAppNormal
 }) {
     const { t, translateRuntimeText } = useI18n();
-    const [codexAppProcessStatus, setCodexAppProcessStatus] = useState({
-        loading: true,
-        error: '',
-        pids: [],
-        processCount: 0,
-        supported: true,
-        requiresUpdate: false,
-        compatibilityMessage: ''
-    });
-    useAsyncPolling(async ({ isCurrent }) => {
-        if (!window.api || !window.api.getCurrentCodexAppProcesses) {
-            if (isCurrent()) {
-                setCodexAppProcessStatus({
-                    loading: false,
-                    error: '',
-                    pids: [],
-                    processCount: 0,
-                    supported: false,
-                    requiresUpdate: true,
-                    compatibilityMessage: t('无法检测 ChatGPT Desktop 版本')
-                });
-            }
-            return;
-        }
-
-        try {
-            const result = await window.api.getCurrentCodexAppProcesses();
-            if (isCurrent()) {
-                setCodexAppProcessStatus({
-                    loading: false,
-                    error: result && result.error ? String(result.error) : '',
-                    pids: normalizePids(result && result.pids),
-                    processCount: Number(result && result.processCount) || 0,
-                    supported: result && result.supported !== false,
-                    requiresUpdate: result && result.requiresUpdate === true,
-                    compatibilityMessage: result && result.compatibilityMessage
-                        ? String(result.compatibilityMessage)
-                        : ''
-                });
-            }
-        } catch (err) {
-            if (isCurrent()) {
-                setCodexAppProcessStatus({
-                    loading: false,
-                    error: err && err.message ? translateRuntimeText(err.message) : t('读取失败'),
-                    pids: [],
-                    processCount: 0,
-                    supported: false,
-                    requiresUpdate: false,
-                    compatibilityMessage: ''
-                });
-            }
-        }
-    }, { intervalMs: 3000 });
-
     const codexAppPidText = codexAppProcessStatus.loading
         ? t('检测中')
         : codexAppProcessStatus.requiresUpdate
@@ -118,7 +55,7 @@ export function CodexProcessCard({
         <section className="settings-codex-app-pid-card" aria-label={t('当前 Codex PID')}>
             <span
                 className="settings-codex-app-pid-label"
-                title={codexAppProcessStatus.compatibilityMessage || undefined}
+                title={translateRuntimeText(codexAppProcessStatus.compatibilityMessage) || undefined}
             >
                 {t('当前 Codex PID')}
             </span>
@@ -157,7 +94,7 @@ export default function ProxySettingsTab({
     savingProxySettings,
     subscriptionModeActive,
     codexRemoteControlPendingEnabled,
-    onCodexRemoteControlAutoDisabled,
+    remoteControlStatus,
     setSettingsDraft,
     setCodexProxyEnvEnabled,
     setCodexRemoteControlAccountId,
@@ -190,78 +127,8 @@ export default function ProxySettingsTab({
         ? formatRemoteControlAccountLabel(remoteControlAccount, maskAccountName, t)
         : t('未选择');
     const remoteControlMissingAccount = !remoteControlAccount;
-    const remoteControlStatusPollingEnabled = codexRemoteControlEnabled;
     const saving = savingProxySettings || savingCodexProxyEnv;
     const sessionSyncHelp = t('切换订阅/API 模式后，重新打开 Codex 或 VS Code 前同步会话列表。');
-    const [remoteControlStatus, setRemoteControlStatus] = useState({
-        loading: false,
-        error: '',
-        backendError: null,
-        helperStatus: null,
-        backendEnvironment: null,
-        connectionStatus: null
-    });
-    const remoteControlAutoDisableNotifiedRef = useRef(false);
-    const onRemoteControlAutoDisabledRef = useRef(onCodexRemoteControlAutoDisabled);
-    useEffect(() => {
-        onRemoteControlAutoDisabledRef.current = onCodexRemoteControlAutoDisabled;
-    }, [onCodexRemoteControlAutoDisabled]);
-    useEffect(() => {
-        if (remoteControlStatusPollingEnabled) {
-            remoteControlAutoDisableNotifiedRef.current = false;
-        }
-    }, [remoteControlStatusPollingEnabled, remoteControlAccountId]);
-    useEffect(() => {
-        if (!remoteControlStatusPollingEnabled) {
-            setRemoteControlStatus({
-                loading: false,
-                error: '',
-                backendError: null,
-                helperStatus: null,
-                backendEnvironment: null,
-                connectionStatus: null
-            });
-        }
-    }, [remoteControlStatusPollingEnabled, remoteControlAccountId]);
-    useAsyncPolling(async ({ isCurrent }) => {
-        if (!window.api || !window.api.getCodexRemoteControlStatus) return;
-
-        if (isCurrent()) setRemoteControlStatus(prev => ({ ...prev, loading: true, error: '' }));
-        try {
-            const result = await window.api.getCodexRemoteControlStatus();
-            if (!isCurrent()) return;
-            if (result && result.settings && typeof onRemoteControlAutoDisabledRef.current === 'function') {
-                const autoDisabled = result.autoDisabled === true;
-                if (!autoDisabled || !remoteControlAutoDisableNotifiedRef.current) {
-                    if (autoDisabled) remoteControlAutoDisableNotifiedRef.current = true;
-                    onRemoteControlAutoDisabledRef.current(result);
-                }
-            }
-            setRemoteControlStatus({
-                loading: false,
-                error: '',
-                backendError: result && result.backendError ? result.backendError : null,
-                helperStatus: result && result.helperStatus ? result.helperStatus : null,
-                backendEnvironment: result && result.backendEnvironment ? result.backendEnvironment : null,
-                connectionStatus: result && result.connectionStatus ? result.connectionStatus : null
-            });
-        } catch (err) {
-            if (isCurrent()) {
-                setRemoteControlStatus({
-                    loading: false,
-                    error: err && err.message ? translateRuntimeText(err.message) : t('读取远程控制状态失败'),
-                    backendError: null,
-                    helperStatus: null,
-                    backendEnvironment: null,
-                    connectionStatus: null
-                });
-            }
-        }
-    }, {
-        enabled: remoteControlStatusPollingEnabled,
-        intervalMs: 4000,
-        refreshKey: remoteControlAccountId
-    });
 
     const remoteControlBackendError = remoteControlStatus.backendError;
     const remoteControlHelperStatus = remoteControlStatus.helperStatus;
