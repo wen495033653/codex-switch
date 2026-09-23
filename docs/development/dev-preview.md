@@ -21,6 +21,19 @@
 
 已知限制（WebView2 153）：`--remote-debugging-port` 参数能传进去但端口不会打开；页面对 `127.0.0.1` 的跨源请求被静默拦截。所以让前端与检查服务同源。另外 `tauri build --debug` 下改 `frontendDist` 不会重新内嵌资源，不要走这条路。
 
+### 2026-09-23 记录（全面优化合入后，代码为提交 `0b3c117`）
+
+真实运行，隐藏窗口 + 独立 `USERPROFILE`/`APPDATA`/`LOCALAPPDATA`/`WEBVIEW2_USER_DATA_FOLDER`，identifier 改为 `com.codex.switch.devcheck`。检查脚本先确认 `get_data_dir` 和 Codex 目录都在沙盒内才开始。第二次完整运行 45 个步骤全部通过（第一次有 2 项失败，原因是脚本选的会话只有 3 条消息，没有第二页，应用返回正确）：
+
+- 五个页面都能渲染，无未捕获异常、无 `console.error`，沙盒 `logs/codex-switch-errors.jsonl` 未生成。
+- 12 个只读命令正常；`usage_stats_get` 两次结果相同（沙盒无账号，结果为空）。
+- 设置：单次写入读回一致；3 轮、每轮并发 7 个不同 key 的 `update_settings` 全部生效，`settings.json` 始终是合法 JSON、无残留临时文件（验证 settings 锁与原子写）。删除 `accounts.json` 后并发 5 个 `get_store`，文件完整重建。
+- 会话管理（12 个真实 rollout 的副本）：扫描、预览翻页（两页不重叠）、归档/取消归档、删除进回收站、预览已删除、恢复、再删除后清除，全部 `ok:true`；同一秒内的两个 state DB 备份名自动加了 `-001` 后缀。
+- 代理 `.env` 开关、模型指令 `config.toml` 开关正确；`test_api_base_url` 经真实 HTTP 栈打到本机替身 `/v1`；`refresh_all_quotas` 返回“没有可刷新的账号”且不报错。
+- 运行前后正式环境的 `settings.json`、`accounts.json`、`config.toml`、`.env`、`auth.json` 大小和修改时间不变。
+
+没有覆盖：需要真实凭据的账号、额度与 token 刷新，切换账号或 API 模式，OAuth，远程控制，重启或打开 Codex，重开编辑器，导入导出，在线更新，macOS。会话扫描会启动 Codex 自带的 app-server（复制到沙盒运行），它是否尝试联网没有确认。
+
 ### 2026-09-17 记录（v6.0.0 发版前，代码为提交 `6a7c7e0`）
 
 真实运行，39 项全部通过：
