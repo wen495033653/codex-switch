@@ -57,3 +57,13 @@
   - 离线：`scripts/test-background-errors.mjs`（事件注册失败只记一条、取消监听失败有记录；轮询失败按“首次、变化、恢复”记录）。
   - 渲染检查（替身后端，替身把页面报成可见）：四个用户操作的失败都弹出后端原文；多开状态轮询失败 4 次只记 1 条 `[get_codex_app_instance_status] background request failed (consecutive failures: 1)`；token 统计和自动检查更新失败各记 1 条。
   - TODO(verify)：真实应用里没有触发过这些失败。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时，检查脚本里对 `get_codex_app_instance_status` 返回一次错误。通过判据：开发日志窗口出现带 `consecutive failures` 的记录，恢复后出现 `recovered after`。
+
+## 独立 Codex 运行状态的轮询（2026-09-23）
+
+- 只有账号页和 API 页的卡片显示“窗口运行中”，所以 `get_codex_app_instance_status` 只在这两个页面每 3 秒轮询一次；进入这两个页面时立即查一次，窗口获得焦点时也查一次。
+- 状态只保留 `runningByKey`（卡片读取的唯一字段），去掉了没有任何地方读取的 `instances`、`instancesByKey`、`runningByTargetKey`。每次轮询先比较，运行中的实例没有变化就沿用原对象，不触发 App 重新渲染。
+- 原因：旧代码在所有页面都轮询，并且每次都用新对象更新 App 的状态，整棵组件树每 3 秒重渲一次。
+- 验证：
+  - 离线：`scripts/test-codex-app-instances.mjs`（只保留运行中的实例；结果不变时比较相等）。
+  - 渲染检查（替身后端，页面报成可见，各页面停留 9 秒，React 提交次数用 DevTools hook 计数）：修改前每个页面都请求 3 次，账号、API、设置页各提交 3 次，Codex 页 6 次（另 3 次来自进程卡片自己的轮询）；修改后会话、设置、Codex 页不再请求，账号页请求 3 次、提交 0 次，Codex 页只剩进程卡片的提交。替身返回一个运行中的实例时，对应账号卡片显示“窗口运行中”，从设置页回到账号页时立即请求一次。
+  - TODO(verify)：真实应用里没有看过。触发条件：下次在开发版里开一个独立 Codex 窗口时。通过判据：账号页和 API 页上的“窗口运行中”在窗口打开、关闭后 3 秒内更新；停留在会话页时开发日志里没有 `get_codex_app_instance_status` 请求。

@@ -462,9 +462,10 @@ function MainApp() {
     () => refreshUsageStats({ silent: true }),
     { intervalMs: 30000, refreshOnFocus: true }
   );
+  // Only the account and API cards show whether a standalone Codex is running.
   useAsyncPolling(
     () => refreshCodexAppInstanceStatus({ silent: true }),
-    { intervalMs: 3000, refreshOnFocus: true }
+    { enabled: viewMode === 'accounts' || viewMode === 'api', intervalMs: 3000, refreshOnFocus: true }
   );
 
   useEffect(() => {

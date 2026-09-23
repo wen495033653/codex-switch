@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   getCodexAppInstanceKey,
+  isSameCodexAppInstanceStatus,
   markCodexAppInstanceRunning,
   normalizeCodexAppInstanceStatus
 } from '../utils/codexAppInstances';
@@ -24,15 +25,21 @@ export function useCodexAppInstances({ toast, toastError }) {
   const [openingCodexAppTarget, setOpeningCodexAppTarget] = useState('');
   const [statusErrorLog] = useState(() => createPollingErrorLog('get_codex_app_instance_status'));
 
+  // Returning the previous object when nothing changed keeps a 3 s poll from re-rendering App.
+  const applyInstanceStatus = (res) => {
+    const next = normalizeCodexAppInstanceStatus(res);
+    setCodexAppInstanceStatus(prev => (isSameCodexAppInstanceStatus(prev, next) ? prev : next));
+  };
+
   const refreshCodexAppInstanceStatus = async ({ silent = true } = {}) => {
     if (!window.api || typeof window.api.getCodexAppInstanceStatus !== 'function') {
-      setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(null));
+      applyInstanceStatus(null);
       return null;
     }
     try {
       const res = await window.api.getCodexAppInstanceStatus();
       statusErrorLog.succeeded();
-      setCodexAppInstanceStatus(normalizeCodexAppInstanceStatus(res));
+      applyInstanceStatus(res);
       return res;
     } catch (err) {
       if (silent) statusErrorLog.failed(err);

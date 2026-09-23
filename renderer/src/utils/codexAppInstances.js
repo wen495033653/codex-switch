@@ -46,77 +46,34 @@ export function getCodexAppInstanceKey(kind, id) {
   return `${normalizedKind}-${safeCodexAppPathSegment(targetId)}`;
 }
 
+// The cards only read which instances are running, so that is all the status keeps. Keeping
+// it that small lets every poll compare it and skip updates that change nothing.
 export function normalizeCodexAppInstanceStatus(result) {
   const rawInstances = Array.isArray(result && result.instances)
     ? result.instances
     : [];
-  const instances = rawInstances
-    .map(instance => ({
-      ...instance,
-      instanceKey: String(instance && instance.instanceKey || ''),
-      targetKey: String(instance && instance.targetKey || ''),
-      running: Boolean(instance && instance.running)
-    }))
-    .filter(instance => instance.instanceKey);
   const runningByKey = {};
-  const runningByTargetKey = {};
-  const instancesByKey = {};
-
-  for (const instance of instances) {
-    instancesByKey[instance.instanceKey] = instance;
-    if (!instance.running) continue;
-    runningByKey[instance.instanceKey] = true;
-    if (instance.targetKey) {
-      runningByTargetKey[instance.targetKey] = true;
-    }
+  for (const instance of rawInstances) {
+    const instanceKey = String(instance && instance.instanceKey || '');
+    if (instanceKey && instance.running) runningByKey[instanceKey] = true;
   }
-
-  return {
-    instances,
-    instancesByKey,
-    runningByKey,
-    runningByTargetKey
-  };
+  return { runningByKey };
 }
 
 export function markCodexAppInstanceRunning(status, result) {
   const instanceKey = String(result && result.instanceKey || '');
   if (!instanceKey) return status;
-  const targetKey = result && result.kind && result.targetId
-    ? `${result.kind}:${result.targetId}`
-    : '';
-  const instance = {
-    ...(status.instancesByKey && status.instancesByKey[instanceKey]),
-    instanceKey,
-    targetKey,
-    kind: result.kind || '',
-    targetId: result.targetId || '',
-    channel: result.channel || '',
-    instanceRoot: result.instanceRoot || '',
-    codexHome: result.codexHome || '',
-    userDataDir: result.userDataDir || '',
-    running: true
-  };
-
   return {
     ...status,
-    instances: [
-      ...(status.instances || []).filter(item => item.instanceKey !== instanceKey),
-      instance
-    ],
-    instancesByKey: {
-      ...(status.instancesByKey || {}),
-      [instanceKey]: instance
-    },
     runningByKey: {
-      ...(status.runningByKey || {}),
+      ...status.runningByKey,
       [instanceKey]: true
-    },
-    runningByTargetKey: targetKey
-      ? {
-          ...(status.runningByTargetKey || {}),
-          [targetKey]: true
-        }
-      : (status.runningByTargetKey || {})
+    }
   };
+}
+
+export function isSameCodexAppInstanceStatus(a, b) {
+  const aKeys = Object.keys(a.runningByKey);
+  return aKeys.length === Object.keys(b.runningByKey).length
+    && aKeys.every(key => b.runningByKey[key] === true);
 }
