@@ -537,12 +537,17 @@ fn sync_thread_dynamic_tools(
     Ok(())
 }
 
-pub(super) fn update_state_thread_status(
+/// Applies an archive/unarchive batch to the state DB in one transaction: rows of overwritten
+/// sessions are deleted and every moved row gets its new status and rollout path. A missing DB
+/// means there is nothing to keep consistent (`Ok(None)`); a DB that exists but cannot take the
+/// update is an error, so the caller can undo the file moves.
+pub(super) fn apply_status_moves_to_state_db(
     root: &Path,
     moves: &[StatusMove],
     target_status: &str,
+    overwritten_ids: &[String],
 ) -> Result<Option<PathBuf>, String> {
-    if moves.is_empty() {
+    if moves.is_empty() && overwritten_ids.is_empty() {
         return Ok(None);
     }
     let state_db = codex_state_db_path_for_root(root)?;
@@ -558,12 +563,24 @@ pub(super) fn update_state_thread_status(
         .busy_timeout(Duration::from_millis(3000))
         .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
 
-    if !state_threads_has_columns(
-        &connection,
-        &["id", "archived", "archived_at", "rollout_path"],
-    )? {
-        return Ok(None);
+    let Some(schema) = state_threads_schema(&connection)? else {
+        return Err(format!(
+            "Codex state 数据库缺少 threads 表，无法更新会话状态: {}",
+            state_db.display()
+        ));
+    };
+    let missing_columns = ["id", "archived", "archived_at", "rollout_path"]
+        .into_iter()
+        .filter(|column| !schema.contains_key(*column))
+        .collect::<Vec<_>>();
+    if !missing_columns.is_empty() {
+        return Err(format!(
+            "Codex state 数据库 threads 表缺少列 [{}]，无法更新会话状态: {}",
+            missing_columns.join(", "),
+            state_db.display()
+        ));
     }
+    let reference_tables = thread_reference_tables(&connection)?;
 
     let backup_path = backup_state_database_for_status(&connection, root)?;
     let archived = target_status == "archived";
@@ -572,6 +589,17 @@ pub(super) fn update_state_thread_status(
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 状态更新事务失败: {err}"))?;
+    if moves
+        .iter()
+        .any(|status_move| status_move.target_id != status_move.id)
+    {
+        // A renamed thread id and its child rows cannot change in one statement; with foreign keys
+        // enforced (the bundled SQLite default) the check has to wait until commit.
+        transaction
+            .execute_batch("PRAGMA defer_foreign_keys = ON;")
+            .map_err(|err| format!("配置 Codex state 外键延迟检查失败: {err}"))?;
+    }
+    delete_thread_rows(&transaction, overwritten_ids, reference_tables)?;
     for status_move in moves {
         let rollout_path = status_move.target_path.to_string_lossy().to_string();
         transaction
@@ -585,13 +613,141 @@ pub(super) fn update_state_thread_status(
                     status_move.id
                 ],
             )
-            .map_err(|err| format!("更新 Codex Desktop threads 状态失败: {err}"))?;
+            .map_err(|err| {
+                format!(
+                    "更新 Codex Desktop threads 状态失败 {} -> {}: {err}",
+                    status_move.id, status_move.target_id
+                )
+            })?;
+        if status_move.target_id != status_move.id {
+            rename_thread_references(
+                &transaction,
+                &status_move.id,
+                &status_move.target_id,
+                reference_tables,
+            )?;
+        }
     }
     transaction
         .commit()
         .map_err(|err| format!("保存 Codex Desktop threads 状态失败: {err}"))?;
     let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     Ok(Some(backup_path))
+}
+
+/// Tables whose rows point at a `threads.id`, as far as the current schema has them.
+#[derive(Clone, Copy, Debug)]
+struct ThreadReferenceTables {
+    dynamic_tools: bool,
+    goals: bool,
+    spawn_edges: bool,
+    stage1_outputs: bool,
+    agent_job_items: bool,
+}
+
+fn thread_reference_tables(connection: &Connection) -> Result<ThreadReferenceTables, String> {
+    Ok(ThreadReferenceTables {
+        dynamic_tools: state_table_has_columns(connection, "thread_dynamic_tools", &["thread_id"])?,
+        goals: state_table_has_columns(connection, "thread_goals", &["thread_id"])?,
+        spawn_edges: state_table_has_columns(
+            connection,
+            "thread_spawn_edges",
+            &["parent_thread_id", "child_thread_id"],
+        )?,
+        stage1_outputs: state_table_has_columns(connection, "stage1_outputs", &["thread_id"])?,
+        agent_job_items: state_table_has_columns(
+            connection,
+            "agent_job_items",
+            &["assigned_thread_id"],
+        )?,
+    })
+}
+
+fn delete_thread_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    ids: &[String],
+    tables: ThreadReferenceTables,
+) -> Result<(), String> {
+    for id in ids {
+        if tables.dynamic_tools {
+            transaction
+                .execute(
+                    "DELETE FROM thread_dynamic_tools WHERE thread_id = ?1",
+                    [id],
+                )
+                .map_err(|err| format!("删除 Codex Desktop thread_dynamic_tools 失败: {err}"))?;
+        }
+        if tables.goals {
+            transaction
+                .execute("DELETE FROM thread_goals WHERE thread_id = ?1", [id])
+                .map_err(|err| format!("删除 Codex Desktop thread_goals 失败: {err}"))?;
+        }
+        if tables.spawn_edges {
+            transaction
+                .execute(
+                    "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ?1 OR child_thread_id = ?1",
+                    [id],
+                )
+                .map_err(|err| format!("删除 Codex Desktop thread_spawn_edges 失败: {err}"))?;
+        }
+        if tables.stage1_outputs {
+            transaction
+                .execute("DELETE FROM stage1_outputs WHERE thread_id = ?1", [id])
+                .map_err(|err| format!("删除 Codex Desktop stage1_outputs 失败: {err}"))?;
+        }
+        if tables.agent_job_items {
+            transaction
+                .execute(
+                    "UPDATE agent_job_items SET assigned_thread_id = NULL WHERE assigned_thread_id = ?1",
+                    [id],
+                )
+                .map_err(|err| format!("清理 Codex Desktop agent_job_items 失败: {err}"))?;
+        }
+        transaction
+            .execute("DELETE FROM threads WHERE id = ?1", [id])
+            .map_err(|err| format!("删除 Codex Desktop threads 索引失败: {err}"))?;
+    }
+    Ok(())
+}
+
+/// Child rows follow a thread whose id was reassigned; left behind they would reference an id
+/// that no longer exists.
+fn rename_thread_references(
+    transaction: &rusqlite::Transaction<'_>,
+    old_id: &str,
+    new_id: &str,
+    tables: ThreadReferenceTables,
+) -> Result<(), String> {
+    let mut statements = Vec::new();
+    if tables.dynamic_tools {
+        statements.push("UPDATE thread_dynamic_tools SET thread_id = ?1 WHERE thread_id = ?2");
+    }
+    if tables.goals {
+        statements.push("UPDATE thread_goals SET thread_id = ?1 WHERE thread_id = ?2");
+    }
+    if tables.spawn_edges {
+        statements.push(
+            "UPDATE thread_spawn_edges SET parent_thread_id = ?1 WHERE parent_thread_id = ?2",
+        );
+        statements
+            .push("UPDATE thread_spawn_edges SET child_thread_id = ?1 WHERE child_thread_id = ?2");
+    }
+    if tables.stage1_outputs {
+        statements.push("UPDATE stage1_outputs SET thread_id = ?1 WHERE thread_id = ?2");
+    }
+    if tables.agent_job_items {
+        statements.push(
+            "UPDATE agent_job_items SET assigned_thread_id = ?1 WHERE assigned_thread_id = ?2",
+        );
+    }
+    for statement in statements {
+        transaction
+            .execute(statement, params![new_id, old_id])
+            .map_err(|err| {
+                format!("更新 Codex Desktop thread 关联 id 失败 {old_id} -> {new_id}: {err}")
+            })?;
+    }
+    Ok(())
 }
 
 pub(super) fn delete_state_threads_for_sessions(
@@ -635,64 +791,14 @@ pub(super) fn delete_state_threads_for_sessions(
         return Ok(());
     }
 
-    let has_thread_dynamic_tools =
-        state_table_has_columns(&connection, "thread_dynamic_tools", &["thread_id"])?;
-    let has_thread_goals = state_table_has_columns(&connection, "thread_goals", &["thread_id"])?;
-    let has_thread_spawn_edges = state_table_has_columns(
-        &connection,
-        "thread_spawn_edges",
-        &["parent_thread_id", "child_thread_id"],
-    )?;
-    let has_stage1_outputs =
-        state_table_has_columns(&connection, "stage1_outputs", &["thread_id"])?;
-    let has_agent_job_items =
-        state_table_has_columns(&connection, "agent_job_items", &["assigned_thread_id"])?;
-
+    let reference_tables = thread_reference_tables(&connection)?;
     backup_state_database_for_delete(&connection, root)?;
     let transaction = connection
         .transaction()
         .map_err(|err| format!("开始 Codex state 删除事务失败: {err}"))?;
     let mut ids: Vec<String> = delete_ids.into_iter().collect();
     ids.sort();
-    for id in &ids {
-        if has_thread_dynamic_tools {
-            transaction
-                .execute(
-                    "DELETE FROM thread_dynamic_tools WHERE thread_id = ?1",
-                    [id],
-                )
-                .map_err(|err| format!("删除 Codex Desktop thread_dynamic_tools 失败: {err}"))?;
-        }
-        if has_thread_goals {
-            transaction
-                .execute("DELETE FROM thread_goals WHERE thread_id = ?1", [id])
-                .map_err(|err| format!("删除 Codex Desktop thread_goals 失败: {err}"))?;
-        }
-        if has_thread_spawn_edges {
-            transaction
-                .execute(
-                    "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ?1 OR child_thread_id = ?1",
-                    [id],
-                )
-                .map_err(|err| format!("删除 Codex Desktop thread_spawn_edges 失败: {err}"))?;
-        }
-        if has_stage1_outputs {
-            transaction
-                .execute("DELETE FROM stage1_outputs WHERE thread_id = ?1", [id])
-                .map_err(|err| format!("删除 Codex Desktop stage1_outputs 失败: {err}"))?;
-        }
-        if has_agent_job_items {
-            transaction
-                .execute(
-                    "UPDATE agent_job_items SET assigned_thread_id = NULL WHERE assigned_thread_id = ?1",
-                    [id],
-                )
-                .map_err(|err| format!("清理 Codex Desktop agent_job_items 失败: {err}"))?;
-        }
-        transaction
-            .execute("DELETE FROM threads WHERE id = ?1", [id])
-            .map_err(|err| format!("删除 Codex Desktop threads 索引失败: {err}"))?;
-    }
+    delete_thread_rows(&transaction, &ids, reference_tables)?;
     transaction
         .commit()
         .map_err(|err| format!("保存 Codex Desktop threads 删除结果失败: {err}"))?;

@@ -1226,6 +1226,257 @@ fn upsert_state_threads_skips_unsupported_required_schema() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+fn session_file_name(id: &str) -> String {
+    format!("rollout-2026-05-13T18-54-23-{id}.jsonl")
+}
+
+fn count_files(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .map(|entries| entries.count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn status_db_failure_moves_files_back_and_reports_reason() {
+    let root = temp_path("status-db-failure-rollback");
+    let session_id = "019e20f9-34b7-7a82-a95b-fe461de89801";
+    let active_relative = PathBuf::from("sessions/2026/05/13").join(session_file_name(session_id));
+    let active_path = write_test_session(&root, &active_relative, session_id, "rollback me");
+    let original = fs::read(&active_path).unwrap();
+    // A threads table without archived_at cannot record the new status.
+    Connection::open(root.join("state_5.sqlite"))
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);",
+        )
+        .unwrap();
+
+    let result = set_conversation_status_impl(
+        root.to_string_lossy().to_string(),
+        vec![path_to_slash(&active_relative)],
+        "archived".to_string(),
+        None,
+    )
+    .unwrap();
+    let archived_path = root
+        .join("archived_sessions")
+        .join(session_file_name(session_id));
+    let active_after = fs::read(&active_path).ok();
+    let archived_exists = archived_path.exists();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(result["report"]["changed"], 0);
+    let message = result["message"].as_str().unwrap();
+    assert!(message.contains("archived_at"), "{message}");
+    assert!(message.contains("已撤销 1 个文件移动"), "{message}");
+    assert_eq!(active_after, Some(original));
+    assert!(!archived_exists);
+}
+
+#[test]
+fn status_modify_id_moves_child_rows_with_the_renamed_thread() {
+    let root = temp_path("status-modify-id-children");
+    let session_id = "019e20f9-34b7-7a82-a95b-fe461de89802";
+    let file_name = session_file_name(session_id);
+    let active_relative = PathBuf::from("sessions/2026/05/13").join(&file_name);
+    let active_path = write_test_session(&root, &active_relative, session_id, "modify id");
+    let existing_archived = write_test_session(
+        &root,
+        &PathBuf::from("archived_sessions").join(&file_name),
+        session_id,
+        "already archived",
+    );
+    let existing_archived_bytes = fs::read(&existing_archived).unwrap();
+    let connection = create_current_state_db(&root);
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE thread_dynamic_tools (
+                thread_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                PRIMARY KEY(thread_id, position),
+                FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE
+            );
+            CREATE TABLE thread_spawn_edges (
+                parent_thread_id TEXT NOT NULL,
+                child_thread_id TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, title) VALUES (?1, ?2, 'modify')",
+            params![session_id, active_path.to_string_lossy()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO thread_dynamic_tools (thread_id, position, name) VALUES (?1, 0, 'tool')",
+            [session_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status) VALUES ('parent', ?1, 'closed')",
+            [session_id],
+        )
+        .unwrap();
+    // Premise: renaming only threads.id breaks the foreign key (enforced by the bundled SQLite).
+    let direct_rename = connection
+        .execute(
+            "UPDATE threads SET id = 'renamed-only-parent' WHERE id = ?1",
+            [session_id],
+        )
+        .unwrap_err()
+        .to_string();
+    drop(connection);
+
+    let result = set_conversation_status_impl(
+        root.to_string_lossy().to_string(),
+        vec![path_to_slash(&active_relative)],
+        "archived".to_string(),
+        Some("modify_id".to_string()),
+    )
+    .unwrap();
+    let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
+    let (new_id, archived, rollout_path): (String, i64, String) = connection
+        .query_row(
+            "SELECT id, archived, rollout_path FROM threads",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    let tool_owner: String = connection
+        .query_row("SELECT thread_id FROM thread_dynamic_tools", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let edge_child: String = connection
+        .query_row(
+            "SELECT child_thread_id FROM thread_spawn_edges",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let fk_violations = connection
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .query_map([], |_| Ok(()))
+        .unwrap()
+        .count();
+    drop(connection);
+    let moved_summary = parse_session_file_for_list(Path::new(&rollout_path)).unwrap();
+    let active_exists = active_path.exists();
+    let existing_after = fs::read(&existing_archived).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert!(direct_rename.contains("FOREIGN KEY"), "{direct_rename}");
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["report"]["changed"], 1);
+    assert_ne!(new_id, session_id);
+    assert_eq!(archived, 1);
+    assert_eq!(moved_summary.id.as_deref(), Some(new_id.as_str()));
+    assert_eq!(tool_owner, new_id);
+    assert_eq!(edge_child, new_id);
+    assert_eq!(fk_violations, 0);
+    assert!(!active_exists);
+    assert_eq!(existing_after, existing_archived_bytes);
+}
+
+#[test]
+fn status_overwrite_removes_overwritten_rows_and_surfaces_global_state_failure() {
+    let root = temp_path("status-overwrite-cleanup");
+    let session_id = "019e20f9-34b7-7a82-a95b-fe461de89803";
+    let overwritten_id = "019e20f9-34b7-7a82-a95b-fe461de89804";
+    let file_name = session_file_name(session_id);
+    let active_relative = PathBuf::from("sessions/2026/05/13").join(&file_name);
+    let active_path = write_test_session(&root, &active_relative, session_id, "winner");
+    let active_bytes = fs::read(&active_path).unwrap();
+    let archived_path = write_test_session(
+        &root,
+        &PathBuf::from("archived_sessions").join(&file_name),
+        overwritten_id,
+        "overwritten",
+    );
+    let connection = create_current_state_db(&root);
+    connection
+        .execute_batch(
+            "CREATE TABLE thread_dynamic_tools (
+                thread_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                PRIMARY KEY(thread_id, position),
+                FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE
+            );",
+        )
+        .unwrap();
+    for (id, path) in [(session_id, &active_path), (overwritten_id, &archived_path)] {
+        connection
+            .execute(
+                "INSERT INTO threads (id, rollout_path) VALUES (?1, ?2)",
+                params![id, path.to_string_lossy()],
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO thread_dynamic_tools (thread_id, position, name) VALUES (?1, 0, 'tool')",
+            [overwritten_id],
+        )
+        .unwrap();
+    drop(connection);
+    fs::write(root.join(".codex-global-state.json"), b"not json").unwrap();
+
+    let result = set_conversation_status_impl(
+        root.to_string_lossy().to_string(),
+        vec![path_to_slash(&active_relative)],
+        "archived".to_string(),
+        Some("overwrite".to_string()),
+    )
+    .unwrap();
+    let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
+    let rows = connection
+        .prepare("SELECT id, archived, rollout_path FROM threads")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let tools: i64 = connection
+        .query_row("SELECT COUNT(*) FROM thread_dynamic_tools", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    drop(connection);
+    let archived_bytes = fs::read(&archived_path).unwrap();
+    let archived_files = count_files(archived_path.parent().unwrap());
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(result["report"]["changed"], 1);
+    assert!(result["message"].as_str().unwrap().contains("global state"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, session_id);
+    assert_eq!(rows[0].1, 1);
+    assert_eq!(
+        conversation_path_key(Path::new(&rows[0].2)),
+        conversation_path_key(&archived_path)
+    );
+    assert_eq!(tools, 0);
+    assert_eq!(archived_bytes, active_bytes);
+    assert_eq!(archived_files, 1, "overwrite backup must be removed");
+}
+
 #[test]
 fn delete_state_threads_removes_related_rows() {
     let root = temp_path("delete-state-related");

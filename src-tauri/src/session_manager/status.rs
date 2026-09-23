@@ -11,10 +11,12 @@ use super::{
         conversation_title_from_summary, copy_session_with_new_id, new_session_id,
         parse_session_file_for_list,
     },
-    state_db::{delete_state_threads_for_sessions, update_state_thread_status},
+    state_db::apply_status_moves_to_state_db,
     util::dedupe_strings,
 };
-use crate::codex_sessions::lock_codex_session_io;
+use crate::{
+    codex_sessions::lock_codex_session_io, session_sync_diagnostics::log_session_sync_event,
+};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -165,121 +167,268 @@ pub(super) fn set_conversation_status_impl(
         }));
     }
 
-    let mut completed_moves = Vec::new();
-    let mut overwritten_ids = Vec::new();
+    // Phase 1: reversible file moves. A rewritten copy keeps its source and an overwritten target
+    // keeps its backup until the state DB has committed, so a DB failure can put every file back.
+    let mut applied_moves = Vec::new();
     for status_move in &moves {
-        let target_relative = status_move
-            .target_path
-            .strip_prefix(&root)
-            .map(path_to_slash)
-            .unwrap_or_else(|_| status_move.target_path.to_string_lossy().to_string());
-        if let Some(parent) = status_move.target_path.parent() {
-            if let Err(err) = fs::create_dir_all(parent) {
-                errors.push(format!("创建目标目录失败 {}: {err}", parent.display()));
-                continue;
-            }
+        match apply_status_move_file(&root, status_move, conflict_strategy) {
+            Ok(applied) => applied_moves.push(applied),
+            Err(err) => errors.push(err),
         }
-        let overwrite_backup_path = if status_move.target_path.exists()
-            && conflict_strategy == ConflictStrategy::Overwrite
-        {
-            let backup_path =
-                status_overwrite_backup_path(&status_move.target_path, &status_move.id);
-            if let Err(err) = fs::rename(&status_move.target_path, &backup_path) {
-                errors.push(format!("备份覆盖目标会话失败 {}: {err}", target_relative));
-                continue;
+    }
+
+    let completed_moves = applied_moves
+        .iter()
+        .map(|applied| applied.status_move.clone())
+        .collect::<Vec<_>>();
+    let active_ids: HashSet<&str> = completed_moves
+        .iter()
+        .map(|status_move| status_move.target_id.as_str())
+        .collect();
+    let mut overwritten_ids = applied_moves
+        .iter()
+        .filter(|applied| applied.overwrite_backup.is_some())
+        .filter_map(|applied| applied.status_move.overwritten_id.clone())
+        .filter(|id| !active_ids.contains(id.as_str()))
+        .collect::<Vec<_>>();
+    dedupe_strings(&mut overwritten_ids);
+
+    // Phase 2: one state DB transaction for the whole batch.
+    let state_backup_path = match apply_status_moves_to_state_db(
+        &root,
+        &completed_moves,
+        &target_status,
+        &overwritten_ids,
+    ) {
+        Ok(backup_path) => backup_path,
+        Err(db_error) => {
+            let mut rollback_errors = Vec::new();
+            for applied in applied_moves.iter().rev() {
+                if let Err(err) = rollback_status_move_file(applied) {
+                    rollback_errors.push(err);
+                }
             }
-            Some(backup_path)
-        } else {
-            None
-        };
-        let move_result = if let Some((old_id, new_id)) = &status_move.rewrite_id {
-            copy_session_with_new_id(
-                &status_move.source_path,
-                &status_move.target_path,
-                old_id,
-                new_id,
-            )
-            .and_then(|()| {
-                fs::remove_file(&status_move.source_path).map_err(|err| {
-                    format!(
-                        "删除原会话文件失败 {}: {err}",
-                        status_move.source_path.display()
-                    )
-                })
-            })
-        } else {
-            fs::rename(&status_move.source_path, &status_move.target_path).map_err(|err| {
+            log_session_sync_event(
+                "session_manager_status_state_db_error",
+                json!({
+                    "root": root.to_string_lossy().to_string(),
+                    "targetStatus": target_status,
+                    "conflictStrategy": format!("{conflict_strategy:?}"),
+                    "movedFiles": applied_moves.len(),
+                    "overwrittenIds": overwritten_ids,
+                    "error": db_error,
+                    "rolledBack": applied_moves.len() - rollback_errors.len(),
+                    "rollbackErrors": rollback_errors
+                }),
+            );
+            let message = if rollback_errors.is_empty() {
                 format!(
-                    "移动会话失败 {} -> {}: {err}",
-                    status_move.source_path.display(),
-                    target_relative
+                    "切换会话状态失败：Codex state 数据库更新失败，已撤销 {} 个文件移动：{db_error}",
+                    applied_moves.len()
                 )
-            })
-        };
-        if let Err(err) = move_result {
-            let mut error = err.to_string();
-            if let Some(backup_path) = &overwrite_backup_path {
-                if status_move.target_path.exists() {
-                    if let Err(remove_err) = fs::remove_file(&status_move.target_path) {
-                        error.push_str(&format!(
-                            "；清理未完成目标失败 {}: {remove_err}",
-                            status_move.target_path.display()
-                        ));
-                    }
+            } else {
+                format!(
+                    "切换会话状态失败：Codex state 数据库更新失败，{} 个文件未能撤销移动：{db_error}；{}",
+                    rollback_errors.len(),
+                    rollback_errors.join("；")
+                )
+            };
+            errors.extend(rollback_errors);
+            return Ok(json!({
+                "ok": false,
+                "message": message,
+                "report": {
+                    "changed": 0,
+                    "skipped": skipped,
+                    "state_backup_path": null,
+                    "desktop_error": db_error,
+                    "conflicts": conflicts,
+                    "failed": errors.len(),
+                    "errors": errors
                 }
-                if let Err(restore_err) = fs::rename(backup_path, &status_move.target_path) {
-                    error.push_str(&format!(
-                        "；恢复原目标会话失败 {}: {restore_err}",
-                        status_move.target_path.display()
-                    ));
-                }
-            }
-            errors.push(error);
-            continue;
+            }));
         }
-        if let Some(backup_path) = &overwrite_backup_path {
-            if let Some(id) = &status_move.overwritten_id {
-                overwritten_ids.push(id.clone());
-            }
-            if let Err(err) = fs::remove_file(backup_path) {
-                errors.push(format!("清理覆盖备份失败 {}: {err}", backup_path.display()));
-            }
-        }
-        remove_empty_parent_dirs(&root, status_move.source_path.parent());
-        completed_moves.push(status_move.clone());
-        changed += 1;
-    }
+    };
 
-    if !overwritten_ids.is_empty() {
-        let active_ids: HashSet<&str> = completed_moves
-            .iter()
-            .map(|status_move| status_move.target_id.as_str())
-            .collect();
-        overwritten_ids.retain(|id| !active_ids.contains(id.as_str()));
-        dedupe_strings(&mut overwritten_ids);
-        let _ = delete_state_threads_for_sessions(&root, &overwritten_ids, &[]);
-        let _ = remove_from_global_state(&root, &overwritten_ids, "status-overwrite");
+    // Phase 3: the DB points at the new files; drop what only existed for rollback.
+    let mut cleanup_errors = Vec::new();
+    for applied in &applied_moves {
+        cleanup_errors.extend(finalize_status_move_file(&root, applied));
     }
-
-    let (state_backup_path, desktop_error) =
-        match update_state_thread_status(&root, &completed_moves, &target_status) {
-            Ok(backup_path) => (backup_path, None),
-            Err(err) => (None, Some(err)),
-        };
+    changed += applied_moves.len();
+    if let Err(err) = remove_from_global_state(&root, &overwritten_ids, "status-overwrite") {
+        cleanup_errors.push(format!("清理被覆盖会话的 global state 失败: {err}"));
+    }
+    if !cleanup_errors.is_empty() {
+        log_session_sync_event(
+            "session_manager_status_cleanup_error",
+            json!({
+                "root": root.to_string_lossy().to_string(),
+                "targetStatus": target_status,
+                "changed": changed,
+                "overwrittenIds": overwritten_ids,
+                "errors": cleanup_errors
+            }),
+        );
+        errors.extend(cleanup_errors);
+    }
 
     Ok(json!({
-        "ok": true,
-        "message": format!("已切换 {} 个会话状态", changed),
+        "ok": errors.is_empty(),
+        "message": if errors.is_empty() {
+            format!("已切换 {} 个会话状态", changed)
+        } else {
+            format!("已切换 {} 个会话状态，{} 个失败：{}", changed, errors.len(), errors.join("；"))
+        },
         "report": {
             "changed": changed,
             "skipped": skipped,
             "state_backup_path": state_backup_path.map(|path| path.to_string_lossy().to_string()),
-            "desktop_error": desktop_error,
+            "desktop_error": null,
             "conflicts": conflicts,
             "failed": errors.len(),
             "errors": errors
         }
     }))
+}
+
+struct AppliedStatusMove {
+    status_move: StatusMove,
+    overwrite_backup: Option<PathBuf>,
+}
+
+fn apply_status_move_file(
+    root: &Path,
+    status_move: &StatusMove,
+    conflict_strategy: ConflictStrategy,
+) -> Result<AppliedStatusMove, String> {
+    let target_relative = status_move
+        .target_path
+        .strip_prefix(root)
+        .map(path_to_slash)
+        .unwrap_or_else(|_| status_move.target_path.to_string_lossy().to_string());
+    if let Some(parent) = status_move.target_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("创建目标目录失败 {}: {err}", parent.display()))?;
+    }
+    let overwrite_backup = if status_move.target_path.exists()
+        && conflict_strategy == ConflictStrategy::Overwrite
+    {
+        let backup_path = status_overwrite_backup_path(&status_move.target_path, &status_move.id);
+        fs::rename(&status_move.target_path, &backup_path)
+            .map_err(|err| format!("备份覆盖目标会话失败 {}: {err}", target_relative))?;
+        Some(backup_path)
+    } else {
+        None
+    };
+    if overwrite_backup.is_none() && status_move.target_path.exists() {
+        // Planned as free under the same I/O lock; something else created it since. Never replace it.
+        return Err(format!("目标会话已存在，未移动: {target_relative}"));
+    }
+    let move_result = if let Some((old_id, new_id)) = &status_move.rewrite_id {
+        copy_session_with_new_id(
+            &status_move.source_path,
+            &status_move.target_path,
+            old_id,
+            new_id,
+        )
+    } else {
+        fs::rename(&status_move.source_path, &status_move.target_path).map_err(|err| {
+            format!(
+                "移动会话失败 {} -> {}: {err}",
+                status_move.source_path.display(),
+                target_relative
+            )
+        })
+    };
+    if let Err(mut error) = move_result {
+        // The target never held anything but our partial copy (or it was renamed to the backup).
+        if status_move.rewrite_id.is_some() && status_move.target_path.exists() {
+            if let Err(remove_err) = fs::remove_file(&status_move.target_path) {
+                error.push_str(&format!(
+                    "；清理未完成目标失败 {}: {remove_err}",
+                    status_move.target_path.display()
+                ));
+            }
+        }
+        if let Some(backup_path) = &overwrite_backup {
+            if status_move.target_path.exists() {
+                if let Err(remove_err) = fs::remove_file(&status_move.target_path) {
+                    error.push_str(&format!(
+                        "；清理未完成目标失败 {}: {remove_err}",
+                        status_move.target_path.display()
+                    ));
+                }
+            }
+            if let Err(restore_err) = fs::rename(backup_path, &status_move.target_path) {
+                error.push_str(&format!(
+                    "；恢复原目标会话失败 {}: {restore_err}（备份保留于 {}）",
+                    status_move.target_path.display(),
+                    backup_path.display()
+                ));
+            }
+        }
+        return Err(error);
+    }
+    Ok(AppliedStatusMove {
+        status_move: status_move.clone(),
+        overwrite_backup,
+    })
+}
+
+fn rollback_status_move_file(applied: &AppliedStatusMove) -> Result<(), String> {
+    let status_move = &applied.status_move;
+    if status_move.rewrite_id.is_some() {
+        fs::remove_file(&status_move.target_path).map_err(|err| {
+            format!(
+                "撤销移动失败，无法删除修改 ID 后的副本 {}: {err}",
+                status_move.target_path.display()
+            )
+        })?;
+    } else {
+        if let Some(parent) = status_move.source_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!("撤销移动失败，无法创建原目录 {}: {err}", parent.display())
+            })?;
+        }
+        fs::rename(&status_move.target_path, &status_move.source_path).map_err(|err| {
+            format!(
+                "撤销移动失败 {} -> {}: {err}",
+                status_move.target_path.display(),
+                status_move.source_path.display()
+            )
+        })?;
+    }
+    if let Some(backup_path) = &applied.overwrite_backup {
+        fs::rename(backup_path, &status_move.target_path).map_err(|err| {
+            format!(
+                "撤销移动失败，无法恢复被覆盖的会话 {}: {err}（备份保留于 {}）",
+                status_move.target_path.display(),
+                backup_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn finalize_status_move_file(root: &Path, applied: &AppliedStatusMove) -> Vec<String> {
+    let status_move = &applied.status_move;
+    let mut errors = Vec::new();
+    if status_move.rewrite_id.is_some() {
+        if let Err(err) = fs::remove_file(&status_move.source_path) {
+            errors.push(format!(
+                "删除原会话文件失败 {}: {err}",
+                status_move.source_path.display()
+            ));
+        }
+    }
+    if let Some(backup_path) = &applied.overwrite_backup {
+        if let Err(err) = fs::remove_file(backup_path) {
+            errors.push(format!("清理覆盖备份失败 {}: {err}", backup_path.display()));
+        }
+    }
+    remove_empty_parent_dirs(root, status_move.source_path.parent());
+    errors
 }
 
 fn session_date_parts(summary: &SessionSummary, path: &Path) -> (String, String, String) {
