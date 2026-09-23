@@ -13,6 +13,8 @@
   - 交换成功后立即落盘新 token，再去拉配额；以前要等配额请求返回才写，期间崩溃会丢掉唯一一份新 refresh_token。
 - 自动认证刷新不再因为存储里的 `auth_status == "refreshing"` 跳过账号。以前交换过程中退出应用，这个状态会永久留在 accounts.json 里，该账号再也不会被自动刷新；进程内互斥已经取代了它的作用。
 - 刷新全部的“是否正在运行”检查和置位在同一把锁内完成，手动与定时不会各起一轮。
+- 导入单个 refresh_token 不再改 `codex_active_mode`。这一行原本和 `set_subscription_mode()` 成对出现，95bd67e 去掉了导入时切换 Codex 模式，设置修改却留了下来：API 模式下导入账号会把设置改成订阅模式（交换失败也一样），导致远程控制被挂起、下次启动不再恢复 API 模式。OAuth 添加账号从来不改模式。
+- 批量导入 refresh_token 时，每个失败条目都保留错误原文，按它在导入文件里的序号写入错误日志（`account_import_token_error`，不记录 token），结果消息列出最常见的失败原因。以前网络错误、限流和线程 panic 都被算成“token 失效”，原因全部丢弃。
 
 ## 关键决策和原因
 
@@ -29,7 +31,8 @@
 
 ### 2026-09-23：离线
 
-- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（280 passed、5 ignored）通过。新增测试：
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（281 passed、5 ignored）通过。新增测试：
+  - `accounts::import_export`：失败原因按出现次数分组。
   - `atomic_file`：覆盖已有内容且不留临时文件、创建新文件、替换失败时保留原目标并清理临时文件。
   - `accounts::store::persistence`：8 个线程并发 `mutate_store_at` 后 8 次修改全部保留；内容未变时文件字节不变（未被重写）；闭包返回错误时文件不变。
   - `accounts::store::operations::mutation`：更新基于当前 token 而不是更早读到的副本；更新已删除账号返回错误且不重建；按旧版 account_id 找到账号时保留存储的 profile_id。
