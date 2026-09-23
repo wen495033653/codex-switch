@@ -88,12 +88,15 @@ export function getApiPrecheckFailureMessage(test, fallback = 'API 预检失败'
   return message ? `API 预检失败：${message}` : fallback;
 }
 
+// `testApiBaseUrl` is the backend call, passed in by the page so this module stays free of
+// window.api.
 export async function runApiProfilePrecheck({
   profile,
   profileName,
   model,
   previousTest,
-  onUpdate
+  onUpdate,
+  testApiBaseUrl
 }) {
   const sourceProfile = profile && typeof profile === 'object' ? profile : {};
   const sourceBaseUrl = sourceProfile.base_url || '';
@@ -170,7 +173,7 @@ export async function runApiProfilePrecheck({
   }
 
   try {
-    const res = await window.api.testApiBaseUrl({
+    const res = await testApiBaseUrl({
       baseUrl: normalizedBaseUrl,
       apiKey,
       model: testModel

@@ -76,3 +76,11 @@
   - 离线：`scripts/test-remote-control-hints.mjs` 改为把空状态作为 prop 传入，其余断言不变。
   - 渲染检查（替身后端）：9 种情形（正常、需要更新、远程控制开启后等待连接 / 已连接 / 字符串错误 / Error 对象 / 英文、需要更新英文、自动关闭弹窗）下，改动前后 Codex 页的 DOM、弹窗文字、请求次数逐字相同。开启远程控制时 8 秒内进程和远程状态各请求 2 次，关闭后远程状态不再请求。
   - TODO(verify)：真实应用里没有看过。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时打开 Codex 页。通过判据：当前 Codex PID 正常显示并每 3 秒刷新；页面无 `console.error`。
+
+## API 预检的后端调用（2026-09-23）
+
+- `utils/apiPrecheck.js` 的 `runApiProfilePrecheck` 不再直接用 `window.api`，由参数 `testApiBaseUrl` 传入后端调用；`ApiModePage`（API 页的控制器）传入 `window.api.testApiBaseUrl`。`utils/` 因此不依赖桌面接口，可以直接测试。
+- `components/BrandMark.jsx` 仍直接调用 `listBrandVoiceFiles`：它是导航栏里自成一体的点击彩蛋，只在点击时读一次语音文件列表；移出去要从 App 经 `AppNavbar` 多传一层 props，行为不变，收益小于改动，所以保留。
+- 验证：
+  - 离线：`scripts/test-api-precheck.mjs`（传入的函数收到规范化后的地址和默认模型，`onUpdate` 先报进行中再报完成；后端拒绝、地址无效都以失败结束，地址无效时不发请求）。
+  - 渲染检查（替身后端）：API 页预检一次，改动前后发给后端的参数、进行中和完成后的标签、保存的结果（去掉时间字段）相同，卡片 DOM 只有时间不同。

@@ -160,11 +160,11 @@ export default function ApiModePage({
       const testModel = normalizeApiTestModelInput(rawTestModel);
       const result = await runApiProfilePrecheck({
         profile,
-        profileId,
         profileName,
         model: testModel,
         previousTest: baseUrlTestsRef.current[profileId],
-        onUpdate: test => setApiTestForProfile(profileId, test)
+        onUpdate: test => setApiTestForProfile(profileId, test),
+        testApiBaseUrl: payload => window.api.testApiBaseUrl(payload)
       });
       setApiTestForProfile(profileId, result, true);
     } finally {
