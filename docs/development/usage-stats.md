@@ -1,44 +1,118 @@
-# Token 用量统计：扫描与写库
+# Token 用量统计
 
 ## 当前行为（2026-09-23）
 
-`usage_stats_get` 由前端每 30 秒静默轮询一次（窗口获得焦点时也会触发），在扫描锁内按顺序执行：
+### 数据来源
 
-1. 打开 `usage-stats.sqlite`。补齐 `session_usage` 缺失的列：一次 `PRAGMA table_info` 读出全部列名后逐个比对（原先每列查一次，共 17 次）。
-2. 一次性载入全部扫描状态。
-3. `scan_codex_sessions` 逐个来源读取并解析有变化的 JSONL，为每个变化文件定下结果（indexed、duplicate、ignored、before_start、missing_attribution），只排队，不写库。
-4. 开启一个事务：`write_session_scan_results` 按扫描顺序写入会话行、token 事件和扫描状态；有需要时 `recompute_existing_costs_if_needed` 重新计价；统计未定价数量；`aggregate_usage_cached` 汇总；最后提交。
-5. 任何一步失败，整个事务回滚，命令返回错误，同时在 stderr 打印 `[usage_stats] 刷新 token 统计失败: ...`。本次排队的结果都不落库，下次刷新会重新处理这些文件。
+只使用 Codex 在 rollout 文件里为每次 API 响应写下的 `token_usage_record`。根据 Codex 开源代码（`codex-api/src/sse/responses.rs` 的 `From<ResponseCompletedUsage> for TokenUsage`），它的 `usage` 就是 Responses API `response.completed.usage` 的原样字段：
 
-`session_usage` 的 `today_*`、`days_7_*`、`days_30_*` 共 15 列不再计算、写入或读取。今天、7 天、30 天的数值一直由 `aggregate` 从 `session_token_events` 按事件时间汇总，`aggregate.rs` 里的 `events.today_*` 等读的是子查询别名，不是这些列。这些列仍保留在表里（`DEFAULT 0`），不删除也不迁移，旧版本照样能打开这个库。
+- `input_tokens`：全部输入，已包含缓存命中和缓存写入。
+- `cached_input_tokens`：输入中缓存命中的部分。
+- `cache_write_input_tokens`：输入中写入缓存的部分。Codex 缺少该字段时按 0 处理。
+- `output_tokens`：全部输出，已包含推理。
+- `reasoning_output_tokens`：输出中推理的部分。
+- `total_tokens`：输入 + 输出。
+
+每条记录带有 API 的 `response_id`，以它为主键去重。分叉会话会把父会话的历史（包括父会话的记录）复制进自己的文件，文件被原地改写后也会重新读取，同一个响应因此可能出现多次，按主键只计一次。
+
+记录本身不带模型、provider 和服务档位，这三项取记录之前最近一行 `turn_context`、`thread_settings_applied`（`thread_settings.model`、`model_provider_id`、`service_tier`）或 `session_meta` 里的值。之所以按"之前最近一行"而不是"同一个 turn_id"，是因为上下文压缩请求的记录写在新 turn 的 `turn_context` 之前。2026-09-23 核对本机 50,176 条记录：50,158 条的 turn 就是最近一个 `turn_context`，其余 18 条都是这种压缩请求。
+
+### 读取
+
+`scan` 对每个 rollout 文件（`sessions`、`archived_sessions`，包括多开实例）保存一个读取位置（`rollout_cursors`：偏移、偏移前 64 字节、当时的 provider / 模型 / 档位）：
+
+- 文件大小和修改时间没变，就不打开。
+- 有变化时，从上次的位置接着读，只处理完整的行；最后一行还没写完就留到下次。
+- 偏移前的字节对不上（会话同步改写了 provider 行，或文件被截短），从头重读。已存的记录按 `response_id` 跳过，并记一条 `usage_stats_rollout_reread` 日志。
+- 从没读过、且修改时间不晚于记录起点的文件不打开。这类文件里不可能有需要计入的记录，它们下次被修改时再从头读。
+
+读不了的文件记 `usage_stats_scan_file_error`，下次刷新重试。格式不对的记录行记 `usage_stats_record_line_error`，跳过该行，继续往后读。
+
+### 计入规则
+
+- **起点。** 时间早于或等于 `meta.records_counted_after` 的记录不计入。新建的库以建库时间为起点；从旧版迁移来的库以旧统计最后一次扫描的时间为起点（见下文"旧统计的迁移"）。
+- **归属。** 按每次响应发生的时间和当时的 provider，在 `attribution` 表里找当时选中的账号或 API 配置。会话中途切换账号或模式后，后面的响应算到新的归属下。多开实例的记录固定归到实例标记里的账号。找不到归属的记录照样存下，但不计入任何卡片，只计入提示"N 个 session 缺少 Codex Switch 归属记录"。
+- **计价。** 每条记录单独计价：
+  - **档位。** `service_tier` 为空或 `default` 按标准档；`priority` 或 `fast` 按快速模式（官方已把 Priority processing 改名为 Fast mode，两种写法都接受）。其他档位没有价格，计为未定价。
+  - **长上下文。** 这一次请求的 `input_tokens` 超过 272,000 时，按长上下文价格计。官方页面对短上下文的说明是 "≤272K input tokens"。
+  - **公式。** 未命中缓存的输入 × 输入单价 + 缓存命中 × 缓存单价 + 缓存写入 × 缓存写入单价 + 输出（含推理）× 输出单价。
+  - **没有价格时。** 缺哪一项价格，就记对应的未定价原因：`missing_model_price`、`missing_tier_price`、`missing_cached_input_price`、`missing_cache_write_price`。
+  - **费用在写入时就固定。** 价格表以后再改，已存记录的费用不会回溯重算。
+
+### 存储与汇总
+
+`db::insert_record` 写一条记录时，同时把它累加到 `usage_hourly`（按小时汇总）和 `usage_totals`（全部时间汇总），两张表都按归属、模型、会话和计价标签分组。汇总（`aggregate`）时：
+
+- "全部"读 `usage_totals`。
+- 今天、7 天、30 天精确到秒：窗口内的整小时读 `usage_hourly`，窗口起点到第一个整点之间读逐条记录。"今天"从本地时间零点算起，7 天和 30 天从当前时间往前推。
+- 会话数是窗口内不同 `thread_id` 的数量。`pricing_contexts` 和 `unpriced_reasons` 按记录条数计数。
+- 返回给前端的 JSON 结构与之前相同。前端的计价提示新增了"快速模式"，未定价原因也新增了两种。
+
+每次刷新先读文件（这时不写库），再开一个事务写入新记录、更新读取位置、汇总，最后提交。任何一步失败，整个事务回滚；读取位置仍停在这些记录之前，下次刷新会重新读到它们。
+
+### 旧统计的迁移
+
+旧版按会话统计：`session_usage` 保存会话的累计值，`session_token_events` 保存 `token_count` 的增量。第一次打开旧库时，在一个事务里完成迁移：
+
+1. 记录起点取旧库 `stats_started_at` 和 `session_scan_state.last_scanned_at` 两者中较晚的那个。旧统计在最后一次扫描时覆盖了当时文件里的全部 `token_count`，此后发生的响应由新统计按记录计入。
+2. `session_usage` 的每个会话写成一行 `usage_totals`，"全部"窗口的数值因此与旧版一致。
+3. 起点之前 30 天内的 `session_token_events` 写成记录，只加到 `usage_hourly`、不加到 `usage_totals`，这样升级后今天、7 天、30 天窗口里的旧数据不会突然消失。
+4. 旧版没有保存逐次请求的输入量和档位，这些旧数据统一按当前价格表的标准档、短上下文重新计价。gpt-6-astra 等以前缺价格的会话，现在也有了费用。
+5. 旧表原样保留，不删除，也不再读取。
+
+不能用旧的事件重建历史：2026-09-23 本机旧库 `session_usage` 合计 790 亿 token，事件表只有 367 亿，早期会话没有事件记录。
 
 ## 关键决策和原因
 
-- **先读后写。** 解析文件时不持有写锁。`record_attribution`（切换账号或 API 配置时写入归属）使用自己的连接，rusqlite 默认的 busy_timeout 是 5 秒；如果把解析也放进事务，首次全量扫描会让写锁一直持有到所有文件解析完（下面的基准里约 1 秒以上，历史更多时更久），归属写入可能超时失败。代价是变化文件的解析结果在写入前都留在内存里，首次扫描时就是全部历史的 token 事件。
-- **汇总成功后才提交。** 这是 `AggregateCache` 精确性的要求（见 [module-structure.md](module-structure.md)）。如果先提交再汇总，汇总失败时库已经变了，缓存却还是旧的；下次刷新看不到文件变化，就会复用这个旧结果。旧实现中每个文件自动提交，扫描中途出错时前面文件的写入已经落库，同样存在这个问题。
-- **每次刷新只提交一次。** 旧实现每个变化文件提交 3 次（会话行自动提交、token 事件一个事务、扫描状态自动提交），重新计价时每行一次 UPDATE 自动提交。首次扫描的耗时主要花在这些提交上。
+- **以 `response_id` 为唯一数据来源。** 旧版取每个会话 `token_count` 的累计最大值，会漏掉分叉和子任务会话（它们与父会话共用 session id，被当作重复），计数器清零时也会少算。2026-09-23 抽查：一个分叉会话有 560 次自己的请求、1.3 亿 token，旧版一次都没算。
+- **按请求时间归属、按请求计价。** 旧版按会话开始时间归属，并按模型的上下文窗口大小整会话决定是否长上下文，两者都不准。
+- **按小时汇总加边缘逐条。** 旧版每次有文件变化都要重新解析整个变化文件，并重算 30 天内的全部事件。2026-09-23 实测，Codex 正在写入时每次刷新读 63MB。
+- **先读后写。** 与旧版相同：读文件时不持有写锁，避免 `record_attribution`（切换账号时写入归属，busy_timeout 5 秒）等待超时。
 
 ## 已知边界
 
-- 某个文件排队为 missing_attribution 之后、本次事务写入之前，如果 `record_attribution` 刚好删除了 missing_attribution 扫描状态，本次写入会把这个状态写回去；该文件下次变化时才会重新判断归属。旧实现在“查询归属”和“写入扫描状态”之间也有同样的窗口，只是更短。新会话的文件一般很快就会追加内容，所以影响有限。
+- **起点所在的那一次响应。** 旧版最后一次扫描时，如果某个响应的 `token_usage_record` 已经写下、但它的 `token_count` 还没写，这次响应两边都不会计入；时间精度按整秒，同一秒内的响应也可能出现同样的情况。每个活动会话最多涉及一次响应。
+- **服务档位来自线程设置。** 取的是请求发出时线程设置里的 `service_tier`，不是服务端实际执行的档位（记录里没有这个字段）。
+- **模型取自之前最近的设置行。** 压缩请求用的是它之前的模型设置。如果恰好在这次压缩前切换了模型，而切换只写进了之后的 `turn_context`，这一次会记成旧模型。
 
 ## 验证记录（2026-09-23）
 
-离线检查（`src-tauri/` 下 `cargo test`）：
+离线检查（`src-tauri/` 下 `cargo test`，隔离的 USERPROFILE / HOME / APPDATA）：全部 332 个测试通过，6 个标记为 ignored。`usage_stats::tests` 共 13 个，覆盖：
 
-- `usage_stats::tests::scan_fixture_summary_matches_recorded_baseline`：固定 fixture 覆盖全部扫描结果、两个 owner 中途切换、多开实例、长短上下文计价、无价格模型、计数器回落、重复会话 ID、7 天和 30 天边界。连续四次刷新（首次、追加后、无变化、次日）的汇总结果和最终库内容（不含文件 stamp 和不再写入的窗口列）与 `testdata/scan_baseline.json` 逐项相同。基线由 347da53 的旧实现生成，并已确认在旧实现上通过。“今天”的事件都在当前时间前一小时内，其余事件至少早 25 小时，所以结果在 UTC-11 到 UTC+11 之间与本地时区无关。
-- `failed_scan_write_rolls_back_the_whole_refresh`：用 SQLite trigger 让第二个文件的扫描状态写入失败。旧实现下测试失败（第一个文件的 token 事件已被提交，数量为 2，期望 1）；新实现下什么都没提交，去掉 trigger 后下一次刷新得到正确总数。
-- `opening_an_older_database_adds_the_missing_session_usage_columns`：旧表结构打开时补齐 17 列，第二次打开不再改动。
+- 设置跟随（包括压缩请求、档位切回默认）和未写完的行。
+- 格式错误行跳过。
+- 追加读取与原地改写不重复计数。
+- 分叉副本去重。
+- 起点之前不计入、旧文件不打开。
+- 按时间和 provider 归属，多开实例归属。
+- 窗口边界逐秒精确。
+- 返回结构（会话数、最后使用、按模型、费用）。
+- 失败整体回滚。
+- 旧统计迁移只进行一次。
+- 按档位和上下文计价，以及各种未定价原因。
 
-一次性基准，debug 构建，300 个会话文件 × 200 个 token_count 事件，各跑 2 轮（基准代码没有提交）：
+真实数据检查（测试二进制对真实的 `~/.codex` 和多开实例目录只读，写入只落在复制出来的库）：
 
-| 场景 | 旧实现 | 新实现 |
-| --- | --- | --- |
-| 首次全量扫描 | 10.55 s / 10.70 s | 1.24 s / 1.59 s |
-| 无变化再扫描 | 63 ms / 77 ms | 60 ms / 101 ms |
-| 20 个文件追加后再扫描 | 0.85 s / 1.02 s | 0.33 s / 0.47 s |
-| 打开连接 20 次 | 128 ms / 104 ms | 56 ms / 60 ms |
+- **迁移。** 复制 10:00 的真实 `usage-stats.sqlite` 后运行新统计。记录起点正确取到旧库最后一次扫描的时间 `2026-09-23T10:00:50.1450223Z`。13 个归属的"全部" token 都等于旧 `session_usage` 合计加上起点之后的新记录。今天、7 天、30 天与按库内记录逐条相加的结果一致。
+- **读取。** 用起点为 `2026-09-03T00:00:00Z` 的新库读全部真实文件，得到 50,212 条记录、84.3 亿 token。用 Python 独立解析同一批文件，`response_id`、token 数、模型和档位全部一致，缺失 0、多出 0。
+- **读盘量**（进程 ReadTransferCount，debug 构建）：
 
-无变化时本来就不写库，两边在同一量级，差异属于测量波动。
+  | 场景 | 读取量 | 耗时 |
+  | --- | --- | --- |
+  | 升级后第一次刷新（迁移 + 读起点后改过的文件） | 62.18 MB | 4.4 s |
+  | 之后无变化 | 0.86 MB | 83 ms |
+  | Codex 写入中，30 秒后 | 1.43 MB | 111 ms |
+  | 旧实现，Codex 写入中，每次 | 约 63 MB | 约 0.5 s |
 
-TODO(verify)：尚未在真实数据上运行。触发条件：含本改动的构建第一次真实运行。升级前先截图账号卡片和 API 卡片上的 token 统计，并备份 `usage-stats.sqlite`。查看升级后同一时段（期间没有新的 Codex 会话）的卡片数值，以及 stderr 中 `[usage_stats]` 开头的行。通过判据：各卡片今天、7 天、30 天、全部的 tokens 和费用与升级前一致，且没有 `[usage_stats]` 错误行。不通过时，用备份的库对比 `session_usage`、`session_token_events` 和 `session_scan_state`，从 `scan.rs::write_session_scan_results` 查起。
+  起点设为 09-03 时第一次需要读 3.7 GB（230 s，debug）。只有长期没刷新过统计的库升级时才会接近这个量，而且只读一次。
+
+TODO(verify)：新统计还没有在安装版里运行过。
+- **触发条件。** 含本改动的版本安装后第一次启动，并打开主窗口。
+- **升级前准备。** 截图各账号卡片和 API 卡片"全部"和"30 天"的 token 与费用；备份 `%APPDATA%\codex-switch\usage-stats.sqlite`。
+- **升级后检查。**
+  - `meta.records_counted_after` 等于备份库 `MAX(session_scan_state.last_scanned_at)`。
+  - 各卡片"全部"的 token 等于升级前的值加上升级后新增的用量。费用会变化：旧数据按新价格表重新计价。
+  - 让窗口保持可见、Codex 空闲 5 分钟，用 `Get-CimInstance Win32_Process` 每 30 秒采样 codex-switch 的 ReadTransferCount，确认没有每 30 秒约 63MB 的读取。
+  - `logs/codex-switch-errors.jsonl` 里没有 `usage_stats_` 开头的错误。
+- **通过判据。** 以上 4 项全部满足。
+- **不通过时。** token 对不上，用备份库对比 `usage_totals` 和 `session_usage`，从 `db::migrate_session_statistics` 查起；读盘量没有下降，从 `scan::scan_sources` 的文件跳过条件查起。

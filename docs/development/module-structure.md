@@ -37,12 +37,12 @@ TODO(verify): command 移出主线程后没有在真实界面上运行过。原�
 箭头左边可以使用右边，反过来不行。顶层模块之间没有循环依赖。
 
 - **session_manager**：`session_manager.rs`（命令入口）→ `trash`（删除、恢复、清除）→ `preview`、`transfer`（导入导出）、`status`（归档）、`legacy_migration` → `catalog`（会话列表）、`trash_store` → `state_db` → `rollout`、`zip` → `codex_home`（目录布局与路径规则）→ `backup` → `model`、`util`。
-- **usage_stats**：`usage_stats.rs`（命令、扫描编排）→ `scan`、`aggregate` → `pricing` → `db`、`parse`、`sources` → `model`。
+- **usage_stats**：`usage_stats.rs`（命令、刷新编排）→ `scan`、`aggregate` → `db` → `records`（读 rollout 里的 `token_usage_record`）、`sources`、`pricing` → `model`。
 - **codex_sessions**：`codex_sessions.rs`（I/O 锁、provider 解析、同步入口）→ `state_threads` → `rollouts`、`global_state` → `support`。`.codex-global-state.json` 只通过 `codex_sessions::rewrite_global_state_file` 改写，`session_manager` 也用它（`session_manager` 依赖 `codex_sessions`，反向不行）。
 - **codex_launcher**：`codex_launcher.rs` 是命令层。其下 `codex_app_open` → `codex_app_watcher`、`remote_control`、`cdp`、`process_control` → `shell`；`codex_app_instances` → `desktop_install`、`instance_config`；`remote_control` → `backend_status`；`proxy_env`、`ide_snapshot` 各自独立。`codex_app_watcher` 不依赖 `codex_app_instances`，桌面兼容状态由命令层取好后传入。
 - **quota → accounts**：单向依赖。`accounts::usage` 属于账号领域，`quota` 是建立在它上面的调度层，这个边界不要动。
 
-用量统计的缓存（`aggregate` 里的 `AggregateCache`）是精确缓存，不按时间过期：只有数据库路径相同、本次扫描没有写入、今天的起点没变、且没有事件跨过 7 天或 30 天的分界时，才复用上次的结果。缓存和扫描锁放在同一个 `Mutex` 里，所以读不到扫描中途的状态。改扫描或计价时，任何会改变汇总结果的写入，都必须让 `scan_codex_sessions` 或 `recompute_existing_costs_if_needed` 返回 `true`。一次刷新的全部写入在同一个事务里完成，汇总成功后才提交，失败时整体回滚，详见 [usage-stats.md](usage-stats.md)。
+用量统计以 Codex 写下的每次 API 响应用量（`token_usage_record`，按 `response_id` 去重）为唯一数据来源，写入时同时累加到按小时和全部时间的汇总表，汇总时只读汇总表和窗口边缘的逐条记录，不再有内存缓存。改读取、计价或汇总时，任何写入都必须经过 `db::insert_record`，否则汇总表和逐条记录会对不上。一次刷新的全部写入在同一个事务里完成，汇总成功后才提交，失败时整体回滚，详见 [usage-stats.md](usage-stats.md)。
 
 ## 前端
 

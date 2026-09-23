@@ -1,12 +1,15 @@
 use super::*;
-use super::{db::*, model::*, parse::*, pricing::*, sources::*};
-use rusqlite::{params, Connection};
+use super::{aggregate::usage_window_starts, db::*, model::*, pricing::*, records::*, sources::*};
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::{
     env, fs,
+    io::Write as _,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+const T0: &str = "2026-06-15T00:00:00Z";
 
 fn temp_root(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
@@ -16,794 +19,722 @@ fn temp_root(name: &str) -> PathBuf {
     env::temp_dir().join(format!("codex-switch-usage-stats-{name}-{stamp}"))
 }
 
-fn write_session(codex_home: &Path, day: &str, name: &str, lines: &[String]) -> PathBuf {
+fn write_rollout(codex_home: &Path, name: &str, lines: &[String]) -> PathBuf {
     let dir = codex_home
         .join("sessions")
         .join("2026")
         .join("06")
-        .join(day);
+        .join("15");
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{name}.jsonl"));
-    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+    let path = dir.join(format!("rollout-{name}.jsonl"));
+    fs::write(
+        &path,
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
     path
 }
 
-fn session_meta_line(
-    session_id: &str,
-    provider: &str,
-    timestamp: &str,
-    model: Option<&str>,
-) -> String {
-    let mut payload = json!({
-        "id": session_id,
-        "model_provider": provider,
-        "timestamp": timestamp
-    });
-    if let Some(model) = model {
-        payload["model"] = json!(model);
+fn append_lines(path: &Path, lines: &[String]) {
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    for line in lines {
+        writeln!(file, "{line}").unwrap();
     }
+}
+
+fn session_meta_line(timestamp: &str, thread_id: &str, provider: &str) -> String {
     json!({
         "timestamp": timestamp,
         "type": "session_meta",
-        "payload": payload
+        "payload": { "id": thread_id, "model_provider": provider, "timestamp": timestamp }
     })
     .to_string()
 }
 
-fn turn_context_line(timestamp: &str, model: &str) -> String {
+fn turn_context_line(timestamp: &str, turn_id: &str, model: &str) -> String {
     json!({
         "timestamp": timestamp,
         "type": "turn_context",
-        "payload": {
-            "model": model
-        }
+        "payload": { "turn_id": turn_id, "model": model }
     })
     .to_string()
 }
 
-fn token_count_line(
-    timestamp: &str,
-    input: u64,
-    cached: u64,
-    output: u64,
-    reasoning: u64,
-    total: u64,
-    context_window: u64,
-) -> String {
+fn thread_settings_line(timestamp: &str, model: &str, provider: &str, tier: Value) -> String {
     json!({
         "timestamp": timestamp,
         "type": "event_msg",
         "payload": {
-            "type": "token_count",
-            "info": {
-                "total_token_usage": {
-                    "input_tokens": input,
-                    "cached_input_tokens": cached,
-                    "output_tokens": output,
-                    "reasoning_output_tokens": reasoning,
-                    "total_tokens": total
-                },
-                "model_context_window": context_window
+            "type": "thread_settings_applied",
+            "thread_settings": {
+                "model": model,
+                "model_provider_id": provider,
+                "service_tier": tier
             }
         }
     })
     .to_string()
 }
 
-fn set_stats_started_at(db_path: &Path, value: &str) {
-    let connection = open_usage_connection(db_path, value).unwrap();
-    connection
-        .execute(
-            "UPDATE meta SET value = ?1 WHERE key = ?2",
-            params![value, META_STATS_STARTED_AT],
-        )
-        .unwrap();
+fn record_line(
+    timestamp: &str,
+    response_id: &str,
+    thread_id: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+) -> String {
+    json!({
+        "timestamp": timestamp,
+        "type": "token_usage_record",
+        "payload": {
+            "thread_id": thread_id,
+            "turn_id": "turn",
+            "session_id": thread_id,
+            "response_id": response_id,
+            "usage": {
+                "input_tokens": input,
+                "cached_input_tokens": cached,
+                "cache_write_input_tokens": 0,
+                "output_tokens": output,
+                "reasoning_output_tokens": output / 2,
+                "total_tokens": input + output
+            }
+        }
+    })
+    .to_string()
 }
 
-fn scan_state_last_scanned_at(db_path: &Path, source_path: &Path) -> String {
-    let connection = Connection::open(db_path).unwrap();
-    connection
+fn subscription_session(timestamp: &str, thread_id: &str, model: &str) -> Vec<String> {
+    vec![
+        session_meta_line(timestamp, thread_id, PROVIDER_SUBSCRIPTION),
+        turn_context_line(timestamp, "turn-1", model),
+    ]
+}
+
+fn stats(db_path: &Path, codex_home: &Path, now: &str) -> Value {
+    usage_stats_get_for_scan_sources(db_path, &[main_usage_scan_source(codex_home)], now).unwrap()
+}
+
+fn attribute(db_path: &Path, owner_type: &str, owner_id: &str, provider: &str, at: &str) {
+    record_attribution_at(db_path, owner_type, owner_id, provider, at).unwrap();
+}
+
+fn window<'a>(response: &'a Value, owner_map: &str, owner_id: &str, name: &str) -> &'a Value {
+    response
+        .get(owner_map)
+        .and_then(|map| map.get(owner_id))
+        .and_then(|owner| owner.get(name))
+        .unwrap_or_else(|| panic!("missing {owner_map}.{owner_id}.{name} in {response}"))
+}
+
+fn total_tokens(response: &Value, owner_map: &str, owner_id: &str, name: &str) -> u64 {
+    window(response, owner_map, owner_id, name)["total_tokens"]
+        .as_u64()
+        .unwrap()
+}
+
+fn record_count(db_path: &Path) -> i64 {
+    Connection::open(db_path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM usage_records", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn usage(input: u64, cached: u64, cache_write: u64, output: u64) -> TokenUsage {
+    TokenUsage {
+        input_tokens: input,
+        cached_input_tokens: cached,
+        cache_write_input_tokens: cache_write,
+        output_tokens: output,
+        reasoning_output_tokens: 0,
+        total_tokens: input + output,
+    }
+}
+
+fn assert_cost(cost: &EstimatedCost, expected_usd: f64, label: &str) {
+    assert_eq!(cost.price_label, label);
+    let actual = cost.cost_usd.expect("priced");
+    assert!(
+        (actual - expected_usd).abs() < 1e-9,
+        "expected {expected_usd}, got {actual}"
+    );
+}
+
+#[test]
+fn records_carry_the_settings_in_effect_and_leave_an_unfinished_line() {
+    let root = temp_root("reader");
+    let codex_home = root.join("codex");
+    let path = write_rollout(
+        &codex_home,
+        "reader",
+        &[
+            session_meta_line("2026-06-15T01:00:00Z", "thread-a", "openai"),
+            thread_settings_line(
+                "2026-06-15T01:00:01Z",
+                "gpt-6-astra",
+                "openai",
+                json!("priority"),
+            ),
+            // A compaction request is recorded before its turn's turn_context.
+            record_line(
+                "2026-06-15T01:00:02Z",
+                "resp-compact",
+                "thread-a",
+                300,
+                0,
+                10,
+            ),
+            turn_context_line("2026-06-15T01:00:03Z", "turn-2", "gpt-5.6-sol"),
+            record_line("2026-06-15T01:00:04Z", "resp-1", "thread-a", 100, 40, 20),
+        ],
+    );
+    let unfinished = record_line("2026-06-15T01:00:05Z", "resp-2", "thread-a", 50, 0, 5);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&unfinished.as_bytes()[..30])
+        .unwrap();
+
+    let first = read_new_records(&path, None).unwrap();
+    let summary = first
+        .records
+        .iter()
+        .map(|record| {
+            (
+                record.response_id.as_str(),
+                record.model.as_str(),
+                record.provider.as_str(),
+                record.service_tier.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summary,
+        vec![
+            ("resp-compact", "gpt-6-astra", "openai", "priority"),
+            ("resp-1", "gpt-5.6-sol", "openai", "priority"),
+        ]
+    );
+    assert_eq!(
+        first.records[1].usage,
+        TokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: 40,
+            cache_write_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 10,
+            total_tokens: 120,
+        }
+    );
+    assert!(first.skipped.is_empty());
+    let complete_len = fs::metadata(&path).unwrap().len() - 30;
+    assert_eq!(first.cursor.offset, complete_len);
+
+    // The rest of the line arrives, then the tier goes back to the default (null).
+    append_lines(
+        &path,
+        &[
+            unfinished[30..].to_string(),
+            thread_settings_line("2026-06-15T01:00:06Z", "gpt-5.6-sol", "openai", Value::Null),
+            record_line("2026-06-15T01:00:07Z", "resp-3", "thread-a", 10, 0, 1),
+        ],
+    );
+    let second = read_new_records(&path, Some(&first.cursor)).unwrap();
+    assert!(!second.restarted);
+    let tiers = second
+        .records
+        .iter()
+        .map(|record| (record.response_id.as_str(), record.service_tier.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(tiers, vec![("resp-2", "priority"), ("resp-3", "")]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unreadable_record_line_is_reported_and_reading_continues() {
+    let root = temp_root("bad-line");
+    let codex_home = root.join("codex");
+    let path = write_rollout(
+        &codex_home,
+        "bad",
+        &[
+            session_meta_line("2026-06-15T01:00:00Z", "thread-a", "openai"),
+            json!({ "timestamp": "2026-06-15T01:00:01Z", "type": "token_usage_record", "payload": {} })
+                .to_string(),
+            record_line("2026-06-15T01:00:02Z", "resp-1", "thread-a", 10, 0, 1),
+        ],
+    );
+    let read = read_new_records(&path, None).unwrap();
+    assert_eq!(read.records.len(), 1);
+    assert_eq!(read.skipped.len(), 1);
+    assert!(
+        read.skipped[0].reason.contains("response_id"),
+        "{:?}",
+        read.skipped
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn appended_records_are_read_once_and_a_rewritten_file_is_not_counted_twice() {
+    let root = temp_root("incremental");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let mut lines = subscription_session("2026-06-15T01:00:00Z", "thread-a", "gpt-5.6-sol");
+    lines.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-1",
+        "thread-a",
+        100,
+        0,
+        20,
+    ));
+    let path = write_rollout(&codex_home, "a", &lines);
+
+    let first = stats(&db_path, &codex_home, "2026-06-15T02:00:00Z");
+    assert_eq!(total_tokens(&first, "subscriptions", "sub-a", "all"), 120);
+
+    append_lines(
+        &path,
+        &[record_line(
+            "2026-06-15T01:02:00Z",
+            "resp-2",
+            "thread-a",
+            200,
+            0,
+            40,
+        )],
+    );
+    let second = stats(&db_path, &codex_home, "2026-06-15T02:01:00Z");
+    assert_eq!(total_tokens(&second, "subscriptions", "sub-a", "all"), 360);
+
+    // Rewritten in place (the provider line changes length): read again from the start, and
+    // the records already stored are not added a second time.
+    let rewritten = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"openai\"", "\"openai-renamed\"");
+    fs::write(&path, rewritten).unwrap();
+    append_lines(
+        &path,
+        &[record_line(
+            "2026-06-15T01:03:00Z",
+            "resp-3",
+            "thread-a",
+            1,
+            0,
+            1,
+        )],
+    );
+    let third = stats(&db_path, &codex_home, "2026-06-15T02:02:00Z");
+    assert_eq!(total_tokens(&third, "subscriptions", "sub-a", "all"), 360);
+    assert_eq!(record_count(&db_path), 3);
+    // resp-3 came after the rename, so no attribution matches its provider.
+    assert_eq!(
+        third["warnings"],
+        json!(["1 个 session 缺少 Codex Switch 归属记录，未计入卡片"])
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_response_copied_into_another_rollout_counts_once() {
+    let root = temp_root("dedupe");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let mut parent = subscription_session("2026-06-15T01:00:00Z", "thread-parent", "gpt-5.6-sol");
+    parent.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-shared",
+        "thread-parent",
+        100,
+        0,
+        10,
+    ));
+    write_rollout(&codex_home, "parent", &parent);
+    // A fork carries the parent's history, then its own responses.
+    let mut fork = parent.clone();
+    fork.push(record_line(
+        "2026-06-15T01:05:00Z",
+        "resp-fork",
+        "thread-fork",
+        50,
+        0,
+        5,
+    ));
+    write_rollout(&codex_home, "parent_fork", &fork);
+
+    let response = stats(&db_path, &codex_home, "2026-06-15T02:00:00Z");
+    assert_eq!(
+        total_tokens(&response, "subscriptions", "sub-a", "all"),
+        165
+    );
+    assert_eq!(
+        window(&response, "subscriptions", "sub-a", "all")["session_count"],
+        json!(2)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn nothing_at_or_before_the_start_is_counted_and_untouched_old_files_stay_unopened() {
+    let root = temp_root("counted-after");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let mut lines = subscription_session("2026-06-14T23:00:00Z", "thread-a", "gpt-5.6-sol");
+    lines.push(record_line(
+        "2026-06-14T23:30:00Z",
+        "resp-before",
+        "thread-a",
+        100,
+        0,
+        10,
+    ));
+    lines.push(record_line(T0, "resp-at-start", "thread-a", 100, 0, 10));
+    lines.push(record_line(
+        "2026-06-15T00:00:01Z",
+        "resp-after",
+        "thread-a",
+        7,
+        0,
+        3,
+    ));
+    write_rollout(&codex_home, "active", &lines);
+    let old = write_rollout(
+        &codex_home,
+        "old",
+        &[record_line(
+            "2026-06-14T10:00:00Z",
+            "resp-old",
+            "thread-old",
+            5,
+            0,
+            5,
+        )],
+    );
+    let before_start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_781_000_000);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(before_start)
+        .unwrap();
+
+    let response = stats(&db_path, &codex_home, "2026-06-15T02:00:00Z");
+    assert_eq!(total_tokens(&response, "subscriptions", "sub-a", "all"), 10);
+    let cursors: i64 = Connection::open(&db_path)
+        .unwrap()
         .query_row(
-            "SELECT last_scanned_at FROM session_scan_state WHERE source_path = ?1",
-            [source_path.to_string_lossy().to_string()],
+            "SELECT COUNT(*) FROM rollout_cursors WHERE source_path = ?1",
+            [old.to_string_lossy().to_string()],
             |row| row.get(0),
         )
-        .unwrap()
+        .unwrap();
+    assert_eq!(cursors, 0);
+    fs::remove_dir_all(root).unwrap();
 }
 
-fn token_event_count(db_path: &Path, source_path: &Path) -> u64 {
-    let connection = Connection::open(db_path).unwrap();
-    connection
-        .query_row(
-            "SELECT COUNT(*) FROM session_token_events WHERE source_path = ?1",
-            [source_path.to_string_lossy().to_string()],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|value| u64::try_from(value).unwrap())
-        .unwrap()
+#[test]
+fn each_response_goes_to_the_owner_selected_when_it_ran() {
+    let root = temp_root("attribution");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-b",
+        PROVIDER_SUBSCRIPTION,
+        "2026-06-15T01:30:00Z",
+    );
+    attribute(&db_path, OWNER_TYPE_API_PROFILE, "api-x", PROVIDER_API, T0);
+    // One session spans the account switch; the second switches to API mode midway.
+    let mut switching = subscription_session("2026-06-15T01:00:00Z", "thread-a", "gpt-5.6-sol");
+    switching.push(record_line(
+        "2026-06-15T01:10:00Z",
+        "resp-a",
+        "thread-a",
+        100,
+        0,
+        0,
+    ));
+    switching.push(record_line(
+        "2026-06-15T01:40:00Z",
+        "resp-b",
+        "thread-a",
+        30,
+        0,
+        0,
+    ));
+    write_rollout(&codex_home, "switching", &switching);
+    let mut api = subscription_session("2026-06-15T01:00:00Z", "thread-api", "gpt-5.5");
+    api.push(thread_settings_line(
+        "2026-06-15T01:05:00Z",
+        "gpt-5.5",
+        PROVIDER_API,
+        json!("default"),
+    ));
+    api.push(record_line(
+        "2026-06-15T01:06:00Z",
+        "resp-api",
+        "thread-api",
+        7,
+        0,
+        0,
+    ));
+    write_rollout(&codex_home, "api", &api);
+
+    let response = stats(&db_path, &codex_home, "2026-06-15T02:00:00Z");
+    assert_eq!(
+        total_tokens(&response, "subscriptions", "sub-a", "all"),
+        100
+    );
+    assert_eq!(total_tokens(&response, "subscriptions", "sub-b", "all"), 30);
+    assert_eq!(total_tokens(&response, "api_profiles", "api-x", "all"), 7);
+    assert_eq!(response["warnings"], json!([]));
+    fs::remove_dir_all(root).unwrap();
 }
 
-fn window_total(response: &Value, owner_map: &str, owner_id: &str, window: &str) -> u64 {
-    response
-        .get(owner_map)
-        .and_then(|map| map.get(owner_id))
-        .and_then(|owner| owner.get(window))
-        .and_then(|window| window.get("total_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap()
-}
-
-fn model_window<'a>(
-    response: &'a Value,
-    owner_map: &str,
-    owner_id: &str,
-    window: &str,
-    model: &str,
-) -> &'a Value {
-    response
-        .get(owner_map)
-        .and_then(|map| map.get(owner_id))
-        .and_then(|owner| owner.get(window))
-        .and_then(|window| window.get("by_model"))
-        .and_then(|by_model| by_model.get(model))
-        .unwrap()
-}
-
-fn write_instance_marker(instance_root: &Path, kind: &str, target_id: &str) {
-    fs::create_dir_all(instance_root).unwrap();
+#[test]
+fn managed_instance_records_use_the_instance_owner() {
+    let root = temp_root("instance");
+    let db_path = root.join("usage.sqlite");
+    let instances = root.join("instances");
+    let instance_root = instances.join("account-sub-z");
+    fs::create_dir_all(&instance_root).unwrap();
     fs::write(
         instance_root.join(CODEX_APP_INSTANCE_MARKER_FILE),
-        json!({
-            "managedBy": "codex-switch",
-            "kind": kind,
-            "targetId": target_id,
-            "instanceKey": format!("{kind}-{target_id}"),
-            "channel": target_id
-        })
-        .to_string(),
+        json!({ "managedBy": "codex-switch", "kind": "account", "targetId": "sub-z" }).to_string(),
     )
     .unwrap();
-}
-
-#[test]
-fn parses_total_token_usage_and_context_window() {
-    let line = token_count_line("2026-06-15T01:00:00Z", 100, 25, 50, 20, 150, 258_400);
-    let mut parsed = ParsedSession::default();
-
-    parse_session_line(&line, &mut parsed);
-
-    let usage = parsed.usage.unwrap();
-    assert_eq!(usage.input_tokens, 100);
-    assert_eq!(usage.cached_input_tokens, 25);
-    assert_eq!(usage.output_tokens, 50);
-    assert_eq!(usage.reasoning_output_tokens, 20);
-    assert_eq!(usage.total_tokens, 150);
-    assert_eq!(parsed.model_context_window, Some(258_400));
-}
-
-#[test]
-fn repeated_token_count_keeps_cumulative_max_once() {
-    let root = temp_root("duplicate");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_SUBSCRIPTION,
-        "sub-a",
-        PROVIDER_SUBSCRIPTION,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-duplicate",
-        &[
-            session_meta_line(
-                "session-dup",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:01:00Z", 60, 10, 40, 5, 100, 258_400),
-            token_count_line("2026-06-15T01:02:00Z", 90, 20, 60, 10, 150, 258_400),
-        ],
-    );
-
-    let response =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-
-    assert_eq!(
-        window_total(&response, "subscriptions", "sub-a", "all"),
-        150
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn unchanged_session_uses_persistent_scan_cache_and_append_refreshes_it() {
-    let root = temp_root("scan-cache");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_SUBSCRIPTION,
-        "sub-a",
-        PROVIDER_SUBSCRIPTION,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    let session_path = write_session(
-        &codex_home,
-        "15",
-        "rollout-cache",
-        &[
-            session_meta_line(
-                "session-cache",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-
-    let first = usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-    assert_eq!(window_total(&first, "subscriptions", "sub-a", "all"), 120);
-    assert_eq!(token_event_count(&db_path, &session_path), 1);
-    assert_eq!(
-        scan_state_last_scanned_at(&db_path, &session_path),
-        "2026-06-15T03:00:00Z"
-    );
-
-    let unchanged =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T04:00:00Z").unwrap();
-    assert_eq!(
-        window_total(&unchanged, "subscriptions", "sub-a", "all"),
-        120
-    );
-    assert_eq!(
-        scan_state_last_scanned_at(&db_path, &session_path),
-        "2026-06-15T03:00:00Z"
-    );
-
-    let mut lines = fs::read_to_string(&session_path).unwrap();
-    lines.push_str(&token_count_line(
-        "2026-06-15T04:01:00Z",
-        200,
-        0,
+    let codex_home = instance_root.join("codex-home");
+    let mut lines = subscription_session("2026-06-15T01:00:00Z", "thread-i", "gpt-5.6-sol");
+    lines.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-i",
+        "thread-i",
         40,
-        10,
-        240,
-        258_400,
+        0,
+        2,
     ));
-    lines.push('\n');
-    fs::write(&session_path, lines).unwrap();
+    write_rollout(&codex_home, "instance", &lines);
 
-    let appended =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T05:00:00Z").unwrap();
-    assert_eq!(
-        window_total(&appended, "subscriptions", "sub-a", "all"),
-        240
-    );
-    assert_eq!(token_event_count(&db_path, &session_path), 2);
-    assert_eq!(
-        scan_state_last_scanned_at(&db_path, &session_path),
-        "2026-06-15T05:00:00Z"
-    );
+    // No attribution rows at all: the marker alone decides the owner.
+    open_usage_connection(&db_path, T0).unwrap();
+    let sources = managed_instance_usage_scan_sources(&instances).unwrap();
+    let response =
+        usage_stats_get_for_scan_sources(&db_path, &sources, "2026-06-15T02:00:00Z").unwrap();
+    assert_eq!(total_tokens(&response, "subscriptions", "sub-z", "all"), 42);
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn cached_session_windows_age_from_token_events_without_rescanning_file() {
-    let root = temp_root("cached-windows");
+fn windows_are_exact_to_the_second_around_their_starts() {
+    let root = temp_root("windows");
     let db_path = root.join("usage.sqlite");
     let codex_home = root.join("codex");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_API_PROFILE,
-        "api-a",
-        PROVIDER_API,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    let session_path = write_session(
-        &codex_home,
-        "15",
-        "rollout-window-cache",
-        &[
-            session_meta_line(
-                "session-window-cache",
-                PROVIDER_API,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-
-    let first = usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-    assert_eq!(window_total(&first, "api_profiles", "api-a", "today"), 120);
-
-    let next_day =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-16T03:00:00Z").unwrap();
-    assert_eq!(window_total(&next_day, "api_profiles", "api-a", "today"), 0);
-    assert_eq!(
-        window_total(&next_day, "api_profiles", "api-a", "days_7"),
-        120
-    );
-    assert_eq!(
-        scan_state_last_scanned_at(&db_path, &session_path),
-        "2026-06-15T03:00:00Z"
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-fn cached_stats(
-    db_path: &Path,
-    codex_home: &Path,
-    now: &str,
-    cache: &mut Option<AggregateCache>,
-) -> Value {
-    usage_stats_get_for_scan_sources(
-        db_path,
-        &[sources::main_usage_scan_source(codex_home)],
-        now,
-        cache,
-    )
-    .unwrap()
-}
-
-#[test]
-fn aggregation_cache_answers_an_unchanged_database_and_notices_new_data() {
-    let root = temp_root("aggregate-cache");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_API_PROFILE,
-        "api-a",
-        PROVIDER_API,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    let session_path = write_session(
-        &codex_home,
-        "15",
-        "rollout-aggregate-cache",
-        &[
-            session_meta_line(
-                "session-aggregate-cache",
-                PROVIDER_API,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-    let mut cache = None;
-
-    let first = cached_stats(&db_path, &codex_home, "2026-06-15T03:00:00Z", &mut cache);
-    // An unchanged database half a minute later must be answered from the cache, not by scanning
-    // every token event again. Emptying the table proves the second answer did not read it.
-    Connection::open(&db_path)
-        .unwrap()
-        .execute("DELETE FROM session_token_events", [])
-        .unwrap();
-    let second = cached_stats(&db_path, &codex_home, "2026-06-15T03:00:30Z", &mut cache);
-    assert_eq!(first, second);
-    assert_eq!(window_total(&second, "api_profiles", "api-a", "today"), 120);
-
-    // Appending to the session changes the database, so the cache must not be used.
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(&session_path)
-        .unwrap();
-    use std::io::Write as _;
-    writeln!(
-        file,
-        "{}",
-        token_count_line("2026-06-15T03:01:00Z", 300, 0, 60, 15, 360, 258_400)
-    )
-    .unwrap();
-    drop(file);
-    let third = cached_stats(&db_path, &codex_home, "2026-06-15T03:02:00Z", &mut cache);
-    assert_eq!(window_total(&third, "api_profiles", "api-a", "today"), 360);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn aggregation_cache_recomputes_when_an_event_leaves_a_window() {
-    let root = temp_root("aggregate-cache-windows");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_API_PROFILE,
-        "api-a",
-        PROVIDER_API,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-aggregate-window",
-        &[
-            session_meta_line(
-                "session-aggregate-window",
-                PROVIDER_API,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-    let mut cache = None;
-
-    let inside = cached_stats(&db_path, &codex_home, "2026-06-22T01:00:30Z", &mut cache);
-    assert_eq!(
-        window_total(&inside, "api_profiles", "api-a", "days_7"),
-        120
-    );
-    // Same day, unchanged database, one minute later: the only event is now older than seven days.
-    let outside = cached_stats(&db_path, &codex_home, "2026-06-22T01:01:30Z", &mut cache);
-    assert_eq!(window_total(&outside, "api_profiles", "api-a", "days_7"), 0);
-    assert_eq!(
-        window_total(&outside, "api_profiles", "api-a", "days_30"),
-        120
-    );
-
-    // A new day moves the start of "today", which also invalidates the cache.
-    let next_day = cached_stats(&db_path, &codex_home, "2026-06-23T01:01:30Z", &mut cache);
-    assert_eq!(window_total(&next_day, "api_profiles", "api-a", "today"), 0);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn skips_sessions_before_stats_started_at() {
-    let root = temp_root("started-at");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    set_stats_started_at(&db_path, "2026-06-15T02:00:00Z");
-    record_attribution_at(
+    let start = "2026-05-01T00:00:00Z";
+    attribute(
         &db_path,
         OWNER_TYPE_SUBSCRIPTION,
         "sub-a",
         PROVIDER_SUBSCRIPTION,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-old",
-        &[
-            session_meta_line(
-                "session-old",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:05:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
+        start,
     );
-
-    let response =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-
-    assert!(response
-        .get("subscriptions")
-        .and_then(Value::as_object)
-        .unwrap()
-        .is_empty());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn missing_attribution_is_not_assigned_to_any_card() {
-    let root = temp_root("missing-attribution");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    set_stats_started_at(&db_path, "2026-06-15T00:00:00Z");
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-no-owner",
-        &[
-            session_meta_line(
-                "session-no-owner",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T01:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-15T01:05:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-
-    let response =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-
-    assert!(response
-        .get("subscriptions")
-        .and_then(Value::as_object)
-        .unwrap()
-        .is_empty());
-    assert!(!response
-        .get("warnings")
-        .and_then(Value::as_array)
-        .unwrap()
-        .is_empty());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn managed_instance_sessions_use_marker_attribution() {
-    let root = temp_root("managed-instance");
-    let db_path = root.join("usage.sqlite");
-    let main_codex_home = root.join("codex");
-    let instances_dir = root.join("codex-app-instances");
-    let instance_root = instances_dir.join("api-cpa-plus");
-    let instance_codex_home = instance_root.join("codex-home");
-    set_stats_started_at(&db_path, "2026-06-15T00:00:00Z");
-    write_instance_marker(&instance_root, "api", "cpa-plus");
-    write_session(
-        &instance_codex_home,
-        "15",
-        "rollout-instance",
-        &[
-            session_meta_line(
-                "session-instance",
-                PROVIDER_API,
-                "2026-06-15T01:00:00Z",
-                None,
-            ),
-            turn_context_line("2026-06-15T01:00:30Z", "gpt-5.5"),
-            token_count_line("2026-06-15T01:05:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-
-    let mut sources = vec![main_usage_scan_source(&main_codex_home)];
-    sources.extend(managed_instance_usage_scan_sources(&instances_dir).unwrap());
-    let response =
-        usage_stats_get_for_scan_sources(&db_path, &sources, "2026-06-15T03:00:00Z", &mut None)
+    let now = "2026-06-15T10:37:21Z";
+    let now_seconds = parse_rfc3339_seconds(now).unwrap();
+    let starts = usage_window_starts(now_seconds);
+    // Records one second before, at, and after every window start, plus some in whole hours.
+    let mut seconds = Vec::new();
+    for window_start in [starts.today, starts.days_7, starts.days_30] {
+        seconds.extend([
+            window_start - 1,
+            window_start,
+            window_start + 1,
+            window_start + 7_200,
+        ]);
+    }
+    seconds.push(now_seconds - 5);
+    let mut lines = subscription_session("2026-05-10T00:00:00Z", "thread-a", "gpt-5.6-sol");
+    for (index, second) in seconds.iter().enumerate() {
+        let timestamp = time::OffsetDateTime::from_unix_timestamp(*second)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
             .unwrap();
+        lines.push(record_line(
+            &timestamp,
+            &format!("resp-{index}"),
+            "thread-a",
+            1 << index,
+            0,
+            0,
+        ));
+    }
+    write_rollout(&codex_home, "windows", &lines);
 
+    let response = stats(&db_path, &codex_home, now);
+    let expected = |from: i64| -> u64 {
+        seconds
+            .iter()
+            .enumerate()
+            .filter(|(_, second)| **second >= from)
+            .map(|(index, _)| 1u64 << index)
+            .sum()
+    };
     assert_eq!(
-        window_total(&response, "api_profiles", "cpa-plus", "all"),
-        120
+        total_tokens(&response, "subscriptions", "sub-a", "today"),
+        expected(starts.today)
     );
-    assert!(response
-        .get("warnings")
-        .and_then(Value::as_array)
-        .unwrap()
-        .is_empty());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn today_usage_uses_token_count_delta_timestamp_not_session_start() {
-    let root = temp_root("window-delta");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    set_stats_started_at(&db_path, "2026-06-14T00:00:00Z");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_API_PROFILE,
-        "api-a",
-        PROVIDER_API,
-        "2026-06-14T00:00:00Z",
-    )
-    .unwrap();
-    write_session(
-        &codex_home,
-        "14",
-        "rollout-cross-day",
-        &[
-            session_meta_line(
-                "session-cross-day",
-                PROVIDER_API,
-                "2026-06-14T10:00:00Z",
-                None,
-            ),
-            turn_context_line("2026-06-14T10:00:30Z", "gpt-5.5"),
-            token_count_line("2026-06-14T12:00:00Z", 80, 0, 20, 5, 100, 258_400),
-            token_count_line("2026-06-15T17:00:00Z", 240, 0, 60, 15, 300, 258_400),
-        ],
-    );
-
-    let response =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T18:00:00Z").unwrap();
-
-    assert_eq!(window_total(&response, "api_profiles", "api-a", "all"), 300);
     assert_eq!(
-        window_total(&response, "api_profiles", "api-a", "today"),
-        200
+        total_tokens(&response, "subscriptions", "sub-a", "days_7"),
+        expected(starts.days_7)
+    );
+    assert_eq!(
+        total_tokens(&response, "subscriptions", "sub-a", "days_30"),
+        expected(starts.days_30)
+    );
+    assert_eq!(
+        total_tokens(&response, "subscriptions", "sub-a", "all"),
+        expected(i64::MIN)
     );
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn aggregates_subscription_and_api_profile_owners_separately() {
-    let root = temp_root("owners");
+fn cards_keep_session_count_last_use_and_per_model_totals() {
+    let root = temp_root("shape");
     let db_path = root.join("usage.sqlite");
     let codex_home = root.join("codex");
-    record_attribution_at(
+    attribute(
         &db_path,
         OWNER_TYPE_SUBSCRIPTION,
         "sub-a",
         PROVIDER_SUBSCRIPTION,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_API_PROFILE,
-        "api-a",
-        PROVIDER_API,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-sub",
-        &[
-            session_meta_line(
-                "session-sub",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T01:00:00Z",
-                None,
-            ),
-            turn_context_line("2026-06-15T01:00:30Z", "gpt-5.5"),
-            token_count_line("2026-06-15T01:05:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
+        T0,
     );
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-api",
-        &[
-            session_meta_line("session-api", PROVIDER_API, "2026-06-15T02:00:00Z", None),
-            turn_context_line("2026-06-15T02:00:30Z", "gpt-5.4 mini"),
-            token_count_line("2026-06-15T02:05:00Z", 200, 50, 40, 10, 240, 128_000),
-        ],
-    );
+    let mut first = subscription_session("2026-06-15T01:00:00Z", "thread-a", "gpt-5.6-sol");
+    first.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-1",
+        "thread-a",
+        100,
+        60,
+        10,
+    ));
+    first.push(turn_context_line(
+        "2026-06-15T01:02:00Z",
+        "turn-2",
+        "gpt-6-astra",
+    ));
+    first.push(record_line(
+        "2026-06-15T01:03:00Z",
+        "resp-2",
+        "thread-a",
+        50,
+        0,
+        5,
+    ));
+    write_rollout(&codex_home, "first", &first);
+    let mut second = subscription_session("2026-06-15T01:10:00Z", "thread-b", "gpt-5.6-sol");
+    second.push(record_line(
+        "2026-06-15T01:11:00Z",
+        "resp-3",
+        "thread-b",
+        10,
+        0,
+        1,
+    ));
+    write_rollout(&codex_home, "second", &second);
 
-    let response =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-
+    let response = stats(&db_path, &codex_home, "2026-06-15T02:00:00Z");
+    let all = window(&response, "subscriptions", "sub-a", "all");
+    assert_eq!(all["session_count"], json!(2));
+    assert_eq!(all["last_used"], json!("2026-06-15T01:11:00Z"));
+    assert_eq!(all["input_tokens"], json!(160));
+    assert_eq!(all["cached_input_tokens"], json!(60));
+    assert_eq!(all["output_tokens"], json!(16));
     assert_eq!(
-        window_total(&response, "subscriptions", "sub-a", "all"),
-        120
+        all["pricing_contexts"],
+        json!({ "standard_short_context": 3 })
     );
-    assert_eq!(window_total(&response, "api_profiles", "api-a", "all"), 240);
+    let sol = &all["by_model"]["gpt-5.6-sol"];
+    assert_eq!(sol["total_tokens"], json!(121));
+    assert_eq!(sol["session_count"], json!(2));
+    // (40 × $4 + 60 × $0.40 + 10 × $20 + 10 × $4 + 1 × $20) / 1M
+    let sol_cost = sol["estimated_cost_usd"].as_f64().unwrap();
+    assert!((sol_cost - 0.000_444).abs() < 1e-12, "{sol_cost}");
+    assert_eq!(all["by_model"]["gpt-6-astra"]["total_tokens"], json!(55));
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn aggregates_usage_by_model_inside_each_window() {
-    let root = temp_root("by-model");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    record_attribution_at(
-        &db_path,
-        OWNER_TYPE_API_PROFILE,
-        "api-a",
-        PROVIDER_API,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-model-a",
-        &[
-            session_meta_line(
-                "session-model-a",
-                PROVIDER_API,
-                "2026-06-15T01:00:00Z",
-                None,
-            ),
-            turn_context_line("2026-06-15T01:00:30Z", "gpt-5.5"),
-            token_count_line("2026-06-15T01:05:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
-    );
-    write_session(
-        &codex_home,
-        "15",
-        "rollout-model-b",
-        &[
-            session_meta_line(
-                "session-model-b",
-                PROVIDER_API,
-                "2026-06-15T02:00:00Z",
-                None,
-            ),
-            turn_context_line("2026-06-15T02:00:30Z", "gpt-5.4 mini"),
-            token_count_line("2026-06-15T02:05:00Z", 200, 50, 40, 10, 240, 128_000),
-        ],
-    );
-
-    let response =
-        usage_stats_get_for_paths(&db_path, &codex_home, "2026-06-15T03:00:00Z").unwrap();
-
-    assert_eq!(window_total(&response, "api_profiles", "api-a", "all"), 360);
-    assert_eq!(
-        model_window(&response, "api_profiles", "api-a", "all", "gpt-5.5")
-            .get("total_tokens")
-            .and_then(Value::as_u64),
-        Some(120)
-    );
-    assert_eq!(
-        model_window(&response, "api_profiles", "api-a", "all", "gpt-5.4 mini")
-            .get("total_tokens")
-            .and_then(Value::as_u64),
-        Some(240)
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn failed_scan_write_rolls_back_the_whole_refresh() {
+fn failed_write_rolls_back_the_whole_refresh() {
     let root = temp_root("rollback");
     let db_path = root.join("usage.sqlite");
     let codex_home = root.join("codex");
-    record_attribution_at(
+    attribute(
         &db_path,
         OWNER_TYPE_SUBSCRIPTION,
         "sub-a",
         PROVIDER_SUBSCRIPTION,
-        "2026-06-15T00:00:00Z",
-    )
-    .unwrap();
-    let path_a = write_session(
-        &codex_home,
-        "15",
-        "rollout-a",
-        &[
-            session_meta_line(
-                "session-a",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T01:00:00Z",
-                None,
-            ),
-            token_count_line("2026-06-15T01:01:00Z", 100, 0, 20, 5, 120, 258_400),
-        ],
+        T0,
     );
-    let mut cache = None;
-    let first = cached_stats(&db_path, &codex_home, "2026-06-15T03:00:00Z", &mut cache);
-    assert_eq!(window_total(&first, "subscriptions", "sub-a", "all"), 120);
-
-    // Both files change; the scan state of the second one cannot be written.
-    let mut file = fs::OpenOptions::new().append(true).open(&path_a).unwrap();
-    use std::io::Write as _;
-    writeln!(
-        file,
-        "{}",
-        token_count_line("2026-06-15T02:01:00Z", 200, 0, 40, 10, 240, 258_400)
-    )
-    .unwrap();
-    drop(file);
-    let path_b = write_session(
-        &codex_home,
-        "15",
-        "rollout-b",
-        &[
-            session_meta_line(
-                "session-b",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-15T02:00:00Z",
-                None,
-            ),
-            token_count_line("2026-06-15T02:05:00Z", 80, 0, 20, 0, 100, 258_400),
-        ],
-    );
+    let mut a = subscription_session("2026-06-15T01:00:00Z", "thread-a", "gpt-5.6-sol");
+    a.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-a",
+        "thread-a",
+        100,
+        0,
+        20,
+    ));
+    write_rollout(&codex_home, "a", &a);
+    let mut b = subscription_session("2026-06-15T01:00:00Z", "thread-b", "gpt-5.6-sol");
+    b.push(record_line(
+        "2026-06-15T01:02:00Z",
+        "resp-b",
+        "thread-b",
+        80,
+        0,
+        20,
+    ));
+    write_rollout(&codex_home, "b", &b);
     Connection::open(&db_path)
         .unwrap()
         .execute_batch(
             r#"
-            CREATE TRIGGER fail_rollout_b BEFORE INSERT ON session_scan_state
+            CREATE TRIGGER fail_rollout_b BEFORE INSERT ON rollout_cursors
             WHEN NEW.source_path LIKE '%rollout-b%'
             BEGIN SELECT RAISE(ABORT, 'forced failure'); END;
             "#,
@@ -811,569 +742,243 @@ fn failed_scan_write_rolls_back_the_whole_refresh() {
         .unwrap();
     let error = usage_stats_get_for_scan_sources(
         &db_path,
-        &[sources::main_usage_scan_source(&codex_home)],
-        "2026-06-15T03:01:00Z",
-        &mut cache,
+        &[main_usage_scan_source(&codex_home)],
+        "2026-06-15T02:00:00Z",
     )
     .unwrap_err();
     assert!(error.contains("forced failure"), "{error}");
+    assert_eq!(record_count(&db_path), 0);
 
-    // Nothing of the failed refresh was committed, not even the writes for the first file.
-    assert_eq!(token_event_count(&db_path, &path_a), 1);
-    assert_eq!(
-        scan_state_last_scanned_at(&db_path, &path_a),
-        "2026-06-15T03:00:00Z"
-    );
-    assert_eq!(token_event_count(&db_path, &path_b), 0);
-
-    // The next refresh redoes both files instead of reusing the summary cached before them.
     Connection::open(&db_path)
         .unwrap()
         .execute_batch("DROP TRIGGER fail_rollout_b")
         .unwrap();
-    let recovered = cached_stats(&db_path, &codex_home, "2026-06-15T03:02:00Z", &mut cache);
+    let recovered = stats(&db_path, &codex_home, "2026-06-15T02:01:00Z");
     assert_eq!(
-        window_total(&recovered, "subscriptions", "sub-a", "all"),
-        340
+        total_tokens(&recovered, "subscriptions", "sub-a", "all"),
+        220
     );
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn opening_an_older_database_adds_the_missing_session_usage_columns() {
-    let root = temp_root("schema-upgrade");
-    fs::create_dir_all(&root).unwrap();
-    let db_path = root.join("usage.sqlite");
-    Connection::open(&db_path)
+fn create_legacy_database(db_path: &Path) {
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    Connection::open(db_path)
         .unwrap()
         .execute_batch(
             r#"
-            CREATE TABLE session_usage (
-                session_id TEXT PRIMARY KEY,
-                source_path TEXT NOT NULL,
-                owner_type TEXT NOT NULL,
-                owner_id TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                started_at_seconds INTEGER NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_at_seconds INTEGER NOT NULL,
-                input_tokens INTEGER NOT NULL,
-                cached_input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL,
-                reasoning_output_tokens INTEGER NOT NULL,
-                total_tokens INTEGER NOT NULL,
-                model_context_window INTEGER,
-                estimated_cost_usd REAL,
-                priced INTEGER NOT NULL,
-                last_scanned_at TEXT NOT NULL
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('stats_started_at', '2026-05-01T00:00:00Z');
+            CREATE TABLE attribution (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_type TEXT NOT NULL,
+                owner_id TEXT NOT NULL, provider TEXT NOT NULL, started_at TEXT NOT NULL,
+                started_at_seconds INTEGER NOT NULL
             );
+            INSERT INTO attribution(owner_type, owner_id, provider, started_at, started_at_seconds)
+            VALUES ('subscription', 'sub-a', 'openai', '2026-05-01T00:00:00Z', 1777593600);
+            CREATE TABLE session_usage (
+                session_id TEXT PRIMARY KEY, source_path TEXT NOT NULL, owner_type TEXT NOT NULL,
+                owner_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+                started_at TEXT NOT NULL, started_at_seconds INTEGER NOT NULL,
+                updated_at TEXT NOT NULL, updated_at_seconds INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL, reasoning_output_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL, model_context_window INTEGER,
+                estimated_cost_usd REAL, priced INTEGER NOT NULL, pricing_context TEXT,
+                unpriced_reason TEXT, last_scanned_at TEXT NOT NULL
+            );
+            -- An old session (no events any more) and a recent one with events.
+            INSERT INTO session_usage VALUES
+                ('s-old', '/old.jsonl', 'subscription', 'sub-a', 'openai', 'gpt-5.5',
+                 '2026-05-02T00:00:00Z', 1777680000, '2026-05-02T01:00:00Z', 1777683600,
+                 1000000, 0, 100000, 0, 1100000, 258400, 8.0, 1, 'standard_short_context', NULL,
+                 '2026-06-14T12:00:00Z'),
+                ('s-new', '/new.jsonl', 'subscription', 'sub-a', 'openai', 'gpt-6-astra',
+                 '2026-06-10T00:00:00Z', 1781049600, '2026-06-14T11:00:00Z', 1781434800,
+                 3000, 1000, 300, 0, 3300, 486400, NULL, 0, NULL, 'missing_model_price',
+                 '2026-06-14T12:00:00Z');
+            CREATE TABLE session_token_events (
+                source_path TEXT NOT NULL, event_index INTEGER NOT NULL,
+                timestamp_seconds INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                reasoning_output_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                PRIMARY KEY(source_path, event_index)
+            ) WITHOUT ROWID;
+            -- 2026-06-10T00:00Z and 2026-06-14T11:00Z; an event of an unindexed file is ignored.
+            INSERT INTO session_token_events VALUES
+                ('/new.jsonl', 0, 1781049600, 1000, 0, 100, 0, 1100),
+                ('/new.jsonl', 1, 1781434800, 2000, 1000, 200, 0, 2200),
+                ('/unindexed.jsonl', 0, 1781434800, 9, 0, 9, 0, 18);
+            CREATE TABLE session_scan_state (
+                source_path TEXT PRIMARY KEY, modified_nanos INTEGER NOT NULL,
+                file_size INTEGER NOT NULL, scan_scope TEXT NOT NULL, session_id TEXT NOT NULL,
+                outcome TEXT NOT NULL, last_scanned_at TEXT NOT NULL
+            );
+            INSERT INTO session_scan_state VALUES
+                ('/new.jsonl', 0, 0, '', 's-new', 'indexed', '2026-06-14T12:00:00Z'),
+                ('/old.jsonl', 0, 0, '', 's-old', 'indexed', '2026-06-01T00:00:00Z');
             "#,
         )
         .unwrap();
-
-    open_usage_connection(&db_path, "2026-06-15T00:00:00Z").unwrap();
-    // A second open finds every column present and changes nothing.
-    let connection = open_usage_connection(&db_path, "2026-06-15T00:00:00Z").unwrap();
-
-    let columns: Vec<String> = connection
-        .prepare("PRAGMA table_info(session_usage)")
-        .unwrap()
-        .query_map([], |row| row.get::<_, String>(1))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let mut expected = vec!["pricing_context".to_string(), "unpriced_reason".to_string()];
-    for prefix in ["today", "days_7", "days_30"] {
-        for name in [
-            "input_tokens",
-            "cached_input_tokens",
-            "output_tokens",
-            "reasoning_output_tokens",
-            "total_tokens",
-        ] {
-            expected.push(format!("{prefix}_{name}"));
-        }
-    }
-    assert_eq!(columns[19..], expected[..]);
-    drop(connection);
-    fs::remove_dir_all(root).unwrap();
 }
 
-fn relative_source_path(root: &Path, source_path: &str) -> String {
-    Path::new(source_path)
-        .strip_prefix(root)
-        .unwrap()
-        .to_string_lossy()
-        .replace('\\', "/")
-}
+#[test]
+fn per_session_statistics_are_carried_over_once() {
+    let root = temp_root("migration");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    create_legacy_database(&db_path);
+    // A response the old statistics already covered (before their last scan) and a new one.
+    let mut lines = subscription_session("2026-06-14T10:00:00Z", "s-new", "gpt-6-astra");
+    lines.push(record_line(
+        "2026-06-14T11:00:00Z",
+        "resp-covered",
+        "s-new",
+        2000,
+        1000,
+        200,
+    ));
+    lines.push(record_line(
+        "2026-06-14T13:00:00Z",
+        "resp-new",
+        "s-new",
+        500,
+        0,
+        50,
+    ));
+    write_rollout(&codex_home, "new", &lines);
 
-/// Everything a scan leaves in the database except file stamps (they depend on the clock) and
-/// the unused `today_*`/`days_7_*`/`days_30_*` columns of `session_usage`.
-fn database_snapshot(db_path: &Path, root: &Path) -> Value {
-    let connection = Connection::open(db_path).unwrap();
-    let mut sessions = connection
-        .prepare(
-            r#"
-            SELECT session_id, source_path, owner_type, owner_id, provider, model,
-                   started_at, started_at_seconds, updated_at, updated_at_seconds,
-                   input_tokens, cached_input_tokens, output_tokens,
-                   reasoning_output_tokens, total_tokens, model_context_window,
-                   estimated_cost_usd, priced, pricing_context, unpriced_reason, last_scanned_at
-            FROM session_usage ORDER BY session_id
-            "#,
-        )
-        .unwrap();
-    let sessions: Vec<Value> = sessions
-        .query_map([], |row| {
-            Ok(json!({
-                "session_id": row.get::<_, String>(0)?,
-                "source_path": relative_source_path(root, &row.get::<_, String>(1)?),
-                "owner_type": row.get::<_, String>(2)?,
-                "owner_id": row.get::<_, String>(3)?,
-                "provider": row.get::<_, String>(4)?,
-                "model": row.get::<_, String>(5)?,
-                "started_at": row.get::<_, String>(6)?,
-                "started_at_seconds": row.get::<_, i64>(7)?,
-                "updated_at": row.get::<_, String>(8)?,
-                "updated_at_seconds": row.get::<_, i64>(9)?,
-                "tokens": [
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, i64>(11)?,
-                    row.get::<_, i64>(12)?,
-                    row.get::<_, i64>(13)?,
-                    row.get::<_, i64>(14)?
-                ],
-                "model_context_window": row.get::<_, Option<i64>>(15)?,
-                "estimated_cost_usd": row.get::<_, Option<f64>>(16)?,
-                "priced": row.get::<_, i64>(17)?,
-                "pricing_context": row.get::<_, Option<String>>(18)?,
-                "unpriced_reason": row.get::<_, Option<String>>(19)?,
-                "last_scanned_at": row.get::<_, String>(20)?
-            }))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let mut events = connection
-        .prepare(
-            r#"
-            SELECT source_path, event_index, timestamp_seconds, input_tokens,
-                   cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens
-            FROM session_token_events ORDER BY source_path, event_index
-            "#,
-        )
-        .unwrap();
-    let events: Vec<Value> = events
-        .query_map([], |row| {
-            Ok(json!([
-                relative_source_path(root, &row.get::<_, String>(0)?),
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, i64>(7)?
-            ]))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let mut scan_states = connection
-        .prepare(
-            r#"
-            SELECT source_path, file_size, scan_scope, session_id, outcome, last_scanned_at
-            FROM session_scan_state ORDER BY source_path
-            "#,
-        )
-        .unwrap();
-    let scan_states: Vec<Value> = scan_states
-        .query_map([], |row| {
-            Ok(json!([
-                relative_source_path(root, &row.get::<_, String>(0)?),
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?
-            ]))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let pricing_version: String = connection
+    let now = "2026-06-14T14:00:00Z";
+    let first = stats(&db_path, &codex_home, now);
+    let connection = Connection::open(&db_path).unwrap();
+    let counted_after: String = connection
         .query_row(
-            "SELECT value FROM meta WHERE key = 'pricing_updated_at'",
-            [],
+            "SELECT value FROM meta WHERE key = ?1",
+            [META_RECORDS_COUNTED_AFTER],
             |row| row.get(0),
         )
         .unwrap();
-    json!({
-        "session_usage": sessions,
-        "session_token_events": events,
-        "session_scan_state": scan_states,
-        "pricing_updated_at": pricing_version
-    })
+    assert_eq!(counted_after, "2026-06-14T12:00:00Z");
+    // All: both old sessions plus the new response.
+    assert_eq!(
+        total_tokens(&first, "subscriptions", "sub-a", "all"),
+        1_100_000 + 3300 + 550
+    );
+    // 30 days: the old events of the indexed session plus the new response.
+    assert_eq!(
+        total_tokens(&first, "subscriptions", "sub-a", "days_30"),
+        1100 + 2200 + 550
+    );
+    let all = window(&first, "subscriptions", "sub-a", "all");
+    assert_eq!(all["session_count"], json!(2));
+    // gpt-6-astra now has a price, so nothing is unpriced any more.
+    assert_eq!(all["priced"], json!(true));
+    // Standard short-context prices of the current table: gpt-5.5 1M × $5 + 0.1M × $30, and
+    // gpt-6-astra (2000 × $10 + 1000 × $1 + 300 × $50) + the new response (500 × $10 + 50 × $50).
+    let expected = 5.0 + 3.0 + (20_000.0 + 1_000.0 + 15_000.0 + 5_000.0 + 2_500.0) / 1e6;
+    let cost = all["estimated_cost_usd"].as_f64().unwrap();
+    assert!((cost - expected).abs() < 1e-9, "{cost} vs {expected}");
+    // The old tables are left as they are.
+    let old_rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM session_usage", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(old_rows, 2);
+    drop(connection);
+
+    // Opening again does not carry anything over a second time.
+    let again = stats(&db_path, &codex_home, "2026-06-14T14:01:00Z");
+    assert_eq!(
+        total_tokens(&again, "subscriptions", "sub-a", "all"),
+        1_100_000 + 3300 + 550
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
-fn write_session_file(path: &Path, lines: &[String]) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, format!("{}\n", lines.join("\n"))).unwrap();
-}
-
-/// A fixture that walks every scan outcome: owners switching mid-way, a managed instance,
-/// short and long context pricing, an unpriced model, a counter reset, a duplicate session id,
-/// a session from before the statistics started, one without attribution, one without
-/// session_meta, and events that fall outside the 7 and 30 day windows. "Today" events sit
-/// within an hour before "now" (12:00Z) and all others at least 25 hours earlier, so the
-/// result does not depend on the local UTC offset between -11 and +11 hours.
-///
-/// The recorded baseline in `testdata/scan_baseline.json` was produced by the scan as of
-/// commit 347da53, before the scan writes moved into one transaction and before the
-/// `session_usage` window columns stopped being written. It only changes when the summary is
-/// meant to change.
 #[test]
-fn scan_fixture_summary_matches_recorded_baseline() {
-    let root = temp_root("baseline");
-    let db_path = root.join("usage.sqlite");
-    let codex_home = root.join("codex");
-    let sessions = codex_home.join("sessions").join("2026");
-    let instances_dir = root.join("codex-app-instances");
-    let instance_root = instances_dir.join("api-cpa-plus");
-    set_stats_started_at(&db_path, "2026-06-05T00:00:00Z");
-    for (owner_type, owner_id, provider, started_at) in [
+fn request_cost_uses_the_tier_and_this_requests_context_length() {
+    let short = usage(LONG_CONTEXT_THRESHOLD_TOKENS, 72_000, 0, 1_000);
+    // 200K × $4 + 72K × $0.40 + 1K × $20
+    assert_cost(
+        &estimate_request_cost("gpt-5.6-sol", &short, ServiceTier::Standard),
+        0.8 + 0.0288 + 0.02,
+        PRICE_LABEL_STANDARD_SHORT,
+    );
+    let long = usage(LONG_CONTEXT_THRESHOLD_TOKENS + 1, 0, 0, 0);
+    assert_cost(
+        &estimate_request_cost("gpt-5.6-sol", &long, ServiceTier::Standard),
+        272_001.0 * 8.0 / 1e6,
+        PRICE_LABEL_STANDARD_LONG,
+    );
+    assert_cost(
+        &estimate_request_cost("gpt-6-astra", &usage(1_000_000, 0, 0, 0), ServiceTier::Fast),
+        40.0,
+        PRICE_LABEL_FAST_LONG,
+    );
+    assert_cost(
+        &estimate_request_cost("gpt-6-astra", &usage(100, 0, 0, 10), ServiceTier::Fast),
+        (100.0 * 20.0 + 10.0 * 100.0) / 1e6,
+        PRICE_LABEL_FAST_SHORT,
+    );
+    // Cache writes are part of the input and priced on their own.
+    assert_cost(
+        &estimate_request_cost(
+            "gpt-6-sol",
+            &usage(1_000, 200, 300, 0),
+            ServiceTier::Standard,
+        ),
+        (500.0 * 2.0 + 200.0 * 0.2 + 300.0 * 2.5) / 1e6,
+        PRICE_LABEL_STANDARD_SHORT,
+    );
+    // gpt-5.4-mini has one price whatever the length.
+    assert_cost(
+        &estimate_request_cost("gpt-5.4-mini", &long, ServiceTier::Standard),
+        272_001.0 * 0.75 / 1e6,
+        PRICE_LABEL_STANDARD_SHORT,
+    );
+}
+
+#[test]
+fn missing_prices_leave_the_request_unpriced_with_the_reason() {
+    let long = usage(LONG_CONTEXT_THRESHOLD_TOKENS + 1, 0, 0, 0);
+    let cases = [
         (
-            OWNER_TYPE_API_PROFILE,
-            "api-early",
-            PROVIDER_API,
-            "2026-04-01T00:00:00Z",
+            "gpt-5.5",
+            long.clone(),
+            ServiceTier::Fast,
+            UNPRICED_MISSING_TIER_PRICE,
         ),
         (
-            OWNER_TYPE_SUBSCRIPTION,
-            "sub-a",
-            PROVIDER_SUBSCRIPTION,
-            "2026-06-05T00:00:00Z",
+            "gpt-5.6-sol",
+            usage(10, 0, 0, 0),
+            ServiceTier::from_setting("flex"),
+            UNPRICED_MISSING_TIER_PRICE,
         ),
         (
-            OWNER_TYPE_API_PROFILE,
-            "api-a",
-            PROVIDER_API,
-            "2026-06-10T00:00:00Z",
+            "codex-auto-review",
+            usage(10, 0, 0, 0),
+            ServiceTier::Standard,
+            UNPRICED_MISSING_MODEL_PRICE,
         ),
         (
-            OWNER_TYPE_SUBSCRIPTION,
-            "sub-b",
-            PROVIDER_SUBSCRIPTION,
-            "2026-06-14T12:00:00Z",
+            "gpt-5.5",
+            usage(10, 0, 5, 0),
+            ServiceTier::Standard,
+            UNPRICED_MISSING_CACHE_WRITE_PRICE,
         ),
-    ] {
-        record_attribution_at(&db_path, owner_type, owner_id, provider, started_at).unwrap();
+    ];
+    for (model, usage, tier, reason) in cases {
+        let cost = estimate_request_cost(model, &usage, tier);
+        assert_eq!(
+            cost,
+            EstimatedCost {
+                cost_usd: None,
+                price_label: reason
+            },
+            "{model}"
+        );
     }
-    write_instance_marker(&instance_root, "api", "cpa-plus");
-
-    // sub-a, short context gpt-5.5, one event eight days ago and one yesterday.
-    write_session_file(
-        &sessions.join("06").join("07").join("rollout-s1.jsonl"),
-        &[
-            session_meta_line(
-                "s1",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-07T10:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-07T10:05:00Z", 100, 20, 30, 5, 130, 258_400),
-            token_count_line("2026-06-14T09:00:00Z", 400, 120, 90, 15, 490, 258_400),
-        ],
-    );
-    // sub-b after the switch, model from turn_context, events today.
-    let s2_path = sessions.join("06").join("15").join("rollout-s2.jsonl");
-    write_session_file(
-        &s2_path,
-        &[
-            session_meta_line("s2", PROVIDER_SUBSCRIPTION, "2026-06-15T11:00:00Z", None),
-            turn_context_line("2026-06-15T11:00:10Z", "gpt-5.4 mini"),
-            token_count_line("2026-06-15T11:05:00Z", 200, 50, 40, 10, 240, 128_000),
-            token_count_line("2026-06-15T11:40:00Z", 500, 100, 80, 20, 580, 128_000),
-        ],
-    );
-    // api-a, long context gpt-5.5, with a counter reset in the middle.
-    write_session_file(
-        &sessions.join("06").join("13").join("rollout-s3.jsonl"),
-        &[
-            session_meta_line("s3", PROVIDER_API, "2026-06-13T08:00:00Z", Some("gpt-5.5")),
-            token_count_line("2026-06-13T08:10:00Z", 1_000, 200, 300, 50, 1_300, 300_000),
-            token_count_line("2026-06-13T09:10:00Z", 400, 100, 100, 10, 500, 300_000),
-            token_count_line("2026-06-14T10:00:00Z", 900, 300, 200, 30, 1_100, 300_000),
-        ],
-    );
-    // api-a, a model without a price.
-    write_session_file(
-        &sessions.join("06").join("15").join("rollout-s4.jsonl"),
-        &[
-            session_meta_line(
-                "s4",
-                PROVIDER_API,
-                "2026-06-15T11:10:00Z",
-                Some("custom-model"),
-            ),
-            token_count_line("2026-06-15T11:20:00Z", 70, 0, 30, 0, 100, 64_000),
-        ],
-    );
-    // A second file with s2's id, sorted after it: counted once, as a duplicate.
-    write_session_file(
-        &sessions
-            .join("06")
-            .join("15")
-            .join("rollout-s2x-copy.jsonl"),
-        &[
-            session_meta_line("s2", PROVIDER_SUBSCRIPTION, "2026-06-15T11:00:00Z", None),
-            token_count_line("2026-06-15T11:05:00Z", 999, 0, 1, 0, 1_000, 128_000),
-        ],
-    );
-    // An archived session of sub-a.
-    write_session_file(
-        &codex_home
-            .join("archived_sessions")
-            .join("rollout-s5.jsonl"),
-        &[
-            session_meta_line(
-                "s5",
-                PROVIDER_SUBSCRIPTION,
-                "2026-06-09T07:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-09T07:30:00Z", 800, 600, 50, 10, 850, 258_400),
-        ],
-    );
-    // Entirely before the statistics started.
-    write_session_file(
-        &sessions.join("06").join("01").join("rollout-s6.jsonl"),
-        &[
-            session_meta_line("s6", PROVIDER_API, "2026-06-01T08:00:00Z", Some("gpt-5.5")),
-            token_count_line("2026-06-02T08:00:00Z", 100, 0, 20, 0, 120, 258_400),
-        ],
-    );
-    // A provider nobody switched to.
-    write_session_file(
-        &sessions.join("06").join("14").join("rollout-s7.jsonl"),
-        &[
-            session_meta_line(
-                "s7",
-                "other-provider",
-                "2026-06-14T08:00:00Z",
-                Some("gpt-5.5"),
-            ),
-            token_count_line("2026-06-14T08:10:00Z", 100, 0, 20, 0, 120, 258_400),
-        ],
-    );
-    // No session_meta line.
-    write_session_file(
-        &sessions.join("06").join("14").join("rollout-s8.jsonl"),
-        &[token_count_line(
-            "2026-06-14T08:10:00Z",
-            100,
-            0,
-            20,
-            0,
-            120,
-            258_400,
-        )],
-    );
-    // Started before the statistics, still active after; one event older than 30 days.
-    write_session_file(
-        &sessions.join("05").join("01").join("rollout-s10.jsonl"),
-        &[
-            session_meta_line("s10", PROVIDER_API, "2026-05-01T08:00:00Z", None),
-            turn_context_line("2026-05-01T08:00:10Z", "gpt-5.6"),
-            token_count_line("2026-05-01T08:10:00Z", 1_000, 400, 100, 0, 1_100, 128_000),
-            token_count_line(
-                "2026-06-12T08:10:00Z",
-                3_000,
-                1_400,
-                300,
-                40,
-                3_300,
-                128_000,
-            ),
-        ],
-    );
-    // Managed instance: attributed by its marker.
-    write_session_file(
-        &instance_root
-            .join("codex-home")
-            .join("sessions")
-            .join("2026")
-            .join("06")
-            .join("15")
-            .join("rollout-s11.jsonl"),
-        &[
-            session_meta_line("s11", PROVIDER_API, "2026-06-15T11:15:00Z", None),
-            turn_context_line("2026-06-15T11:15:10Z", "gpt-5.4-mini"),
-            token_count_line("2026-06-15T11:30:00Z", 600, 200, 60, 6, 660, 128_000),
-        ],
-    );
-
-    let sources = || {
-        let mut sources = vec![main_usage_scan_source(&codex_home)];
-        sources.extend(managed_instance_usage_scan_sources(&instances_dir).unwrap());
-        sources
-    };
-    let mut cache = None;
-    let mut run = |now: &str| {
-        usage_stats_get_for_scan_sources(&db_path, &sources(), now, &mut cache).unwrap()
-    };
-
-    let first = run("2026-06-15T12:00:00Z");
-    let mut file = fs::OpenOptions::new().append(true).open(&s2_path).unwrap();
-    use std::io::Write as _;
-    writeln!(
-        file,
-        "{}",
-        token_count_line("2026-06-15T12:10:00Z", 700, 150, 100, 30, 830, 128_000)
-    )
-    .unwrap();
-    drop(file);
-    write_session_file(
-        &sessions.join("06").join("15").join("rollout-s12.jsonl"),
-        &[
-            session_meta_line("s12", PROVIDER_SUBSCRIPTION, "2026-06-15T12:15:00Z", None),
-            turn_context_line("2026-06-15T12:15:10Z", "gpt-5.6-luna"),
-            token_count_line("2026-06-15T12:20:00Z", 300, 0, 50, 5, 350, 128_000),
-        ],
-    );
-    let appended = run("2026-06-15T12:30:00Z");
-    let unchanged = run("2026-06-15T12:30:30Z");
-    let next_day = run("2026-06-16T12:00:00Z");
-    // Neither of the last two runs writes, so this is also the state after the append.
-    let actual = json!({
-        "first": first,
-        "appended": appended,
-        "next_day": next_day,
-        "database": database_snapshot(&db_path, &root)
-    });
-    fs::remove_dir_all(&root).unwrap();
-
-    assert_eq!(unchanged, appended);
-    let expected: Value =
-        serde_json::from_str(include_str!("testdata/scan_baseline.json")).unwrap();
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn cost_formula_uses_cached_input_and_output_prices() {
-    let usage = TokenUsage {
-        input_tokens: 1_000_000,
-        cached_input_tokens: 250_000,
-        output_tokens: 100_000,
-        reasoning_output_tokens: 25_000,
-        total_tokens: 1_100_000,
-    };
-
-    let estimate = estimate_cost("gpt-5.4-mini", &usage, Some(128_000));
-
-    assert!(estimate.priced);
-    let expected = 0.75 * 0.75 + 0.25 * 0.075 + 0.1 * 4.5;
-    assert!((estimate.cost_usd.unwrap() - expected).abs() < 0.000_001);
-}
-
-#[test]
-fn gpt_5_6_alias_uses_sol_pricing() {
-    let usage = TokenUsage {
-        input_tokens: 1_000_000,
-        cached_input_tokens: 200_000,
-        output_tokens: 100_000,
-        reasoning_output_tokens: 0,
-        total_tokens: 1_100_000,
-    };
-
-    let estimate = estimate_cost("gpt-5.6", &usage, Some(128_000));
-
-    assert!(estimate.priced);
-    let expected = 0.8 * 5.0 + 0.2 * 0.5 + 0.1 * 30.0;
-    assert!((estimate.cost_usd.unwrap() - expected).abs() < 0.000_001);
-}
-
-#[test]
-fn gpt_5_6_variants_use_their_own_prices() {
-    let usage = TokenUsage {
-        input_tokens: 1_000_000,
-        cached_input_tokens: 0,
-        output_tokens: 1_000_000,
-        reasoning_output_tokens: 0,
-        total_tokens: 2_000_000,
-    };
-
-    let terra = estimate_cost("gpt-5.6-terra", &usage, Some(128_000));
-    let luna = estimate_cost("gpt-5.6-luna", &usage, Some(128_000));
-
-    assert_eq!(terra.cost_usd, Some(17.5));
-    assert_eq!(luna.cost_usd, Some(7.0));
-}
-
-#[test]
-fn cumulative_input_above_threshold_still_uses_short_context_price() {
-    let usage = TokenUsage {
-        input_tokens: 753_341,
-        cached_input_tokens: 661_376,
-        output_tokens: 5_386,
-        reasoning_output_tokens: 2_117,
-        total_tokens: 758_727,
-    };
-
-    let estimate = estimate_cost("gpt-5.5", &usage, Some(258_400));
-
-    assert!(estimate.priced);
-    assert_eq!(
-        estimate.pricing_context,
-        Some(PRICING_CONTEXT_STANDARD_SHORT)
-    );
-    let expected = per_million_cost(91_965, 5.0)
-        + per_million_cost(661_376, 0.5)
-        + per_million_cost(5_386, 30.0);
-    assert!((estimate.cost_usd.unwrap() - expected).abs() < 0.000_001);
-}
-
-#[test]
-fn long_context_uses_standard_long_context_prices() {
-    let usage = TokenUsage {
-        input_tokens: 300_000,
-        cached_input_tokens: 100_000,
-        output_tokens: 10_000,
-        reasoning_output_tokens: 1_000,
-        total_tokens: 310_000,
-    };
-
-    let estimate = estimate_cost("gpt-5.5", &usage, Some(LONG_CONTEXT_THRESHOLD_TOKENS));
-
-    assert!(estimate.priced);
-    assert_eq!(
-        estimate.pricing_context,
-        Some(PRICING_CONTEXT_STANDARD_LONG)
-    );
-    let expected = per_million_cost(200_000, 10.0)
-        + per_million_cost(100_000, 1.0)
-        + per_million_cost(10_000, 45.0);
-    assert!((estimate.cost_usd.unwrap() - expected).abs() < 0.000_001);
-}
-
-#[test]
-fn missing_price_is_tokens_only() {
-    let usage = TokenUsage {
-        input_tokens: 100,
-        cached_input_tokens: 0,
-        output_tokens: 20,
-        reasoning_output_tokens: 5,
-        total_tokens: 120,
-    };
-
-    let estimate = estimate_cost("unknown-model", &usage, Some(128_000));
-
-    assert!(!estimate.priced);
-    assert!(estimate.cost_usd.is_none());
-    assert_eq!(
-        estimate.unpriced_reason,
-        Some(UNPRICED_REASON_MISSING_MODEL_PRICE)
-    );
+    assert_eq!(ServiceTier::from_setting("priority"), ServiceTier::Fast);
+    assert_eq!(ServiceTier::from_setting("fast"), ServiceTier::Fast);
+    assert_eq!(ServiceTier::from_setting("default"), ServiceTier::Standard);
+    assert_eq!(ServiceTier::from_setting(""), ServiceTier::Standard);
 }

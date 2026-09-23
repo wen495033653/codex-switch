@@ -11,14 +11,15 @@ const USAGE_WINDOWS = [
   { key: 'all', label: '全部' }
 ];
 
-const PRICING_CONTEXT_LABELS = {
-  standard_short_context: '标准上下文',
-  standard_long_context: '长上下文'
-};
+const LONG_CONTEXT_KEYS = ['standard_long_context', 'fast_long_context'];
+
+const FAST_MODE_KEYS = ['fast_short_context', 'fast_long_context'];
 
 const UNPRICED_REASON_LABELS = {
   missing_model_price: '缺少模型价格',
-  missing_cached_input_price: '缺少缓存输入价格'
+  missing_tier_price: '缺少该档位价格',
+  missing_cached_input_price: '缺少缓存输入价格',
+  missing_cache_write_price: '缺少缓存写入价格'
 };
 
 function getObjectMap(value) {
@@ -65,11 +66,14 @@ function formatPricingHint(windowStats, t) {
   }
 
   const contexts = getObjectMap(windowStats.pricing_contexts);
-  const longCount = Number(contexts.standard_long_context) || 0;
-  const shortCount = Number(contexts.standard_short_context) || 0;
-  if (longCount > 0 && shortCount > 0) return t('含长上下文');
-  if (longCount > 0) return t(PRICING_CONTEXT_LABELS.standard_long_context);
-  return '';
+  const countOf = (keys) => keys.reduce((sum, key) => sum + (Number(contexts[key]) || 0), 0);
+  const total = Object.values(contexts).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  const fastCount = countOf(FAST_MODE_KEYS);
+  const longCount = countOf(LONG_CONTEXT_KEYS);
+  const parts = [];
+  if (fastCount > 0) parts.push(fastCount === total ? t('快速模式') : t('含快速模式'));
+  if (longCount > 0) parts.push(longCount === total ? t('长上下文') : t('含长上下文'));
+  return parts.join(' · ');
 }
 
 function formatModelLabel(model, t) {

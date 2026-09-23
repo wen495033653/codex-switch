@@ -1,292 +1,262 @@
+//! Sums the stored records into the cards' windows.
+//!
+//! "All" is read from `usage_totals`. Today, 7 days and 30 days are exact to the second: whole
+//! hours inside a window come from `usage_hourly`, and the part before the window's first whole
+//! hour from the individual records. A refresh therefore reads about one bucket per active
+//! session-hour of the last 30 days, not every record.
+
 use super::{
-    db::{db_error, sql_i64_to_u64},
+    db::{db_error, hour_start, sql_i64_to_u64},
     model::{
-        ScanWarnings, TokenUsage, UsageWindowStarts, OWNER_TYPE_API_PROFILE,
-        OWNER_TYPE_SUBSCRIPTION,
+        TokenUsage, UsageItem, UsageWindowStarts, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION,
+        OWNER_TYPE_UNATTRIBUTED,
     },
-    pricing::{estimate_cost, PRICING_SOURCE, PRICING_UPDATED_AT},
+    pricing::{is_priced_label, PRICING_SOURCE, PRICING_UPDATED_AT},
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Row};
 use serde_json::{json, Map, Value};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
-use time::{OffsetDateTime, UtcOffset};
+use std::collections::{BTreeMap, HashSet};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
+
+const HOUR_SECONDS: i64 = 60 * 60;
 
 #[derive(Default)]
 struct UsageWindow {
-    input_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_output_tokens: u64,
-    total_tokens: u64,
-    session_count: u64,
+    usage: TokenUsage,
     estimated_cost_usd: f64,
     has_unpriced: bool,
     pricing_contexts: BTreeMap<String, u64>,
     unpriced_reasons: BTreeMap<String, u64>,
-    last_used: String,
+    threads: HashSet<String>,
     last_used_seconds: i64,
+}
+
+impl UsageWindow {
+    fn add(&mut self, item: &UsageItem) {
+        self.usage.add(&item.usage);
+        match item.cost_usd {
+            Some(cost) => {
+                self.estimated_cost_usd += cost;
+                *self
+                    .pricing_contexts
+                    .entry(item.price_label.clone())
+                    .or_insert(0) += item.record_count;
+            }
+            None => {
+                self.has_unpriced = true;
+                *self
+                    .unpriced_reasons
+                    .entry(item.price_label.clone())
+                    .or_insert(0) += item.record_count;
+            }
+        }
+        self.threads.insert(item.thread_id.clone());
+        self.last_used_seconds = self.last_used_seconds.max(item.last_used_seconds);
+    }
+}
+
+#[derive(Default)]
+struct WindowUsage {
+    total: UsageWindow,
+    by_model: BTreeMap<String, UsageWindow>,
+}
+
+impl WindowUsage {
+    fn add(&mut self, item: &UsageItem) {
+        self.total.add(item);
+        self.by_model
+            .entry(display_model_id(&item.model))
+            .or_default()
+            .add(item);
+    }
 }
 
 #[derive(Default)]
 struct OwnerUsage {
-    today: UsageWindow,
-    today_by_model: BTreeMap<String, UsageWindow>,
-    days_7: UsageWindow,
-    days_7_by_model: BTreeMap<String, UsageWindow>,
-    days_30: UsageWindow,
-    days_30_by_model: BTreeMap<String, UsageWindow>,
-    all: UsageWindow,
-    all_by_model: BTreeMap<String, UsageWindow>,
+    today: WindowUsage,
+    days_7: WindowUsage,
+    days_30: WindowUsage,
+    all: WindowUsage,
 }
 
-struct UsageRow {
-    owner_type: String,
-    owner_id: String,
-    model: String,
-    updated_at: String,
-    updated_at_seconds: i64,
-    input_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_output_tokens: u64,
-    total_tokens: u64,
-    today_usage: TokenUsage,
-    days_7_usage: TokenUsage,
-    days_30_usage: TokenUsage,
-    model_context_window: Option<u64>,
-    estimated_cost_usd: Option<f64>,
-    priced: bool,
-    pricing_context: String,
-    unpriced_reason: String,
+#[derive(Clone, Copy)]
+enum Window {
+    Today,
+    Days7,
+    Days30,
 }
 
-/// The last aggregation and the window cut-offs it was computed for.
-pub(super) struct AggregateCache {
-    db_path: PathBuf,
-    starts: UsageWindowStarts,
-    response: Value,
+#[derive(Default)]
+struct Owners {
+    subscriptions: BTreeMap<String, OwnerUsage>,
+    api_profiles: BTreeMap<String, OwnerUsage>,
 }
 
-/// The aggregation depends on the clock only through the three window cut-offs. With an unchanged
-/// database the previous answer is still exact as long as "today" starts at the same instant and no
-/// token event has slipped out of the 7 or 30 day window. That is checked through the timestamp
-/// index, instead of scanning every token event again on each poll.
-pub(super) fn aggregate_usage_cached(
-    connection: &Connection,
-    db_path: &Path,
-    now_seconds: i64,
-    warnings: &ScanWarnings,
-    database_changed: bool,
-    cache: &mut Option<AggregateCache>,
-) -> Result<Value, String> {
-    let starts = usage_window_starts(now_seconds);
-    if !database_changed {
-        if let Some(cached) = cache.as_ref() {
-            if cached.db_path == db_path
-                && cached.starts.today == starts.today
-                && !events_between(connection, cached.starts.days_7, starts.days_7)?
-                && !events_between(connection, cached.starts.days_30, starts.days_30)?
-            {
-                return Ok(cached.response.clone());
+impl Owners {
+    fn owner(&mut self, item: &UsageItem) -> Option<&mut OwnerUsage> {
+        match item.owner_type.as_str() {
+            OWNER_TYPE_SUBSCRIPTION => {
+                Some(self.subscriptions.entry(item.owner_id.clone()).or_default())
+            }
+            OWNER_TYPE_API_PROFILE => {
+                Some(self.api_profiles.entry(item.owner_id.clone()).or_default())
+            }
+            _ => None,
+        }
+    }
+
+    fn add_to_window(&mut self, window: Window, item: &UsageItem) {
+        if let Some(owner) = self.owner(item) {
+            match window {
+                Window::Today => owner.today.add(item),
+                Window::Days7 => owner.days_7.add(item),
+                Window::Days30 => owner.days_30.add(item),
             }
         }
     }
-    let response = aggregate_usage(connection, now_seconds, warnings)?;
-    *cache = Some(AggregateCache {
-        db_path: db_path.to_path_buf(),
-        starts,
-        response: response.clone(),
-    });
-    Ok(response)
 }
 
-// Whether a token event lies in `[from, to)`, i.e. left a window whose start moved from `from` to `to`.
-fn events_between(connection: &Connection, from: i64, to: i64) -> Result<bool, String> {
-    if to <= from {
-        // the clock went backwards: events may have re-entered the window
-        return Ok(to < from);
-    }
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM session_token_events WHERE timestamp_seconds >= ?1 AND timestamp_seconds < ?2)",
-            params![from, to],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|found| found == 1)
-        .map_err(|err| db_error("检查 token 统计窗口边界失败", err))
-}
+pub(super) fn aggregate_usage(connection: &Connection, now_seconds: i64) -> Result<Value, String> {
+    let starts = usage_window_starts(now_seconds);
+    let mut owners = Owners::default();
+    let mut unattributed_threads = HashSet::new();
+    let mut unpriced_threads = HashSet::new();
 
-pub(super) fn aggregate_usage(
-    connection: &Connection,
-    now_seconds: i64,
-    warnings: &ScanWarnings,
-) -> Result<Value, String> {
-    let window_starts = usage_window_starts(now_seconds);
-    let mut subscriptions: BTreeMap<String, OwnerUsage> = BTreeMap::new();
-    let mut api_profiles: BTreeMap<String, OwnerUsage> = BTreeMap::new();
+    for_each_item(
+        connection,
+        "SELECT owner_type, owner_id, model, thread_id, price_label, input_tokens, \
+         cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, \
+         total_tokens, estimated_cost_usd, record_count, last_used_seconds FROM usage_totals",
+        params![],
+        |item: UsageItem| {
+            if item.owner_type == OWNER_TYPE_UNATTRIBUTED {
+                unattributed_threads.insert(item.thread_id.clone());
+            } else if let Some(owner) = owners.owner(&item) {
+                if item.cost_usd.is_none() {
+                    unpriced_threads.insert(item.thread_id.clone());
+                }
+                owner.all.add(&item);
+            }
+        },
+    )?;
 
-    let mut statement = connection
-        .prepare(
-            r#"
-            SELECT owner_type,
-                   owner_id,
-                   model,
-                   updated_at,
-                   updated_at_seconds,
-                   input_tokens,
-                   cached_input_tokens,
-                   output_tokens,
-                   reasoning_output_tokens,
-                   total_tokens,
-                   COALESCE(events.today_input_tokens, 0),
-                   COALESCE(events.today_cached_input_tokens, 0),
-                   COALESCE(events.today_output_tokens, 0),
-                   COALESCE(events.today_reasoning_output_tokens, 0),
-                   COALESCE(events.today_total_tokens, 0),
-                   COALESCE(events.days_7_input_tokens, 0),
-                   COALESCE(events.days_7_cached_input_tokens, 0),
-                   COALESCE(events.days_7_output_tokens, 0),
-                   COALESCE(events.days_7_reasoning_output_tokens, 0),
-                   COALESCE(events.days_7_total_tokens, 0),
-                   COALESCE(events.days_30_input_tokens, 0),
-                   COALESCE(events.days_30_cached_input_tokens, 0),
-                   COALESCE(events.days_30_output_tokens, 0),
-                   COALESCE(events.days_30_reasoning_output_tokens, 0),
-                   COALESCE(events.days_30_total_tokens, 0),
-                   model_context_window,
-                   estimated_cost_usd,
-                   priced,
-                   COALESCE(pricing_context, ''),
-                   COALESCE(unpriced_reason, '')
-            FROM session_usage
-            LEFT JOIN (
-                SELECT source_path,
-                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN input_tokens ELSE 0 END)
-                           AS today_input_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN cached_input_tokens ELSE 0 END)
-                           AS today_cached_input_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN output_tokens ELSE 0 END)
-                           AS today_output_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN reasoning_output_tokens ELSE 0 END)
-                           AS today_reasoning_output_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?1 THEN total_tokens ELSE 0 END)
-                           AS today_total_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN input_tokens ELSE 0 END)
-                           AS days_7_input_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN cached_input_tokens ELSE 0 END)
-                           AS days_7_cached_input_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN output_tokens ELSE 0 END)
-                           AS days_7_output_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN reasoning_output_tokens ELSE 0 END)
-                           AS days_7_reasoning_output_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?2 THEN total_tokens ELSE 0 END)
-                           AS days_7_total_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN input_tokens ELSE 0 END)
-                           AS days_30_input_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN cached_input_tokens ELSE 0 END)
-                           AS days_30_cached_input_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN output_tokens ELSE 0 END)
-                           AS days_30_output_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN reasoning_output_tokens ELSE 0 END)
-                           AS days_30_reasoning_output_tokens,
-                       SUM(CASE WHEN timestamp_seconds >= ?3 THEN total_tokens ELSE 0 END)
-                           AS days_30_total_tokens
-                FROM session_token_events
-                WHERE timestamp_seconds >= ?3
-                GROUP BY source_path
-            ) AS events ON events.source_path = session_usage.source_path
-            "#,
-        )
-        .map_err(|err| db_error("读取 session token 统计失败", err))?;
-    let rows = statement
-        .query_map(
-            params![
-                window_starts.today,
-                window_starts.days_7,
-                window_starts.days_30
-            ],
-            |row| {
-                Ok(UsageRow {
-                    owner_type: row.get(0)?,
-                    owner_id: row.get(1)?,
-                    model: row.get(2)?,
-                    updated_at: row.get(3)?,
-                    updated_at_seconds: row.get(4)?,
-                    input_tokens: row.get::<_, i64>(5).map(sql_i64_to_u64)?,
-                    cached_input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
-                    output_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
-                    reasoning_output_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
-                    total_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
-                    today_usage: token_usage_from_row(row, 10)?,
-                    days_7_usage: token_usage_from_row(row, 15)?,
-                    days_30_usage: token_usage_from_row(row, 20)?,
-                    model_context_window: row
-                        .get::<_, Option<i64>>(25)?
-                        .and_then(|value| u64::try_from(value).ok()),
-                    estimated_cost_usd: row.get(26)?,
-                    priced: row.get::<_, i64>(27)? == 1,
-                    pricing_context: row.get(28)?,
-                    unpriced_reason: row.get(29)?,
-                })
-            },
-        )
-        .map_err(|err| db_error("读取 session token 统计失败", err))?;
-
-    for row in rows {
-        let row = row.map_err(|err| db_error("读取 session token 统计失败", err))?;
-        let target = match row.owner_type.as_str() {
-            OWNER_TYPE_SUBSCRIPTION => subscriptions.entry(row.owner_id.clone()).or_default(),
-            OWNER_TYPE_API_PROFILE => api_profiles.entry(row.owner_id.clone()).or_default(),
-            _ => continue,
-        };
-        apply_row_to_window(&mut target.all, &row);
-        apply_row_to_model_window(&mut target.all_by_model, &row);
-        if row.today_usage.has_tokens() {
-            apply_window_usage_to_window(&mut target.today, &row, &row.today_usage);
-            apply_window_usage_to_model_window(&mut target.today_by_model, &row, &row.today_usage);
+    let windows = [
+        (Window::Days30, starts.days_30),
+        (Window::Days7, starts.days_7),
+        (Window::Today, starts.today),
+    ];
+    let first_whole_hour = |start: i64| {
+        let hour = hour_start(start);
+        if hour == start {
+            hour
+        } else {
+            hour + HOUR_SECONDS
         }
-        if row.days_7_usage.has_tokens() {
-            apply_window_usage_to_window(&mut target.days_7, &row, &row.days_7_usage);
-            apply_window_usage_to_model_window(
-                &mut target.days_7_by_model,
-                &row,
-                &row.days_7_usage,
-            );
-        }
-        if row.days_30_usage.has_tokens() {
-            apply_window_usage_to_window(&mut target.days_30, &row, &row.days_30_usage);
-            apply_window_usage_to_model_window(
-                &mut target.days_30_by_model,
-                &row,
-                &row.days_30_usage,
-            );
-        }
+    };
+    for_each_item(
+        connection,
+        "SELECT owner_type, owner_id, model, thread_id, price_label, input_tokens, \
+         cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, \
+         total_tokens, estimated_cost_usd, record_count, last_used_seconds, hour_start \
+         FROM usage_hourly WHERE hour_start >= ?1",
+        params![first_whole_hour(starts.days_30)],
+        |item: HourlyItem| {
+            for (window, start) in windows {
+                if item.hour_start >= first_whole_hour(start) {
+                    owners.add_to_window(window, &item.item);
+                }
+            }
+        },
+    )?;
+    for (window, start) in windows {
+        for_each_item(
+            connection,
+            "SELECT owner_type, owner_id, model, thread_id, price_label, input_tokens, \
+             cached_input_tokens, cache_write_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens, estimated_cost_usd, 1, timestamp_seconds \
+             FROM usage_records WHERE timestamp_seconds >= ?1 AND timestamp_seconds < ?2",
+            params![start, first_whole_hour(start)],
+            |item: UsageItem| owners.add_to_window(window, &item),
+        )?;
     }
 
     Ok(json!({
         "ok": true,
         "pricing_source": PRICING_SOURCE,
         "pricing_updated_at": PRICING_UPDATED_AT,
-        "subscriptions": owner_usage_map_to_json(subscriptions),
-        "api_profiles": owner_usage_map_to_json(api_profiles),
-        "warnings": warnings_to_json(warnings)
+        "subscriptions": owner_usage_map_to_json(owners.subscriptions),
+        "api_profiles": owner_usage_map_to_json(owners.api_profiles),
+        "warnings": warnings_to_json(unattributed_threads.len(), unpriced_threads.len())
     }))
 }
 
-fn token_usage_from_row(
-    row: &rusqlite::Row<'_>,
-    start_index: usize,
-) -> rusqlite::Result<TokenUsage> {
-    Ok(TokenUsage {
-        input_tokens: row.get::<_, i64>(start_index).map(sql_i64_to_u64)?,
-        cached_input_tokens: row.get::<_, i64>(start_index + 1).map(sql_i64_to_u64)?,
-        output_tokens: row.get::<_, i64>(start_index + 2).map(sql_i64_to_u64)?,
-        reasoning_output_tokens: row.get::<_, i64>(start_index + 3).map(sql_i64_to_u64)?,
-        total_tokens: row.get::<_, i64>(start_index + 4).map(sql_i64_to_u64)?,
-    })
+struct HourlyItem {
+    item: UsageItem,
+    hour_start: i64,
+}
+
+trait FromUsageRow: Sized {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self>;
+}
+
+impl FromUsageRow for UsageItem {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let price_label: String = row.get(4)?;
+        let cost: Option<f64> = row.get(11)?;
+        Ok(UsageItem {
+            owner_type: row.get(0)?,
+            owner_id: row.get(1)?,
+            model: row.get(2)?,
+            thread_id: row.get(3)?,
+            usage: TokenUsage {
+                input_tokens: row.get::<_, i64>(5).map(sql_i64_to_u64)?,
+                cached_input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
+                cache_write_input_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
+                output_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
+                reasoning_output_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
+                total_tokens: row.get::<_, i64>(10).map(sql_i64_to_u64)?,
+            },
+            // A rollup stores 0 for unpriced groups; the label says which case it is.
+            cost_usd: if is_priced_label(&price_label) {
+                Some(cost.unwrap_or(0.0))
+            } else {
+                None
+            },
+            price_label,
+            record_count: row.get::<_, i64>(12).map(sql_i64_to_u64)?,
+            last_used_seconds: row.get(13)?,
+        })
+    }
+}
+
+impl FromUsageRow for HourlyItem {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(HourlyItem {
+            item: UsageItem::from_row(row)?,
+            hour_start: row.get(14)?,
+        })
+    }
+}
+
+fn for_each_item<T: FromUsageRow>(
+    connection: &Connection,
+    sql: &str,
+    values: &[&dyn rusqlite::ToSql],
+    mut apply: impl FnMut(T),
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare_cached(sql)
+        .map_err(|err| db_error("读取 token 统计失败", err))?;
+    let mut rows = statement
+        .query(values)
+        .map_err(|err| db_error("读取 token 统计失败", err))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|err| db_error("读取 token 统计失败", err))?
+    {
+        apply(T::from_row(row).map_err(|err| db_error("读取 token 统计失败", err))?);
+    }
+    Ok(())
 }
 
 pub(super) fn usage_window_starts(now_seconds: i64) -> UsageWindowStarts {
@@ -310,81 +280,6 @@ fn today_start_seconds(now_seconds: i64) -> i64 {
         .unix_timestamp()
 }
 
-fn apply_row_to_window(window: &mut UsageWindow, row: &UsageRow) {
-    let usage = TokenUsage {
-        input_tokens: row.input_tokens,
-        cached_input_tokens: row.cached_input_tokens,
-        output_tokens: row.output_tokens,
-        reasoning_output_tokens: row.reasoning_output_tokens,
-        total_tokens: row.total_tokens,
-    };
-    apply_tokens_to_window(window, row, &usage);
-    if row.priced {
-        window.estimated_cost_usd += row.estimated_cost_usd.unwrap_or(0.0);
-        if !row.pricing_context.is_empty() {
-            increment_count(&mut window.pricing_contexts, &row.pricing_context);
-        }
-    } else {
-        window.has_unpriced = true;
-        if !row.unpriced_reason.is_empty() {
-            increment_count(&mut window.unpriced_reasons, &row.unpriced_reason);
-        }
-    }
-}
-
-fn apply_window_usage_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
-    apply_tokens_to_window(window, row, usage);
-    let estimated = estimate_cost(&row.model, usage, row.model_context_window);
-    if estimated.priced {
-        window.estimated_cost_usd += estimated.cost_usd.unwrap_or(0.0);
-        if let Some(pricing_context) = estimated.pricing_context {
-            increment_count(&mut window.pricing_contexts, pricing_context);
-        }
-    } else {
-        window.has_unpriced = true;
-        if let Some(unpriced_reason) = estimated.unpriced_reason {
-            increment_count(&mut window.unpriced_reasons, unpriced_reason);
-        }
-    }
-}
-
-fn apply_tokens_to_window(window: &mut UsageWindow, row: &UsageRow, usage: &TokenUsage) {
-    window.input_tokens = window.input_tokens.saturating_add(usage.input_tokens);
-    window.cached_input_tokens = window
-        .cached_input_tokens
-        .saturating_add(usage.cached_input_tokens);
-    window.output_tokens = window.output_tokens.saturating_add(usage.output_tokens);
-    window.reasoning_output_tokens = window
-        .reasoning_output_tokens
-        .saturating_add(usage.reasoning_output_tokens);
-    window.total_tokens = window.total_tokens.saturating_add(usage.total_tokens);
-    window.session_count = window.session_count.saturating_add(1);
-    if row.updated_at_seconds >= window.last_used_seconds {
-        window.last_used_seconds = row.updated_at_seconds;
-        window.last_used = row.updated_at.clone();
-    }
-}
-
-fn apply_row_to_model_window(windows: &mut BTreeMap<String, UsageWindow>, row: &UsageRow) {
-    let model = display_model_id(&row.model);
-    let window = windows.entry(model).or_default();
-    apply_row_to_window(window, row);
-}
-
-fn apply_window_usage_to_model_window(
-    windows: &mut BTreeMap<String, UsageWindow>,
-    row: &UsageRow,
-    usage: &TokenUsage,
-) {
-    let model = display_model_id(&row.model);
-    let window = windows.entry(model).or_default();
-    apply_window_usage_to_window(window, row, usage);
-}
-
-fn increment_count(counts: &mut BTreeMap<String, u64>, key: &str) {
-    *counts.entry(key.to_string()).or_insert(0) += 1;
-}
-
 fn display_model_id(model: &str) -> String {
     let model = model.trim();
     if model.is_empty() {
@@ -397,18 +292,30 @@ fn display_model_id(model: &str) -> String {
 fn owner_usage_map_to_json(source: BTreeMap<String, OwnerUsage>) -> Value {
     let mut output = Map::new();
     for (owner_id, usage) in source {
-        output.insert(owner_id, owner_usage_to_json(&usage));
+        output.insert(
+            owner_id,
+            json!({
+                "today": window_usage_to_json(&usage.today),
+                "days_7": window_usage_to_json(&usage.days_7),
+                "days_30": window_usage_to_json(&usage.days_30),
+                "all": window_usage_to_json(&usage.all)
+            }),
+        );
     }
     Value::Object(output)
 }
 
-fn owner_usage_to_json(usage: &OwnerUsage) -> Value {
-    json!({
-        "today": usage_window_to_json_with_models(&usage.today, &usage.today_by_model),
-        "days_7": usage_window_to_json_with_models(&usage.days_7, &usage.days_7_by_model),
-        "days_30": usage_window_to_json_with_models(&usage.days_30, &usage.days_30_by_model),
-        "all": usage_window_to_json_with_models(&usage.all, &usage.all_by_model)
-    })
+fn window_usage_to_json(window: &WindowUsage) -> Value {
+    let mut output = usage_window_to_json(&window.total);
+    let by_model = window
+        .by_model
+        .iter()
+        .map(|(model, usage)| (model.clone(), usage_window_to_json(usage)))
+        .collect::<Map<_, _>>();
+    if let Value::Object(ref mut object) = output {
+        object.insert("by_model".to_string(), Value::Object(by_model));
+    }
+    output
 }
 
 fn usage_window_to_json(window: &UsageWindow) -> Value {
@@ -418,59 +325,40 @@ fn usage_window_to_json(window: &UsageWindow) -> Value {
         json!(window.estimated_cost_usd)
     };
     json!({
-        "input_tokens": window.input_tokens,
-        "cached_input_tokens": window.cached_input_tokens,
-        "output_tokens": window.output_tokens,
-        "reasoning_output_tokens": window.reasoning_output_tokens,
-        "total_tokens": window.total_tokens,
+        "input_tokens": window.usage.input_tokens,
+        "cached_input_tokens": window.usage.cached_input_tokens,
+        "output_tokens": window.usage.output_tokens,
+        "reasoning_output_tokens": window.usage.reasoning_output_tokens,
+        "total_tokens": window.usage.total_tokens,
         "estimated_cost_usd": cost,
         "priced": !window.has_unpriced,
-        "pricing_contexts": map_counts_to_json(&window.pricing_contexts),
-        "unpriced_reasons": map_counts_to_json(&window.unpriced_reasons),
-        "session_count": window.session_count,
-        "last_used": window.last_used
+        "pricing_contexts": window.pricing_contexts,
+        "unpriced_reasons": window.unpriced_reasons,
+        "session_count": window.threads.len(),
+        "last_used": format_last_used(window.last_used_seconds)
     })
 }
 
-fn usage_window_to_json_with_models(
-    window: &UsageWindow,
-    by_model: &BTreeMap<String, UsageWindow>,
-) -> Value {
-    let mut output = usage_window_to_json(window);
-    if let Value::Object(ref mut object) = output {
-        object.insert("by_model".to_string(), usage_model_map_to_json(by_model));
+fn format_last_used(seconds: i64) -> String {
+    if seconds <= 0 {
+        return String::new();
     }
-    output
+    OffsetDateTime::from_unix_timestamp(seconds)
+        .ok()
+        .and_then(|time| time.format(&Rfc3339).ok())
+        .unwrap_or_default()
 }
 
-fn usage_model_map_to_json(source: &BTreeMap<String, UsageWindow>) -> Value {
-    let mut output = Map::new();
-    for (model, window) in source {
-        output.insert(model.clone(), usage_window_to_json(window));
-    }
-    Value::Object(output)
-}
-
-fn map_counts_to_json(source: &BTreeMap<String, u64>) -> Value {
-    let mut output = Map::new();
-    for (key, value) in source {
-        output.insert(key.clone(), json!(value));
-    }
-    Value::Object(output)
-}
-
-fn warnings_to_json(warnings: &ScanWarnings) -> Vec<String> {
+fn warnings_to_json(unattributed_sessions: usize, unpriced_sessions: usize) -> Vec<String> {
     let mut output = Vec::new();
-    if warnings.missing_attribution > 0 {
+    if unattributed_sessions > 0 {
         output.push(format!(
-            "{} 个 session 缺少 Codex Switch 归属记录，未计入卡片",
-            warnings.missing_attribution
+            "{unattributed_sessions} 个 session 缺少 Codex Switch 归属记录，未计入卡片"
         ));
     }
-    if warnings.missing_price > 0 {
+    if unpriced_sessions > 0 {
         output.push(format!(
-            "{} 个 session 缺少可用价格，仅显示 tokens",
-            warnings.missing_price
+            "{unpriced_sessions} 个 session 缺少可用价格，仅显示 tokens"
         ));
     }
     output
