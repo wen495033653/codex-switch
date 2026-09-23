@@ -1059,6 +1059,54 @@ fn sync_global_state_normalizes_workspace_roots() {
 }
 
 #[test]
+fn global_state_rewrite_backs_up_only_changes_and_never_recreates() {
+    let dir = unique_sessions_dir("global-state-rewrite");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(GLOBAL_STATE_FILE_NAME);
+    let backup = dir.join("backup.json");
+    let no_backup = || -> Result<PathBuf, String> { panic!("backup requested without a change") };
+
+    let missing = rewrite_global_state_file(&path, no_backup, |_| 1).unwrap();
+    let original = "{\"b\":1,\"a\":[\"x\"]}";
+    fs::write(&path, original).unwrap();
+    let unchanged = rewrite_global_state_file(&path, no_backup, |_| 0).unwrap();
+    let unchanged_content = fs::read_to_string(&path).unwrap();
+    let changed = rewrite_global_state_file(
+        &path,
+        || Ok(backup.clone()),
+        |value| {
+            value["c"] = json!(true);
+            1
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let backup_content = fs::read_to_string(&backup).unwrap();
+    // Removed by someone else between the read and the write: reported, not recreated.
+    let vanished = rewrite_global_state_file(
+        &path,
+        || Ok(dir.join("backup-2.json")),
+        |value| {
+            fs::remove_file(&path).unwrap();
+            value["d"] = json!(1);
+            1
+        },
+    )
+    .unwrap_err();
+    let recreated = path.exists();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(missing, 0);
+    assert_eq!(unchanged, 0);
+    assert_eq!(unchanged_content, original);
+    assert_eq!(changed, 1);
+    assert_eq!(rewritten, json!({"a": ["x"], "b": 1, "c": true}));
+    assert_eq!(backup_content, original);
+    assert!(vanished.contains("未重新创建"), "{vanished}");
+    assert!(!recreated);
+}
+
+#[test]
 fn nested_model_provider_json_lines_are_rewritten() {
     let line = r#"{"type":"response_item","payload":{"model_provider":"openai"}}"#;
 

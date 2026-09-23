@@ -1,6 +1,17 @@
 use super::{
-    backup::session_manager_data_dir, catalog::*, codex_home::*, legacy_migration::*, model::*,
-    preview::*, rollout::*, state_db::*, status::*, transfer::*, trash::*, trash_store::*, util::*,
+    backup::{sanitize_backup_reason, session_manager_data_dir},
+    catalog::*,
+    codex_home::*,
+    legacy_migration::*,
+    model::*,
+    preview::*,
+    rollout::*,
+    state_db::*,
+    status::*,
+    transfer::*,
+    trash::*,
+    trash_store::*,
+    util::*,
     zip::*,
 };
 use crate::codex_app_server::CodexDesktopThread;
@@ -2400,4 +2411,37 @@ fn single_path_lookup_matches_the_full_catalog() {
     assert_eq!(compared[0].1.as_ref().unwrap()["id"], "a-first");
     assert_eq!(compared[1].1.as_ref().unwrap()["id"], "d");
     assert!(compared[3].1.is_none());
+}
+
+#[test]
+fn global_state_cleanup_writes_through_the_shared_rewrite_with_a_data_dir_backup() {
+    let root = temp_path("global-state-cleanup-merge");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join(".codex-global-state.json");
+    let original =
+        json!({"pinned-thread-ids": ["keep", "remove"], "remove": {"title": "x"}}).to_string();
+    fs::write(&path, &original).unwrap();
+    let reason = format!(
+        "gs-merge-test-{}",
+        root.file_name().unwrap().to_string_lossy()
+    );
+    let backup_dir = session_manager_data_dir()
+        .unwrap()
+        .join("backups")
+        .join(sanitize_backup_reason(&reason));
+
+    remove_from_global_state(&root, &["missing".to_string()], &reason).unwrap();
+    let dir_after_noop = backup_dir.exists();
+    remove_from_global_state(&root, &["remove".to_string()], &reason).unwrap();
+    let rewritten: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let backups = fs::read_dir(&backup_dir)
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    fs::remove_dir_all(&backup_dir).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert!(!dir_after_noop);
+    assert_eq!(rewritten, json!({"pinned-thread-ids": ["keep"]}));
+    assert_eq!(backups, vec![original]);
 }

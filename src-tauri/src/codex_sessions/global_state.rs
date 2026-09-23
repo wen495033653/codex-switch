@@ -1,7 +1,12 @@
 use super::support::{write_existing_file, GLOBAL_STATE_FILE_NAME};
 use crate::session_sync_diagnostics::log_session_sync_event;
 use serde_json::{json, Map, Value};
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::HashSet,
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 pub(super) fn to_desktop_workspace_path(value: &str) -> Option<String> {
     let stripped = value.trim();
@@ -48,6 +53,51 @@ pub(super) fn preview_global_state_workspace_roots_with_diagnostics(
     Ok(updated)
 }
 
+/// The one read-modify-write of `.codex-global-state.json`, shared by the session sync and the
+/// session manager (caller holds the session I/O lock). `update` edits the parsed JSON and
+/// returns how many changes it made; with none, nothing is written. Otherwise the original text
+/// is saved to `backup_path()` (the caller picks the location) and the file is rewritten in
+/// place, only if it still exists: a file removed meanwhile is reported, never recreated.
+pub(crate) fn rewrite_global_state_file(
+    path: &Path,
+    backup_path: impl FnOnce() -> Result<PathBuf, String>,
+    update: impl FnOnce(&mut Value) -> usize,
+) -> Result<usize, String> {
+    let original_content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(err) => {
+            return Err(format!(
+                "读取 Codex global state 失败 {}: {err}",
+                path.display()
+            ))
+        }
+    };
+    let mut value: Value = serde_json::from_str(&original_content)
+        .map_err(|err| format!("解析 Codex global state 失败 {}: {err}", path.display()))?;
+    let updated = update(&mut value);
+    if updated == 0 {
+        return Ok(0);
+    }
+    let backup_path = backup_path()?;
+    fs::write(&backup_path, &original_content).map_err(|err| {
+        format!(
+            "备份 Codex global state 失败 {}: {err}",
+            backup_path.display()
+        )
+    })?;
+    let mut output = serde_json::to_string_pretty(&value)
+        .map_err(|err| format!("序列化 Codex global state 失败: {err}"))?;
+    output.push('\n');
+    if !write_existing_file(path, &output, "写入 Codex global state")? {
+        return Err(format!(
+            "Codex global state 在写入前被删除，未重新创建: {}",
+            path.display()
+        ));
+    }
+    Ok(updated)
+}
+
 pub(super) fn sync_global_state_workspace_roots_with_diagnostics(
     path: &Path,
     trigger: Option<&str>,
@@ -65,34 +115,19 @@ pub(super) fn sync_global_state_workspace_roots_with_diagnostics(
         return Ok(0);
     }
 
-    let original_content = fs::read_to_string(path)
-        .map_err(|err| format!("读取 Codex global state 失败 {}: {err}", path.display()))?;
-    let mut state = parse_global_state(&original_content, path)?;
-    let next = normalized_global_state_workspace_roots(&state);
-    let updated = global_state_update_count(&state, &next);
-    if updated > 0 {
+    let backup_path = || Ok(path.with_file_name(format!("{GLOBAL_STATE_FILE_NAME}.bak")));
+    let updated = rewrite_global_state_file(path, backup_path, |value| {
+        // A non-object document has no workspace roots to normalize (it was read as empty).
+        let Some(state) = value.as_object_mut() else {
+            return 0;
+        };
+        let next = normalized_global_state_workspace_roots(state);
+        let updated = global_state_update_count(state, &next);
         for (key, value) in next {
             state.insert(key, value);
         }
-        if let Some(parent) = path.parent() {
-            fs::write(
-                parent.join(format!("{GLOBAL_STATE_FILE_NAME}.bak")),
-                &original_content,
-            )
-            .map_err(|err| {
-                format!(
-                    "备份 Codex global state 失败 {}: {err}",
-                    parent
-                        .join(format!("{GLOBAL_STATE_FILE_NAME}.bak"))
-                        .display()
-                )
-            })?;
-        }
-        let mut output = serde_json::to_string_pretty(&Value::Object(state))
-            .map_err(|err| format!("序列化 Codex global state 失败: {err}"))?;
-        output.push('\n');
-        write_existing_file(path, &output, "写入 Codex global state")?;
-    }
+        updated
+    })?;
     if let Some(trigger) = trigger {
         log_session_sync_event(
             "session_sync_global_state_summary",

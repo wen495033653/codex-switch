@@ -1,9 +1,10 @@
 use super::{
-    backup::backup_file_with_reason,
+    backup::reason_backup_path,
     util::{dedupe_strings, first_non_empty, non_empty},
 };
 use crate::{
-    json_util::raw_string_field, paths::codex_dir, session_sync_diagnostics::log_session_sync_event,
+    codex_sessions::rewrite_global_state_file, json_util::raw_string_field, paths::codex_dir,
+    session_sync_diagnostics::log_session_sync_event,
 };
 use serde_json::{json, Value};
 use std::{
@@ -30,23 +31,12 @@ pub(super) fn remove_from_global_state(
         return Ok(());
     }
     let path = root.join(".codex-global-state.json");
-    if !path.exists() {
-        return Ok(());
-    }
     let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    let content = fs::read_to_string(&path)
-        .map_err(|err| format!("读取 .codex-global-state.json 失败: {err}"))?;
-    let mut value: Value = serde_json::from_str(&content)
-        .map_err(|err| format!("解析 .codex-global-state.json 失败: {err}"))?;
-    let removed = remove_matching_object_keys(&mut value, &id_set);
-    if removed == 0 {
-        return Ok(());
-    }
-    backup_file_with_reason(&path, reason)?;
-    let mut output = serde_json::to_string_pretty(&value)
-        .map_err(|err| format!("序列化 .codex-global-state.json 失败: {err}"))?;
-    output.push('\n');
-    fs::write(&path, output).map_err(|err| format!("写入 .codex-global-state.json 失败: {err}"))?;
+    rewrite_global_state_file(
+        &path,
+        || reason_backup_path(&path, reason),
+        |value| remove_matching_object_keys(value, &id_set),
+    )?;
     Ok(())
 }
 

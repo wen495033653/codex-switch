@@ -5,6 +5,8 @@ mod support;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use global_state::rewrite_global_state_file;
+
 use crate::{
     accounts::{get_codex_state_value, restore_api_mode_if_selected},
     api_config::API_PROVIDER_ID,

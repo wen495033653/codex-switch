@@ -72,32 +72,23 @@ pub(super) fn sanitize_backup_reason(reason: &str) -> String {
     }
 }
 
-pub(super) fn backup_file_with_reason(path: &Path, reason: &str) -> Result<PathBuf, String> {
+/// A fresh backup location for `path` in the data directory's `backups/<reason>/` (created if
+/// needed); the caller writes the backup.
+pub(super) fn reason_backup_path(path: &Path, reason: &str) -> Result<PathBuf, String> {
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| format!("备份文件名无效: {}", path.display()))?;
-    let reason = reason.trim();
-    let backup = if reason.is_empty() {
-        let base_name = format!("{file_name}.bak.context-manager-{}", backup_stamp());
-        unique_sibling_path(path, &base_name)
-    } else {
-        let reason = sanitize_backup_reason(reason);
-        let base_name = format!(
-            "{file_name}.bak.context-manager-{reason}-{}",
-            backup_stamp()
-        );
-        let backup_dir = session_manager_backup_dir(&reason)?;
-        fs::create_dir_all(&backup_dir)
-            .map_err(|err| format!("创建备份目录失败 {}: {err}", backup_dir.display()))?;
-        unique_sibling_path(&backup_dir.join(&base_name), &base_name)
-    };
-    fs::copy(path, &backup).map_err(|err| {
-        format!(
-            "备份文件失败 {} -> {}: {err}",
-            path.display(),
-            backup.display()
-        )
-    })?;
-    Ok(backup)
+    let reason = sanitize_backup_reason(reason);
+    let base_name = format!(
+        "{file_name}.bak.context-manager-{reason}-{}",
+        backup_stamp()
+    );
+    let backup_dir = session_manager_backup_dir(&reason)?;
+    fs::create_dir_all(&backup_dir)
+        .map_err(|err| format!("创建备份目录失败 {}: {err}", backup_dir.display()))?;
+    Ok(unique_sibling_path(
+        &backup_dir.join(&base_name),
+        &base_name,
+    ))
 }
