@@ -1,6 +1,6 @@
-# 会话管理：一致性与错误可见性
+# 会话管理与会话同步的文件读写
 
-范围：`src-tauri/src/session_manager/`（归档、删除/恢复、导入导出、预览、旧版数据迁移）。读写会话数据仍须先拿 `codex_sessions::lock_codex_session_io(...)`（见 CONTRIBUTING.md）。
+范围：`src-tauri/src/session_manager/`（归档、删除/恢复、导入导出、预览、旧版数据迁移），以及 `src-tauri/src/codex_sessions/` 中读写 rollout、`state_5.sqlite`、`.codex-global-state.json` 的部分。Codex 的结束与重启流程见 [codex-restart.md](codex-restart.md)。读写会话数据仍须先拿 `codex_sessions::lock_codex_session_io(...)`（见 CONTRIBUTING.md）。
 
 ## 当前行为
 
@@ -9,7 +9,7 @@
 同一把 I/O 锁内分三个阶段：
 
 1. 文件移动，全部可逆：普通移动用 `rename`；“修改 ID”先写一份改了 ID 的副本，原文件保留；“覆盖”先把目标改名为备份。计划阶段认为空闲、执行时却已存在的目标不会被替换，记为失败。
-2. 一个 state DB 事务（`state_db::apply_status_moves_to_state_db`）：先删除被覆盖会话的行及其子表行，再更新每个移动行的 `archived`、`archived_at`、`rollout_path`；“修改 ID”时同一事务内把子表（`thread_dynamic_tools`、`thread_goals`、`thread_spawn_edges`、`stage1_outputs`、`agent_job_items`）引用的 thread id 一起改掉。整批只备份一次数据库。
+2. 一个 state DB 事务（`state_db::apply_status_moves_to_state_db`）：先删除被覆盖会话的行及其子表行，再更新每个移动行的 `archived`、`archived_at`、`rollout_path`；“修改 ID”时同一事务内把子表（`thread_dynamic_tools`、`thread_goals`、`thread_spawn_edges`、`stage1_outputs`、`agent_job_items`）引用的 thread id 一起改掉。整批只备份一次数据库；这些会话在 `threads` 和子表里都没有行时，不备份也不开事务。
 3. 事务成功后才做不可逆清理：删除“修改 ID”的原文件和覆盖备份、清理空目录，再清理 `.codex-global-state.json` 里被覆盖会话的 id。
 
 - DB 失败（打不开、缺 `threads` 表或缺 `id/archived/archived_at/rollout_path` 列、SQLite 报错）时，按相反顺序撤销第 1 阶段的全部移动，返回 `ok=false`，`message` 写明原因和撤销结果（撤销失败会逐个列出路径）。state DB 不存在视为无需同步。
@@ -43,6 +43,32 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 
 按字节读行。非 UTF-8 的行逐行记录（行号 + 解码错误）并跳过，后面的行照常读取；读文件本身出错时记录行号并停止。两种情况都写入返回的 `warnings`，并记一条 `session_manager_session_index_read_error` 日志（路径、已读行数、条目数、跳过的行）。
 
+### 回收站的完整性校验（`trash_store.rs`）
+
+- 列出回收站、翻页预览、规划恢复时只检查备份文件存在且大小与记录一致，不再整文件计算 SHA-256。
+- 恢复时在即将放到位的副本上校验：普通恢复在写完临时文件后计算其 SHA-256，必须等于记录值；“修改 ID”恢复把备份整读一次，先用这份内存快照对比记录值，再从快照改写 ID。没有 `sha256` 的旧记录仍比较副本与备份。校验不通过时目标不动、临时文件删除、回收站记录保留。
+- 删除时只对回收站副本算一次 SHA-256；删除原文件前原有的“对原文件再算一次并比较”同时证明副本完整、原文件没有变化（不一致时保留原文件，提示改为“复制期间发生变化或复制不完整”）。
+- 恢复后给 `thread_metadata_from_manifest` 的 manifest 不再计算目标文件哈希（该函数只读 id、标题、更新时间、状态）。
+
+### state DB 备份（`state_db::StateDbBatchBackup`）
+
+一次批量操作（删除一批、恢复一批、归档一批）最多做一次 `VACUUM INTO`，在第一条真正改动行的语句之前；传入的 id 在 `threads` 和引用 thread id 的子表中都没有行时不备份。没有子行也没有主表行的 id 不再触发备份；只有子行（孤儿行）的 id 仍会被删除并触发备份。备份保留/清理策略没有改动。
+
+### 预览的单行查找（`catalog::current_state_conversation_for_path`）
+
+不再为一次预览构建整张目录：按目录相同的 SQL 与顺序遍历，只对文件名相同（Windows 下 ASCII 忽略大小写，与路径 key 一致）的行做 `metadata()` / `canonicalize()`，第一条解析到同一文件的行即结果——与目录里“同一文件后出现的行按重复丢弃”的规则一致。
+
+### 会话同步读 rollout（`codex_sessions`）
+
+- `state_threads`：`has_user_event` 已经是 1 的行不再扫描用户消息；其余情况按行流式读取，读到第一个 `session_meta` 的 cwd（通常第 1 行）并且（需要时）找到第一条含 `"user_message"` / `"user_input"` 的行就停止。子串与 `session_meta` 的判定和原来整读的实现相同。停止位置之后的内容不再解码，因此其中的非 UTF-8 字节不再让整个同步失败。
+- 因其他进程占用（共享冲突 32、锁冲突 33、拒绝访问）而跳过的 rollout 仍然跳过，但数量和路径写入 `session_sync_state_db_summary` / `session_sync_preflight_state_db_summary` 的 `lockedRollouts`、`lockedRolloutPaths`（DEV 日志面板也展示）。这两个事件不是 `_error`，正式版不落盘。
+- `rollouts::update_rollout_provider_line`：不含 `"model_provider"` 也不含 `"session_meta"` 字面量的行直接跳过 JSON 解析。
+- “最近 50 个 rollout”的选择没有改（见下方决策）。
+
+### `.codex-global-state.json` 的改写（`codex_sessions::rewrite_global_state_file`）
+
+唯一的改写实现，会话同步（规范化工作区路径）和会话管理（删除被删/被覆盖会话的 id）都经过它：读取并解析 → 调用方修改 → 有改动时先把原文写到调用方指定的备份位置 → 仅在文件仍存在时原地改写；读写之间文件被删除则报错，不重新创建。备份位置保持原样：同步写同目录的 `.codex-global-state.json.bak`（每次覆盖），会话管理写数据目录 `session-manager/backups/<reason>/`（每次新文件，且无改动时不再创建该目录）。写入仍不是原子的（见待验证/待决事项）。
+
 ### 错误日志
 
 下列事件以 `_error` 结尾，正式版会写入数据目录 `logs/codex-switch-errors.jsonl`（DEV 日志面板不展示这些新事件的明细）：
@@ -62,6 +88,10 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - **迁移在备份前预检 schema。** 迁移在启动时和每次打开 Codex 时都会重试；如果只把写入错误往上抛，不支持的 schema 会让每次重试都做一次全库 `VACUUM INTO` 备份。
 - **导入的 DB 失败不删除已写入的文件。** 文件本身完整且经过 SHA-256 校验；保留它们让“重新导入”成为补写索引的途径，删除则会让用户丢掉已确认导入的内容。
 - **`session_index.jsonl` 选择“逐行记录并跳过”而不是整体报错。** 它只提供标题和更新时间；一行坏数据不该让所有会话失去标题，但必须留下行号和日志。
+- **回收站只在恢复时校验内容。** 完整性要保证的是“恢复出来的内容等于删除时的内容”，在要放到位的副本上校验一次就够；列表和预览只是展示。代价：同样大小但内容损坏的备份仍会出现在列表里，恢复时才报 SHA-256 不匹配（测试 `restore_rejects_a_same_size_corrupted_backup` 固定了这一行为）。
+- **不按 mtime 预筛“最近 50 个 rollout”。** 活动时间取自文件尾部事件的时间戳，mtime 与它可以无关：现有测试 `sync_uses_combined_activity_time_limit` 就把 mtime 设成与活动时间相反的顺序；导入、恢复、“修改 ID”或复制目录会让大量旧会话获得新 mtime，按 mtime 取前 2×limit 会把真正最近的会话挤出候选。同步回写会恢复 mtime（`rollouts.rs` 写后 `set_modified`），但这不足以保证等价。
+- **`"model_provider"` / `"session_meta"` 字面量预筛的前提**：Codex 用 serde 写 JSONL，键名不会被转义（`_` 之类）。只有这种人为转义的行才会与“逐行解析”的结果不同。
+- **`.codex-global-state.json` 的写入放在 `codex_sessions`。** `session_manager` 已依赖 `codex_sessions`（I/O 锁），反向不行。两套旧实现都不是原子写（一个 `fs::write`，一个截断后原地写）；合并时保留了“只写已存在的文件”的一套。本分支基于 `347da53`，那里还没有 `atomic_file`；`main` 上已有 `atomic_file::write_file_atomically`，是否换成它见待决事项。
 - **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `session_sync_diagnostics` 的错误日志同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
 
 ## 验证记录
@@ -81,11 +111,26 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - 本地检查：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 277 passed / 5 ignored（修改前 267 / 5；session_manager 用例 28 → 38）。测试进程的 `USERPROFILE`/`HOME`/`APPDATA` 指向临时目录，没有运行 `#[ignore]` 的真实环境用例。
 - 未验证：没有运行正式应用，没有接触真实 `~/.codex` 或数据目录，上述行为都没有在真实 Codex 数据上跑过。
 
+### 2026-09-23：读写开销与重复实现的清理（离线）
+
+- 对比测试（新实现与旧逻辑在同一批夹具上结果相同）：`streamed_rollout_metadata_matches_full_read`（9 种 rollout 形态 + 缺失文件）、`provider_line_prefilter_matches_full_parse`（16 行 × 2 个目标 provider）、`single_path_lookup_matches_the_full_catalog`（重复写法、相对路径、同名异目录、缺失、目录外、Windows 大小写变体）。
+- 行为测试：`state_sync_reads_only_what_the_row_still_needs`（已记录 user event 的行只读第 1 行，后面的非 UTF-8 内容不影响同步）、`state_sync_reports_rollouts_locked_by_another_process`（Windows，`share_mode(0)` 真实占用文件，记入 `lockedRollouts` 且同步成功）、`restore_rejects_a_same_size_corrupted_backup`、`restore_legacy_record_without_hash_still_restores`、`state_db_backup_is_taken_once_per_batch_and_only_when_rows_change`、`status_change_without_state_rows_takes_no_backup`、`global_state_rewrite_backs_up_only_changes_and_never_recreates`、`global_state_cleanup_writes_through_the_shared_rewrite_with_a_data_dir_backup`。
+- 本地检查（HEAD `3a7eb2f`）：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 288 passed / 5 ignored。测试进程的 `USERPROFILE`/`HOME`/`APPDATA` 指向临时目录。
+- 未验证：没有在真实数据规模上测量耗时（上千个 rollout、上百 MB）；性能收益只来自读取量和系统调用次数的推算。
+
 ## 待验证
 
 TODO(verify): 真实 Codex 的 `state_5.sqlite` 中 thread 子表是否声明了外键、声明方式（`ON UPDATE` 动作、是否 `DEFERRABLE`）还没有看过；本次按测试夹具和现有删除逻辑推断。触发条件：下一次在正式版里用“修改 ID”处理归档/取消归档冲突，且该会话有动态工具或子代理关系。检查：返回 `ok=true`；数据目录 `logs/codex-switch-errors.jsonl` 没有 `session_manager_status_state_db_error`；只读查询 `SELECT thread_id FROM thread_dynamic_tools` / `thread_spawn_edges` 中不再出现旧 id。判据不成立（日志 `error` 含 `FOREIGN KEY` 或其他 SQLite 错误）时，从 `state_db::rename_thread_references` 与该日志的 `rollbackErrors` 继续；用户可用 `sqlite3 state_5.sqlite ".schema thread_dynamic_tools"` 只读提供真实建表语句。
 
 TODO(verify): 归档 DB 失败后的文件撤销只在临时目录验证过。触发条件：正式版中出现 `session_manager_status_state_db_error`。检查该事件的 `rolledBack` 等于 `movedFiles`、`rollbackErrors` 为空，并确认对应会话文件回到原目录。判据不成立时按 `rollbackErrors` 中的路径手工处理，并从 `status::rollback_status_move_file` 继续。
+
+TODO(verify): 流式读取与单行查找的耗时收益没有在真实规模上测过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 在隔离环境里用真实数据的副本运行开发版。检查：切换模式后 `session_sync_start` 到 `session_sync_finish` 的时间差、会话管理页连续翻页的响应时间，与 `347da53` 构建在同一份数据副本上对比；`session_sync_state_db_summary` 的 `updated` 与 `lockedRollouts` 合理。判据：同步与翻页不慢于旧版本且数据库结果一致。判据不成立时从 `state_threads::read_rollout_thread_metadata` 与 `catalog::current_state_conversation_for_path` 继续。
+
+## 待决事项
+
+- state DB / global state 备份的保留与清理策略（目前每次有改动的批量操作都新增一份 `VACUUM INTO` 备份，永不清理）。
+- `.codex-global-state.json` 的两个备份位置是否统一（同步：同目录 `.bak` 覆盖式；会话管理：数据目录按次保留）。
+- 在 `main` 上把 `rewrite_global_state_file` 的原地写换成 `atomic_file::write_file_atomically`（需先确认文件仍存在，保持“不重新创建”）。
 
 ## 回退
 
