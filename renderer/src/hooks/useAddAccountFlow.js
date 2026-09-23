@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createEmptyOauthState } from '../utils/appState';
-import { getErrorMessage } from '../utils/errors';
+import { getErrorMessage, getRawErrorMessage } from '../utils/errors';
 
 export function useAddAccountFlow({
   handleRes,
@@ -158,8 +158,8 @@ export function useAddAccountFlow({
       handleRes(res);
       closeAddModal();
     } catch (err) {
-      const message = getErrorMessage(err, '导入失败');
-      if (message !== '导入已取消') toast(message, 7000);
+      if (getRawErrorMessage(err) === '导入已取消') return;
+      toast(getErrorMessage(err, '导入失败'), 7000);
     }
   };
 

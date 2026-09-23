@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { getAccountId, getAccountName, maskAccountDisplayName } from '../utils/auth';
-import { getErrorMessage } from '../utils/errors';
+import { getErrorMessage, getRawErrorMessage } from '../utils/errors';
 
 const EMPTY_DELETE_ACCOUNT_MODAL = {
   visible: false,
@@ -83,8 +83,8 @@ export function useAccountOperations({
       const res = await window.api.exportAccounts();
       handleRes(res);
     } catch (err) {
-      const message = getErrorMessage(err, '导出失败');
-      if (message !== '导出已取消') toast(message, 7000);
+      if (getRawErrorMessage(err) === '导出已取消') return;
+      toast(getErrorMessage(err, '导出失败'), 7000);
     }
   };
 
