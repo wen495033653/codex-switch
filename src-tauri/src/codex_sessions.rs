@@ -75,11 +75,6 @@ fn normalize_target_provider(target_provider: &str) -> Result<String, String> {
     Ok(target_provider.to_string())
 }
 
-#[allow(dead_code)]
-pub(crate) fn sync_codex_sessions_to_current_mode_now() -> Result<usize, String> {
-    sync_codex_sessions_to_current_mode_now_from("current_mode")
-}
-
 pub(crate) fn sync_codex_sessions_to_current_mode_now_from(trigger: &str) -> Result<usize, String> {
     log_session_sync_event(
         "session_sync_current_mode_resolve_start",
@@ -112,11 +107,6 @@ pub(crate) fn preview_codex_sessions_to_current_mode_now_from(
         }),
     );
     preview_codex_sessions_to_provider_now_from(&target_provider, trigger)
-}
-
-#[allow(dead_code)]
-pub(crate) fn sync_codex_sessions_to_provider_now(target_provider: &str) -> Result<usize, String> {
-    sync_codex_sessions_to_provider_now_from(target_provider, "explicit_provider")
 }
 
 pub(crate) fn preview_codex_sessions_to_provider_now_from(

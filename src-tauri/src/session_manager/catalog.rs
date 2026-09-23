@@ -10,7 +10,7 @@ use super::{
         state_database_has_current_migrations, state_threads_schema, CURRENT_STATE_REQUIRED_COLUMNS,
     },
     util::{
-        non_empty, sha256_file, system_time_to_rfc3339, timestamp_millis_to_rfc3339,
+        non_empty, system_time_to_rfc3339, timestamp_millis_to_rfc3339,
         timestamp_seconds_to_rfc3339, truncate_text,
     },
 };
@@ -152,7 +152,6 @@ pub(super) fn conversation_from_path(
     root: &Path,
     path: &Path,
     status: &str,
-    include_sha: bool,
     session_index: &SessionIndex,
 ) -> Result<ConversationItem, String> {
     let metadata = fs::metadata(path)
@@ -184,12 +183,6 @@ pub(super) fn conversation_from_path(
         .updated_at
         .clone()
         .or_else(|| system_time_to_rfc3339(metadata.modified().ok()));
-    let sha256 = if include_sha {
-        Some(sha256_file(path)?)
-    } else {
-        None
-    };
-
     Ok(ConversationItem {
         id,
         title,
@@ -200,7 +193,7 @@ pub(super) fn conversation_from_path(
         size_bytes: metadata.len(),
         cwd: summary.cwd,
         preview: summary.preview,
-        sha256,
+        sha256: None,
         parse_error: summary.parse_error,
     })
 }

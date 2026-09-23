@@ -178,7 +178,7 @@ pub(super) fn collect_export_bundle(
         };
         let item = match state_by_path.get(&conversation_path_key(&path)) {
             Some(item) => item.clone(),
-            None => match conversation_from_path(root, &path, &status, false, &session_index) {
+            None => match conversation_from_path(root, &path, &status, &session_index) {
                 Ok(item) => item,
                 Err(err) => {
                     bundle.errors.push(err);

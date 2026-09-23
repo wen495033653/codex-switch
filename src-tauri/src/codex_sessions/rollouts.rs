@@ -183,7 +183,7 @@ fn sync_rollout_files_to_provider_with_diagnostics(
     let mut provider_change_counts = BTreeMap::new();
 
     for path in rollout_files {
-        match sync_rollout_file_provider_with_diagnostics(&path, target_provider, trigger) {
+        match sync_rollout_file_provider(&path, target_provider) {
             Ok(outcome) if outcome.changed => {
                 updated += 1;
                 if let Some(from_provider) = outcome.from_provider {
@@ -296,10 +296,9 @@ fn rollout_meta_provider(meta: &Value) -> String {
     }
 }
 
-fn sync_rollout_file_provider_with_diagnostics(
+fn sync_rollout_file_provider(
     path: &Path,
     target_provider: &str,
-    _trigger: Option<&str>,
 ) -> Result<RolloutFileSyncOutcome, String> {
     let original_modified = fs::metadata(path)
         .and_then(|metadata| metadata.modified())

@@ -76,7 +76,7 @@ pub(super) fn preview_conversation_impl(
     // when the state DB has no row for this path.
     let item = match current_state_conversation_for_path(&root, &path, &session_index)? {
         Some(item) => item,
-        None => conversation_from_path(&root, &path, &status, false, &session_index)?,
+        None => conversation_from_path(&root, &path, &status, &session_index)?,
     };
     let page = read_preview_message_page(
         &path,
