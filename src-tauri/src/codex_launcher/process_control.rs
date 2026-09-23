@@ -574,16 +574,24 @@ mod tests {
         confirmed.unwrap();
         assert!(killed.unwrap());
         assert!(wait_for_pids_exit(&[u64::from(child.id())], 2000).is_empty());
-        // On macOS a SIGKILLed process drops out of the process list (its KERN_PROCARGS2 read
-        // fails) while it is still tearing down, a moment before waitpid can reap it, so the
-        // exit status is polled instead of read once.
+        assert!(
+            child_exit_status(&mut child).is_some(),
+            "child was not terminated"
+        );
+    }
+
+    /// On macOS a SIGKILLed process drops out of the process list (its KERN_PROCARGS2 read
+    /// fails) while it is still tearing down, a moment before waitpid can reap it, so a test
+    /// polls the exit status instead of reading it once right after the kill.
+    fn child_exit_status(child: &mut Child) -> Option<std::process::ExitStatus> {
         let deadline = Instant::now() + StdDuration::from_secs(5);
-        let mut status = child.try_wait().unwrap();
-        while status.is_none() && Instant::now() < deadline {
+        loop {
+            let status = child.try_wait().unwrap();
+            if status.is_some() || Instant::now() >= deadline {
+                return status;
+            }
             thread::sleep(StdDuration::from_millis(20));
-            status = child.try_wait().unwrap();
         }
-        assert!(status.is_some(), "child was not terminated");
     }
 
     #[test]
@@ -683,7 +691,10 @@ mod tests {
         kill_root_process_trees(&tree).unwrap();
 
         assert!(get_alive_pids(&[parent_pid, child_pid]).is_empty());
-        assert!(parent.try_wait().unwrap().is_some());
+        assert!(
+            child_exit_status(&mut parent).is_some(),
+            "parent was not terminated"
+        );
         let entries = crate::session_sync_diagnostics::get_dev_log_entries();
         let killed_pids = entries
             .as_array()

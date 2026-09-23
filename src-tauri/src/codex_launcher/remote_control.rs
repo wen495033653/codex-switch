@@ -1110,9 +1110,21 @@ mod tests {
             child.kill().unwrap();
             child.wait().unwrap();
         }
-        fs::remove_dir_all(&dir).unwrap();
-        assert!(found.contains(&u64::from(legacy.id())), "{found:?}");
-        assert!(!found.contains(&u64::from(desktop.id())), "{found:?}");
+        let legacy_found = found.contains(&u64::from(legacy.id()));
+        let desktop_found = found.contains(&u64::from(desktop.id()));
+        // Windows keeps the image of a just-exited executable (and a scanner may hold a fresh
+        // copy) locked for a moment, so removing the temp copy is retried. A copy that stays
+        // behind in the temp directory does not change what the scan returned.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while let Err(err) = fs::remove_dir_all(&dir) {
+            if std::time::Instant::now() >= deadline {
+                eprintln!("fixture cleanup left {}: {err}", dir.display());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(legacy_found, "{found:?}");
+        assert!(!desktop_found, "{found:?}");
     }
 
     #[test]
