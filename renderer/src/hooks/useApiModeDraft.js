@@ -26,8 +26,7 @@ function createEmptyApiProfileModal() {
     mode: 'add',
     profileId: '',
     draft: DEFAULT_SETTINGS.api_mode,
-    error: '',
-    precheck: null
+    error: ''
   };
 }
 
@@ -74,8 +73,7 @@ export function useApiModeDraft({
       mode: 'add',
       profileId: nextProfile.id,
       draft: nextProfile,
-      error: '',
-      precheck: null
+      error: ''
     });
   };
 
@@ -87,8 +85,7 @@ export function useApiModeDraft({
       mode: 'edit',
       profileId: profile.id,
       draft: profile,
-      error: '',
-      precheck: null
+      error: ''
     });
   };
 
@@ -100,7 +97,6 @@ export function useApiModeDraft({
     setApiProfileModal(prev => ({
       ...prev,
       error: '',
-      precheck: null,
       draft: {
         ...(prev.draft || DEFAULT_SETTINGS.api_mode),
         ...patch,

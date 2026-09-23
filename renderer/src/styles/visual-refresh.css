@@ -716,8 +716,7 @@ html[data-theme="light"] .empty-state-card {
 
 .api-check-model-trigger,
 .api-check-model-menu,
-.api-test-response-block,
-.api-profile-modal-precheck {
+.api-test-response-block {
   border-color: var(--border-default);
   background: var(--surface-raised);
 }
