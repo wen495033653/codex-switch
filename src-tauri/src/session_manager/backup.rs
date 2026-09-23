@@ -1,4 +1,5 @@
 use super::util::{backup_stamp, unique_sibling_path};
+#[cfg(not(test))]
 use crate::paths::app_data_dir;
 use std::{
     fs,
@@ -8,8 +9,18 @@ use std::{
 
 const SESSION_MANAGER_DATA_DIR: &str = "session-manager";
 
+#[cfg(not(test))]
 pub(super) fn session_manager_data_dir() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join(SESSION_MANAGER_DATA_DIR))
+}
+
+// Unit tests take real state DB and global state backups; they must not write into the user's
+// application data directory (same rule as the error log in session_sync_diagnostics).
+#[cfg(test)]
+pub(super) fn session_manager_data_dir() -> Result<PathBuf, String> {
+    Ok(std::env::temp_dir()
+        .join("codex-switch-session-manager-tests")
+        .join(SESSION_MANAGER_DATA_DIR))
 }
 
 pub(super) fn session_manager_backup_dir(reason: &str) -> Result<PathBuf, String> {
