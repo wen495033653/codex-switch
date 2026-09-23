@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n';
+import { formatCost, formatTokens, getWindow, hasUsage } from '../utils/usageStatsFormat';
 
 const ALL_MODELS_KEY = '__all__';
 
@@ -20,11 +21,6 @@ const UNPRICED_REASON_LABELS = {
   missing_cached_input_price: '缺少缓存输入价格'
 };
 
-function getWindow(stats, key) {
-  const value = stats && stats[key];
-  return value && typeof value === 'object' ? value : null;
-}
-
 function getObjectMap(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -33,28 +29,8 @@ function getByModel(windowStats) {
   return getObjectMap(windowStats && windowStats.by_model);
 }
 
-function hasUsage(windowStats) {
-  return Boolean(windowStats && Number(windowStats.total_tokens) > 0);
-}
-
-function formatTokens(value, language) {
-  const tokens = Number(value) || 0;
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M`;
-  if (tokens >= 10_000) return `${Math.round(tokens / 1_000)}K`;
-  return new Intl.NumberFormat(language).format(tokens);
-}
-
 function formatExactTokens(value, language) {
   return new Intl.NumberFormat(language).format(Number(value) || 0);
-}
-
-function formatCost(windowStats, t) {
-  if (!windowStats || windowStats.priced === false || windowStats.estimated_cost_usd === null) {
-    return t('未定价');
-  }
-  const cost = Number(windowStats.estimated_cost_usd) || 0;
-  if (cost > 0 && cost < 0.0001) return '<$0.0001';
-  return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
 }
 
 function formatLastUsed(value, language, t) {
