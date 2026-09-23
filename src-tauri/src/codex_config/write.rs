@@ -27,7 +27,9 @@ fn remove_table_lines(table_name: &str) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-fn table_bounds(lines: &[String], header: &str) -> Option<(usize, usize)> {
+/// `header` is the full `[table]` line. Returns the header index and the index of the next table
+/// header (or the line count).
+pub(crate) fn table_bounds(lines: &[String], header: &str) -> Option<(usize, usize)> {
     let start = lines.iter().position(|line| line.trim() == header)?;
     let mut end = lines.len();
     for (index, line) in lines.iter().enumerate().skip(start + 1) {
@@ -40,7 +42,7 @@ fn table_bounds(lines: &[String], header: &str) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
-fn format_toml_string(value: &str) -> String {
+pub(crate) fn format_toml_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 

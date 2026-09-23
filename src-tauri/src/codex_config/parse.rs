@@ -1,14 +1,14 @@
 use super::io::read_config_lines;
 use serde_json::{Map, Value};
 
-pub(super) fn find_root_table_index(lines: &[String]) -> Option<usize> {
+pub(crate) fn find_root_table_index(lines: &[String]) -> Option<usize> {
     lines.iter().position(|line| {
         let normalized = line.trim();
         normalized.starts_with('[') && normalized.ends_with(']')
     })
 }
 
-pub(super) fn root_assignment(line: &str) -> Option<(String, String)> {
+pub(crate) fn root_assignment(line: &str) -> Option<(String, String)> {
     let normalized = line.trim();
     if normalized.is_empty() || normalized.starts_with('#') || normalized.starts_with('[') {
         return None;

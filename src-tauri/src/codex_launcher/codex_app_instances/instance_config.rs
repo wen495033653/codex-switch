@@ -1,4 +1,7 @@
-use crate::api_config::API_PROVIDER_ID;
+use crate::{
+    api_config::API_PROVIDER_ID,
+    codex_config::{find_root_table_index, format_toml_string, root_assignment, table_bounds},
+};
 use std::{fs, path::Path};
 
 const API_WIRE_RESPONSES: &str = "responses";
@@ -58,7 +61,7 @@ fn merge_instance_config_lines(
             );
             let lines = upsert_root_config_entries(
                 &lines,
-                vec![("cli_auth_credentials_store", toml_string("file"))],
+                vec![("cli_auth_credentials_store", format_toml_string("file"))],
             );
             remove_table_lines(&lines, &api_provider_table)
         }
@@ -74,17 +77,17 @@ fn merge_instance_config_lines(
             let lines = upsert_root_config_entries(
                 &lines,
                 vec![
-                    ("model_provider", toml_string(API_PROVIDER_ID)),
-                    ("cli_auth_credentials_store", toml_string("file")),
+                    ("model_provider", format_toml_string(API_PROVIDER_ID)),
+                    ("cli_auth_credentials_store", format_toml_string("file")),
                 ],
             );
             set_table_config_entries(
                 &lines,
                 &api_provider_table,
                 vec![
-                    ("name", toml_string(API_PROVIDER_ID)),
-                    ("base_url", toml_string(base_url)),
-                    ("wire_api", toml_string(API_WIRE_RESPONSES)),
+                    ("name", format_toml_string(API_PROVIDER_ID)),
+                    ("base_url", format_toml_string(base_url)),
+                    ("wire_api", format_toml_string(API_WIRE_RESPONSES)),
                     ("supports_websockets", "false".to_string()),
                     ("requires_openai_auth", "true".to_string()),
                 ],
@@ -97,7 +100,7 @@ fn merge_instance_config_lines(
             &next_lines,
             vec![(
                 "model_instructions_file",
-                toml_string(model_instructions_file),
+                format_toml_string(model_instructions_file),
             )],
         )
     } else {
@@ -106,55 +109,9 @@ fn merge_instance_config_lines(
     next_lines = upsert_table_config_entries(
         &next_lines,
         "windows",
-        vec![("sandbox", toml_string(WINDOWS_SANDBOX_MODE))],
+        vec![("sandbox", format_toml_string(WINDOWS_SANDBOX_MODE))],
     );
     normalize_blank_lines(&next_lines)
-}
-
-fn toml_string(value: &str) -> String {
-    format_toml_string(value)
-}
-
-fn format_toml_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn find_root_table_index(lines: &[String]) -> Option<usize> {
-    lines.iter().position(|line| {
-        let normalized = line.trim();
-        normalized.starts_with('[') && normalized.ends_with(']')
-    })
-}
-
-fn root_assignment(line: &str) -> Option<(String, String)> {
-    let normalized = line.trim();
-    if normalized.is_empty() || normalized.starts_with('#') || normalized.starts_with('[') {
-        return None;
-    }
-    let (key, value) = normalized.split_once('=')?;
-    let key = key.trim();
-    if key.is_empty()
-        || !key
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
-    {
-        return None;
-    }
-    Some((key.to_string(), value.trim().to_string()))
-}
-
-fn table_bounds(lines: &[String], table_name: &str) -> Option<(usize, usize)> {
-    let header = format!("[{table_name}]");
-    let start = lines.iter().position(|line| line.trim() == header)?;
-    let mut end = lines.len();
-    for (index, line) in lines.iter().enumerate().skip(start + 1) {
-        let normalized = line.trim();
-        if normalized.starts_with('[') && normalized.ends_with(']') {
-            end = index;
-            break;
-        }
-    }
-    Some((start, end))
 }
 
 fn remove_root_config_entries(lines: &[String], keys: &[&str]) -> Vec<String> {
@@ -224,7 +181,7 @@ fn upsert_root_config_entries(lines: &[String], values: Vec<(&str, String)>) -> 
 }
 
 fn remove_table_lines(lines: &[String], table_name: &str) -> Vec<String> {
-    let Some((start, end)) = table_bounds(lines, table_name) else {
+    let Some((start, end)) = table_bounds(lines, &format!("[{table_name}]")) else {
         return lines.to_vec();
     };
     let mut next_lines = lines.to_vec();
@@ -270,7 +227,7 @@ fn upsert_table_config_entries(
     table_name: &str,
     values: Vec<(&str, String)>,
 ) -> Vec<String> {
-    let Some((start, end)) = table_bounds(lines, table_name) else {
+    let Some((start, end)) = table_bounds(lines, &format!("[{table_name}]")) else {
         return set_table_config_entries(lines, table_name, values);
     };
     let mut pending = values;

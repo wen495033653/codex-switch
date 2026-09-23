@@ -17,6 +17,7 @@
 - 定义在子模块里的 Tauri command，在 `main.rs` 里按真实路径注册（例如 `commands::account::capture_current`），所以该子模块是 `pub(crate) mod`。原因：普通的 `use` 转出带不走 `#[tauri::command]` 生成的隐藏宏。
 - 只被 `#[cfg(windows)]` 或 `#[cfg(target_os = "macos")]` 代码使用的导入，自己也要带同样的 `#[cfg]`。否则在另一个平台上是未使用导入，CI 会失败。
 - 读取设置值的纯判断函数放在 `settings`（例如 `settings/remote_control.rs`），不要放在使用方，否则会在 `accounts` 和 `codex_launcher` 之间造成循环依赖。
+- `config.toml` 的逐行解析与格式化（`find_root_table_index`、`root_assignment`、`table_bounds`、`format_toml_string`）只在 `codex_config` 里实现，多开实例的 `instance_config` 直接复用（2026-09-23 删除了它的逐字副本；`table_bounds` 接收完整的 `[table]` 行）。
 - 读写文件、枚举或结束进程、访问网络、调用 `open::that` 的 Tauri command 写成 `async fn`，工作交给 `blocking_task::run_blocking`。原因见下方“Tauri command 的执行线程”。
 
 ## Tauri command 的执行线程（2026-09-23）
