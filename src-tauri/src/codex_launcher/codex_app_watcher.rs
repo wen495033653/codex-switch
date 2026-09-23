@@ -19,7 +19,6 @@ use std::{
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 const WATCHER_INTERVAL_MS: u64 = 5_000;
-const TAKEOVER_GRACE_MS: u64 = 500;
 const PENDING_RELAUNCH_TTL_MS: u64 = 30_000;
 const SUPPRESSED_OPEN_TTL_MS: u64 = 30_000;
 const OPEN_ABSENCE_RESET_MS: u64 = 3_000;
@@ -263,7 +262,6 @@ where
     F: Fn(&[CodexProcess]) -> Result<CodexAppOpenOutcome, String>,
 {
     let mut candidate_signature: Option<CodexAppOpenSignature> = None;
-    let mut candidate_since: Option<Instant> = None;
     let mut open_signature: Option<CodexAppOpenSignature> = None;
     let mut pending_relaunch_executables = Vec::<String>::new();
     let mut pending_relaunch_until: Option<Instant> = None;
@@ -287,7 +285,7 @@ where
                     json!({ "error": err.clone() }),
                 );
                 update_current_codex_app_processes(Vec::new(), Some(err));
-                reset_candidate(&mut candidate_signature, &mut candidate_since);
+                candidate_signature = None;
                 sleep_interval();
                 continue;
             }
@@ -300,7 +298,7 @@ where
         }
 
         if processes.is_empty() {
-            reset_candidate(&mut candidate_signature, &mut candidate_since);
+            candidate_signature = None;
             if pending_relaunch_executables.is_empty()
                 && open_signature.is_some()
                 && open_absence_elapsed(&mut open_absence_since, now)
@@ -340,7 +338,7 @@ where
             );
             open_signature = Some(signature.clone());
             last_open_handler_at = Instant::now();
-            reset_candidate(&mut candidate_signature, &mut candidate_since);
+            candidate_signature = None;
             sleep_interval();
             continue;
         }
@@ -388,7 +386,7 @@ where
             last_open_handler_at.elapsed(),
         );
         if open_signature.as_ref() == Some(&signature) && !periodic_reconcile {
-            reset_candidate(&mut candidate_signature, &mut candidate_since);
+            candidate_signature = None;
             sleep_interval();
             continue;
         }
@@ -403,28 +401,17 @@ where
                     "intervalMs": OPEN_RECONCILE_INTERVAL_MS
                 }),
             );
-            reset_candidate(&mut candidate_signature, &mut candidate_since);
         } else {
-            if candidate_signature.as_ref() != Some(&signature) {
+            if !confirm_open_candidate(&mut candidate_signature, &signature) {
                 log_session_sync_event(
                     "codex_app_watcher_open_candidate_seen",
                     json!({
                         "signature": codex_open_signature_log_value(&signature),
                         "executables": executable_keys.clone(),
                         "processes": codex_processes_log_value(&processes),
-                        "graceMs": TAKEOVER_GRACE_MS
+                        "graceMs": WATCHER_INTERVAL_MS
                     }),
                 );
-                candidate_signature = Some(signature.clone());
-                candidate_since = Some(now);
-                sleep_interval();
-                continue;
-            }
-
-            if candidate_since
-                .map(|started| started.elapsed() < StdDuration::from_millis(TAKEOVER_GRACE_MS))
-                .unwrap_or(true)
-            {
                 sleep_interval();
                 continue;
             }
@@ -442,7 +429,7 @@ where
                 );
                 open_signature = Some(signature.clone());
                 last_open_handler_at = Instant::now();
-                reset_candidate(&mut candidate_signature, &mut candidate_since);
+                candidate_signature = None;
                 sleep_interval();
                 continue;
             }
@@ -482,7 +469,7 @@ where
             }
             None => {}
         }
-        reset_candidate(&mut candidate_signature, &mut candidate_since);
+        candidate_signature = None;
 
         sleep_interval();
     }
@@ -569,12 +556,17 @@ fn should_periodically_reconcile(
         && elapsed >= StdDuration::from_millis(OPEN_RECONCILE_INTERVAL_MS)
 }
 
-fn reset_candidate(
+// A new process set is handled only when the next scan, one watcher interval later, still sees
+// the same root processes; the first sighting only records the candidate.
+fn confirm_open_candidate(
     candidate_signature: &mut Option<CodexAppOpenSignature>,
-    candidate_since: &mut Option<Instant>,
-) {
-    *candidate_signature = None;
-    *candidate_since = None;
+    signature: &CodexAppOpenSignature,
+) -> bool {
+    if candidate_signature.as_ref() == Some(signature) {
+        return true;
+    }
+    *candidate_signature = Some(signature.clone());
+    false
 }
 
 fn sleep_interval() {
@@ -1011,6 +1003,22 @@ mod tests {
             codex_open_signature(&first),
             codex_open_signature(&reused_pid)
         );
+    }
+
+    #[test]
+    fn new_process_set_is_confirmed_only_by_the_next_scan() {
+        let first = CodexAppOpenSignature {
+            root_processes: vec![(10, 100)],
+        };
+        let replaced = CodexAppOpenSignature {
+            root_processes: vec![(20, 200)],
+        };
+        let mut candidate = None;
+
+        assert!(!confirm_open_candidate(&mut candidate, &first));
+        assert!(!confirm_open_candidate(&mut candidate, &replaced));
+        assert!(confirm_open_candidate(&mut candidate, &replaced));
+        assert_eq!(candidate, Some(replaced));
     }
 
     #[test]

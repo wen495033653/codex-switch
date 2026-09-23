@@ -4,6 +4,7 @@
 
 - watcher 发现 Codex 打开后，如果开启了会话同步且会话的 provider 与当前模式不一致，就走“结束 Codex → 同步会话 → 以 CDP 模式重新打开”。界面上的“重启 Codex”（`restart_current_codex_app_normal`）走同样的“结束 → 同步 → 重新打开”，以普通模式打开。
 - 命令都是 async + `spawn_blocking`，等待进程不占用调用线程。
+- watcher 每 5000ms 扫描一次。新出现的进程集合（按根进程的 PID 与启动时间）要在下一次扫描时仍然相同才调用打开处理，首次看到只记为候选，日志 `codex_app_watcher_open_candidate_seen` 的 `graceMs` 是 5000。2026-09-23 之前代码里另有 `TAKEOVER_GRACE_MS = 500` 的比较，它比扫描间隔短，从来不会成立，日志却写 `graceMs: 500`；删掉它没有改变接管时机。没有把确认缩短到 500ms：那会让 Codex 更早被结束，也更容易把短暂出现的进程（例如单实例转交后立即退出的第二个进程）当成新打开，这需要真实运行验证，现有真实运行记录都基于约 5 秒的确认。
 - 结束前校验可执行路径。`taskkill` 最长 10000ms，超时就结束该命令；清理最多 1000ms，stdout 和 stderr 各最多等 500ms；之后等待目标退出的上限是 12000ms。两路输出并发读取，避免管道写满。
 - 失败时返回 PID、退出状态、单独的 `exitCode`、`elapsedMs`、两路输出和清理结果，非 UTF-8 输出用 `rawBase64` 保留原字节。所有调用方都向上传递 `Result`，不忽略错误。
 - 普通模式启动后，确认同一个子进程句柄持续存活 1500ms；提前退出（包括 `exitCode=0`）按失败返回，不重试、不伪装成功。这只证明进程存活，不代表窗口或业务就绪。CDP 模式用实际的 CDP 注入来确认。
@@ -37,6 +38,11 @@
 - IDE 快照 `capture_open_ide_snapshot` 本来就只刷新 cmd 和 exe，没有用 `new_all`。试过先按名称筛候选再读 cmd/exe，本机 380 个进程下 235ms 对 236–385ms，开销主要在逐进程打开句柄取启动时间，收益不明显，没有提交。
 
 ## 验证记录
+
+### 2026-09-23：watcher 候选确认
+
+- 代码确认：候选首次出现后固定睡 `WATCHER_INTERVAL_MS`（5000ms）再进入下一轮，`elapsed < TAKEOVER_GRACE_MS(500)` 永远为假；git 历史里两个常量的每一版（3000/2000、2000/500、5000/500）宽限都小于间隔。
+- 单元测试 `new_process_set_is_confirmed_only_by_the_next_scan`：首次出现不确认、换成另一组进程重新计为候选、下一次扫描相同才确认。完整 `cargo test`、fmt、Clippy all-targets 通过。行为未变，没有真实运行。
 
 ### 2026-09-23：远程控制运行时的错误不再被当成成功
 
