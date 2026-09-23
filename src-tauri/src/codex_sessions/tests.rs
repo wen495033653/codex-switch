@@ -1227,7 +1227,7 @@ fn append_to(path: &Path, text: &str) {
 fn preflight_checks_appended_lines_and_reuses_unchanged_results() {
     let sessions_dir = unique_sessions_dir("preflight-append");
     let path = sessions_dir.join("rollout-append.jsonl");
-    write_rollout_file(&path, "openai", r"E:\Project\ai");
+    write_rollout_file(&path, "openai", r"D:\Workspace\preflight");
     assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
     assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
 
@@ -1250,7 +1250,7 @@ fn preflight_checks_appended_lines_and_reuses_unchanged_results() {
 fn preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time() {
     let sessions_dir = unique_sessions_dir("preflight-sync");
     let path = sessions_dir.join("rollout-sync.jsonl");
-    write_rollout_file(&path, "aaaa", r"E:\Project\ai");
+    write_rollout_file(&path, "aaaa", r"D:\Workspace\preflight");
     assert_eq!(preview_rollouts(&sessions_dir, "bbbb"), 1);
     let before = fs::metadata(&path).unwrap();
 
@@ -1277,7 +1277,7 @@ fn preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time() {
 fn preflight_checks_a_file_rewritten_by_someone_else_from_the_start() {
     let sessions_dir = unique_sessions_dir("preflight-rewrite");
     let path = sessions_dir.join("rollout-rewrite.jsonl");
-    write_rollout_file(&path, "openai", r"E:\Project\ai");
+    write_rollout_file(&path, "openai", r"D:\Workspace\preflight");
     assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
 
     let rewritten = fs::read_to_string(&path)
