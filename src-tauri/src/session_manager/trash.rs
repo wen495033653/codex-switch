@@ -21,7 +21,10 @@ use super::{
     },
     util::{dedupe_strings, sha256_file, system_time_to_rfc3339},
 };
-use crate::{codex_sessions::lock_codex_session_io, time_util::now_string};
+use crate::{
+    codex_sessions::lock_codex_session_io, session_sync_diagnostics::log_session_sync_event,
+    time_util::now_string,
+};
 use serde_json::{json, Value};
 use std::{collections::HashSet, fs, path::Path};
 
@@ -212,14 +215,25 @@ pub(super) fn delete_conversations_locked(
             "Codex global state 清理失败，已删除会话仍保留在回收站: {err}"
         ));
     }
+    if desktop_error.is_some() || global_state_error.is_some() {
+        log_session_sync_event(
+            "session_manager_delete_cleanup_error",
+            json!({
+                "root": root.to_string_lossy().to_string(),
+                "deleted": delete_ids.len(),
+                "desktopError": desktop_error,
+                "globalStateError": global_state_error
+            }),
+        );
+    }
 
     Ok(json!({
-        "ok": errors.is_empty(),
-        "message": if errors.is_empty() {
-            format!("已删除 {} 个会话", delete_ids.len())
-        } else {
-            format!("已删除 {} 个会话，{} 个失败", delete_ids.len(), errors.len())
-        },
+        "ok": errors.is_empty() && desktop_error.is_none() && global_state_error.is_none(),
+        "message": outcome_message(
+            &format!("已删除 {} 个会话", delete_ids.len()),
+            &errors,
+            &warnings
+        ),
         "delete_ids": delete_ids.clone(),
         "report": {
             "deleted": delete_ids.len(),
@@ -232,6 +246,19 @@ pub(super) fn delete_conversations_locked(
             "warnings": warnings
         }
     }))
+}
+
+/// The page only shows `message`, so cleanup failures that leave Codex Desktop out of step
+/// (a deleted session still listed, an overwritten one still indexed) are spelled out there.
+fn outcome_message(done: &str, errors: &[String], warnings: &[String]) -> String {
+    let mut message = done.to_string();
+    if !errors.is_empty() {
+        message.push_str(&format!("，{} 个失败：{}", errors.len(), errors.join("；")));
+    }
+    if !warnings.is_empty() {
+        message.push_str(&format!("；{}", warnings.join("；")));
+    }
+    message
 }
 
 pub(super) fn list_deleted_sessions_impl() -> Result<Value, String> {
@@ -386,13 +413,24 @@ pub(super) fn restore_deleted_sessions_locked(
         }
     }
 
+    if !warnings.is_empty() {
+        log_session_sync_event(
+            "session_manager_restore_cleanup_error",
+            json!({
+                "restored": restored_delete_ids.len(),
+                "trashRetained": trash_retained,
+                "warnings": warnings
+            }),
+        );
+    }
+
     Ok(json!({
-        "ok": errors.is_empty(),
-        "message": if errors.is_empty() {
-            format!("已恢复 {} 个会话", restored_delete_ids.len())
-        } else {
-            format!("已恢复 {} 个会话，{} 个失败", restored_delete_ids.len(), errors.len())
-        },
+        "ok": errors.is_empty() && warnings.is_empty(),
+        "message": outcome_message(
+            &format!("已恢复 {} 个会话", restored_delete_ids.len()),
+            &errors,
+            &warnings
+        ),
         "report": {
             "restored": restored_delete_ids.len(),
             "restored_delete_ids": restored_delete_ids,
@@ -545,4 +583,25 @@ pub(super) fn preview_deleted_conversation_from_dir(
         "warnings": [],
         "parse_error": summary.parse_error
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outcome_message;
+
+    #[test]
+    fn outcome_message_spells_out_failures_and_cleanup_warnings() {
+        assert_eq!(
+            outcome_message("已删除 2 个会话", &[], &[]),
+            "已删除 2 个会话"
+        );
+        assert_eq!(
+            outcome_message(
+                "已删除 2 个会话",
+                &["a.jsonl: 读取失败".to_string()],
+                &["Codex Desktop state 清理失败，已删除会话仍保留在回收站: database is locked".to_string()]
+            ),
+            "已删除 2 个会话，1 个失败：a.jsonl: 读取失败；Codex Desktop state 清理失败，已删除会话仍保留在回收站: database is locked"
+        );
+    }
 }
