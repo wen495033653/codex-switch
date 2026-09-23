@@ -135,9 +135,7 @@ fn sync_remote_control_runtime_after_proxy_change(settings: &Value) -> Value {
         return json!({ "changed": false });
     }
 
-    match remote_control::restart_remote_control_runtime_for_current_settings(
-        "set_codex_proxy_env_enabled",
-    ) {
+    match sync_remote_control_runtime_for_current_settings("set_codex_proxy_env_enabled") {
         Ok(changed) => json!({ "changed": changed }),
         Err(err) => {
             let error = err.clone();

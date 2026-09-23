@@ -42,6 +42,7 @@
 - 启动函数只在“已启动”和“出错”两种结果间返回，以前的 `Result<bool>` 从不返回 `Ok(false)`，改为 `Result<()>`，删掉 `Ok(false)` 分支和只做转调的 `launch_executable_with_options`、`relaunch_executable`。`relaunch_codex_executable_for_current_settings` 在可执行文件不存在时仍返回 `Ok(false)`，保留 `bool`。
 - 重启 Codex 的循环里每个可执行文件要么启动成功要么带错误返回，调用方已拒绝空列表，原来的“一个都没重新打开”错误分支不可达，删除。
 - 重开编辑器时非 Codex 的程序（VS Code）启动失败后等 300ms 重试一次；以前第二次失败后又多睡 300ms 才返回，且只返回最后一次错误。现在不多等，错误写成“第 1 次: …；第 2 次: …”。
+- 删除只转调 `sync_remote_control_runtime_for_current_settings` 的别名 `restart_remote_control_runtime_for_current_settings`，唯一调用方（保存代理后的远程控制同步）改为直接调用，行为不变。
 - 验证：`relaunch_retry_waits_once_and_returns_both_failures`（不存在的可执行文件，耗时 300–600ms，两次错误都在）；`process_control::tests` 真实子进程用例和完整 `cargo test`、fmt、Clippy all-targets 通过。没有真实重启 Codex 或 VS Code。
 
 ## 验证记录

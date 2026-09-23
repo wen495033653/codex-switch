@@ -574,12 +574,6 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
     Ok(changed)
 }
 
-pub(crate) fn restart_remote_control_runtime_for_current_settings(
-    context: &str,
-) -> Result<bool, String> {
-    sync_remote_control_runtime_for_current_settings(context)
-}
-
 fn remote_control_backend_environment_status(settings: &Value) -> Result<Option<Value>, String> {
     if !remote_control_enabled_from_settings(settings)
         || !remote_control_mixed_config_applied(settings)?
