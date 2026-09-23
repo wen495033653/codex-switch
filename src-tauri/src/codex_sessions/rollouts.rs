@@ -323,6 +323,11 @@ fn sync_rollout_file_provider(
     }
 
     if changed {
+        // The rewrite truncates the file in place. When Codex is still running (a close that
+        // failed, or reopening editors) it may have appended since the read; writing now would
+        // drop those lines, so the file is left alone and reported instead. This narrows the
+        // window to the write itself; it does not close it.
+        ensure_rollout_unchanged_since_read(path, content.len(), original_modified)?;
         let wrote = write_existing_file(path, &updated_content, "写入 Codex session 文件")?;
         if wrote {
             fs::OpenOptions::new()
@@ -340,6 +345,33 @@ fn sync_rollout_file_provider(
         changed,
         from_provider: changed.then_some(from_provider),
     })
+}
+
+fn ensure_rollout_unchanged_since_read(
+    path: &Path,
+    read_len: usize,
+    read_modified: std::time::SystemTime,
+) -> Result<(), String> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        // A file removed since the read is handled by write_existing_file (never recreated).
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "复核 Codex session 文件失败 {}: {err}",
+                path.display()
+            ))
+        }
+    };
+    let current_len = metadata.len();
+    let current_modified = metadata.modified().ok();
+    if current_len != read_len as u64 || current_modified != Some(read_modified) {
+        return Err(format!(
+            "Codex session 文件在同步期间被写入（读取时 {read_len} 字节，写入前 {current_len} 字节），为避免丢失新内容已跳过 {}",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Result<bool, String> {
@@ -613,5 +645,40 @@ fn update_model_provider_fields(value: &mut Value, target_provider: &str) -> boo
             changed
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod append_guard_tests {
+    use super::ensure_rollout_unchanged_since_read;
+    use std::{
+        env, fs,
+        io::Write,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn rollout_appended_after_the_read_is_not_rewritten() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("codex-switch-append-guard-{stamp}.jsonl"));
+        fs::write(&path, "{\"type\":\"session_meta\"}\n").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        let read_len = metadata.len() as usize;
+        let read_modified = metadata.modified().unwrap();
+
+        ensure_rollout_unchanged_since_read(&path, read_len, read_modified).unwrap();
+
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"type\":\"event_msg\"}\n")
+            .unwrap();
+        let err = ensure_rollout_unchanged_since_read(&path, read_len, read_modified).unwrap_err();
+        assert!(err.contains("同步期间被写入"), "{err}");
+        fs::remove_file(path).unwrap();
     }
 }

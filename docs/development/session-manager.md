@@ -91,7 +91,8 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - **回收站只在恢复时校验内容。** 完整性要保证的是“恢复出来的内容等于删除时的内容”，在要放到位的副本上校验一次就够；列表和预览只是展示。代价：同样大小但内容损坏的备份仍会出现在列表里，恢复时才报 SHA-256 不匹配（测试 `restore_rejects_a_same_size_corrupted_backup` 固定了这一行为）。
 - **不按 mtime 预筛“最近 50 个 rollout”。** 活动时间取自文件尾部事件的时间戳，mtime 与它可以无关：现有测试 `sync_uses_combined_activity_time_limit` 就把 mtime 设成与活动时间相反的顺序；导入、恢复、“修改 ID”或复制目录会让大量旧会话获得新 mtime，按 mtime 取前 2×limit 会把真正最近的会话挤出候选。同步回写会恢复 mtime（`rollouts.rs` 写后 `set_modified`），但这不足以保证等价。
 - **`"model_provider"` / `"session_meta"` 字面量预筛的前提**：Codex 用 serde 写 JSONL，键名不会被转义（`_` 之类）。只有这种人为转义的行才会与“逐行解析”的结果不同。
-- **`.codex-global-state.json` 的写入放在 `codex_sessions`。** `session_manager` 已依赖 `codex_sessions`（I/O 锁），反向不行。两套旧实现都不是原子写（一个 `fs::write`，一个截断后原地写）；合并时保留了“只写已存在的文件”的一套。本分支基于 `347da53`，那里还没有 `atomic_file`；`main` 上已有 `atomic_file::write_file_atomically`，是否换成它见待决事项。
+- **`.codex-global-state.json` 的写入放在 `codex_sessions`。** `session_manager` 已依赖 `codex_sessions`（I/O 锁），反向不行。两套旧实现都不是原子写（一个 `fs::write`，一个截断后原地写）；合并时保留了“只写已存在的文件”的一套，之后在 `main` 上换成了 `atomic_file::write_file_atomically`。
+- **rollout 回写仍是原地写，但写前复核（2026-09-23）。** 关闭 Codex 失败后的直接同步、重开编辑器前的同步都可能在 Codex 仍运行时改写 rollout。这里不能换成临时文件 + rename：Codex 手里的追加句柄会继续写进被替换掉的旧文件，新内容永久丢失。改为写入前比对文件长度和修改时间，与读取时不一致（Codex 在这期间追加过）就跳过该文件并作为同步错误报告，避免截断掉新追加的行；复核与写入之间仍有极短窗口。测试 `rollout_appended_after_the_read_is_not_rewritten`。
 - **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `session_sync_diagnostics` 的错误日志同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
 
 ## 验证记录
