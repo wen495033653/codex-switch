@@ -1,4 +1,5 @@
 use crate::{
+    blocking_task::run_blocking,
     json_util::{bool_field, raw_string_field, string_field},
     settings::{read_settings_value, update_settings_value},
 };
@@ -34,8 +35,11 @@ pub(crate) fn install_update(runtime: State<'_, Arc<UpdateRuntime>>) -> Result<V
 }
 
 #[tauri::command]
-pub(crate) fn dismiss_update_version(version: String) -> Result<Value, String> {
-    dismiss_update_version_impl(version)
+pub(crate) async fn dismiss_update_version(version: String) -> Result<Value, String> {
+    run_blocking("忽略更新版本", move || {
+        dismiss_update_version_impl(version)
+    })
+    .await
 }
 
 async fn check_update_impl(

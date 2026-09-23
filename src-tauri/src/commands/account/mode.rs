@@ -16,8 +16,7 @@ use crate::{
     settings::{default_api_mode, read_settings_value, update_settings_value},
 };
 use serde_json::{json, Value};
-use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::AppHandle;
 
 fn codex_session_sync_enabled(settings: &Value) -> bool {
     settings
@@ -181,7 +180,7 @@ pub(super) fn delete_account_impl(id: String) -> Result<Value, String> {
 pub(super) fn switch_account_impl(
     app: AppHandle,
     id: String,
-    runtime: State<'_, Arc<IdeRuntime>>,
+    runtime: &IdeRuntime,
 ) -> Result<Value, String> {
     let profile_id = id.trim();
     if profile_id.is_empty() {
@@ -194,7 +193,7 @@ pub(super) fn switch_account_impl(
     update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
-        runtime.inner().as_ref(),
+        runtime,
         profile_id.to_string(),
         false,
         session_sync_enabled.then(|| "openai".to_string()),
@@ -216,7 +215,7 @@ pub(super) fn switch_account_impl(
 }
 
 pub(super) fn switch_api_mode_impl(
-    runtime: State<'_, Arc<IdeRuntime>>,
+    runtime: &IdeRuntime,
     profile_id: Option<String>,
 ) -> Result<Value, String> {
     let requested_profile_id = profile_id.unwrap_or_default().trim().to_string();
@@ -264,7 +263,7 @@ pub(super) fn switch_api_mode_impl(
     }
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
-        runtime.inner().as_ref(),
+        runtime,
         active_profile_id.clone(),
         true,
         session_sync_enabled.then(|| "api".to_string()),

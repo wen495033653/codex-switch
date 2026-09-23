@@ -7,6 +7,7 @@ use tauri::Manager;
 mod accounts;
 mod api_config;
 mod atomic_file;
+mod blocking_task;
 mod codex_app_server;
 mod codex_config;
 mod codex_launcher;

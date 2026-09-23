@@ -1,4 +1,5 @@
 use crate::{
+    blocking_task::run_blocking,
     session_sync_diagnostics::log_session_sync_event,
     settings::{remote_control_enabled_from_settings, update_settings_value},
 };
@@ -33,11 +34,10 @@ pub(crate) fn start_codex_app_watcher() {
 
 #[tauri::command]
 pub(crate) async fn get_current_codex_app_processes() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    run_blocking("检测 Codex 进程", || {
         codex_app_watcher::current_codex_app_processes_value(&codex_desktop_support_status())
     })
     .await
-    .map_err(|err| format!("后台检测 Codex 进程失败: {err}"))?
 }
 
 #[tauri::command]
@@ -50,18 +50,31 @@ pub(crate) async fn restart_current_codex_app_normal() -> Result<Value, String> 
 }
 
 #[tauri::command]
-pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<Value, String> {
-    codex_app_instances::open_codex_app_instance(app, payload)
+pub(crate) async fn open_codex_app_instance(
+    app: AppHandle,
+    payload: Value,
+) -> Result<Value, String> {
+    run_blocking("打开 Codex 多开实例", move || {
+        codex_app_instances::open_codex_app_instance(app, payload)
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
-    codex_app_instances::show_codex_app_instance(payload)
+pub(crate) async fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
+    run_blocking("显示 Codex 多开窗口", move || {
+        codex_app_instances::show_codex_app_instance(payload)
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
-    codex_app_instances::get_codex_app_instance_status()
+pub(crate) async fn get_codex_app_instance_status() -> Result<Value, String> {
+    run_blocking(
+        "读取 Codex 多开状态",
+        codex_app_instances::get_codex_app_instance_status,
+    )
+    .await
 }
 
 async fn run_codex_restart(
@@ -69,10 +82,7 @@ async fn run_codex_restart(
     restart: impl FnOnce() -> Result<Value, String> + Send + 'static,
 ) -> Result<Value, String> {
     let started = Instant::now();
-    let result = tauri::async_runtime::spawn_blocking(restart)
-        .await
-        .map_err(|err| format!("后台重启 Codex 任务失败: {err}"))
-        .and_then(|result| result);
+    let result = run_blocking("重启 Codex", restart).await;
     if let Err(err) = &result {
         crate::session_sync_diagnostics::log_session_sync_event(
             "codex_app_restart_command_error",
@@ -83,11 +93,18 @@ async fn run_codex_restart(
 }
 
 #[tauri::command]
-pub(crate) fn set_codex_proxy_env_enabled(
+pub(crate) async fn set_codex_proxy_env_enabled(
     enabled: bool,
     proxy_url: String,
 ) -> Result<Value, String> {
-    let proxy_url = proxy_env::set_codex_proxy_env_file_enabled(enabled, &proxy_url)?;
+    run_blocking("保存 Codex 代理", move || {
+        set_codex_proxy_env_enabled_impl(enabled, &proxy_url)
+    })
+    .await
+}
+
+fn set_codex_proxy_env_enabled_impl(enabled: bool, proxy_url: &str) -> Result<Value, String> {
+    let proxy_url = proxy_env::set_codex_proxy_env_file_enabled(enabled, proxy_url)?;
     let mut patch = json!({
         "codex_proxy_env_enabled": enabled
     });
@@ -181,19 +198,19 @@ mod proxy_settings_tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "FIXTURE_VALUE=preserved\n").unwrap();
         update_settings_value(&json!({"codex_remote_control_enabled": false})).unwrap();
-        let enabled = set_codex_proxy_env_enabled(true, "127.0.0.1:10808".into()).unwrap();
+        let enabled = set_codex_proxy_env_enabled_impl(true, "127.0.0.1:10808").unwrap();
         assert_eq!(enabled["restartRequired"], true);
         assert!(enabled["message"].as_str().unwrap().contains("重启 Codex"));
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("FIXTURE_VALUE=preserved"));
         assert!(content.contains("HTTP_PROXY=http://127.0.0.1:10808"));
-        let disabled = set_codex_proxy_env_enabled(false, String::new()).unwrap();
+        let disabled = set_codex_proxy_env_enabled_impl(false, "").unwrap();
         assert_eq!(disabled["restartRequired"], true);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "FIXTURE_VALUE=preserved\n"
         );
-        assert!(set_codex_proxy_env_enabled(true, String::new())
+        assert!(set_codex_proxy_env_enabled_impl(true, "")
             .unwrap_err()
             .contains("代理地址不能为空"));
     }

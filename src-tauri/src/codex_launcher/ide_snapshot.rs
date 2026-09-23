@@ -1,5 +1,6 @@
 use crate::{
     accounts::store_payload,
+    blocking_task::run_blocking,
     json_util::{bool_field, string_field, value_u64_field},
     time_util::now_string,
 };
@@ -105,10 +106,18 @@ pub(crate) fn capture_open_ide_snapshot() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn restart_open_ides(
+pub(crate) async fn restart_open_ides(
     snapshot_id: String,
     runtime: State<'_, Arc<IdeRuntime>>,
 ) -> Result<Value, String> {
+    let runtime = Arc::clone(runtime.inner());
+    run_blocking("重新打开编辑器", move || {
+        restart_open_ides_impl(&snapshot_id, &runtime)
+    })
+    .await
+}
+
+fn restart_open_ides_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<Value, String> {
     let id = snapshot_id.trim();
     if id.is_empty() {
         return Err("编辑器快照 ID 不能为空".to_string());
@@ -172,10 +181,18 @@ pub(crate) fn restart_open_ides(
 }
 
 #[tauri::command]
-pub(crate) fn discard_ide_snapshot(
+pub(crate) async fn discard_ide_snapshot(
     snapshot_id: String,
     runtime: State<'_, Arc<IdeRuntime>>,
 ) -> Result<Value, String> {
+    let runtime = Arc::clone(runtime.inner());
+    run_blocking("忽略编辑器重启", move || {
+        discard_ide_snapshot_impl(&snapshot_id, &runtime)
+    })
+    .await
+}
+
+fn discard_ide_snapshot_impl(snapshot_id: &str, runtime: &IdeRuntime) -> Result<Value, String> {
     let id = snapshot_id.trim();
     if !id.is_empty() {
         if let Some(pending) = runtime

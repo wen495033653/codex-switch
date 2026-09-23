@@ -1,6 +1,7 @@
 use super::apply_complete_api_mode_profile_if_active;
 use crate::{
     accounts::store_payload,
+    blocking_task::run_blocking,
     codex_config::ensure_config_file,
     codex_launcher::apply_codex_proxy_env_state_to_settings,
     desktop::{sync_system_auto_start, validate_system_auto_start},
@@ -23,8 +24,8 @@ use tauri::AppHandle;
 use tauri::{path::BaseDirectory, Manager};
 
 #[tauri::command]
-pub(crate) fn get_store() -> Result<Value, String> {
-    store_payload(None)
+pub(crate) async fn get_store() -> Result<Value, String> {
+    run_blocking("读取账号", || store_payload(None)).await
 }
 
 #[tauri::command]
@@ -48,7 +49,11 @@ pub(crate) fn get_data_dir() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn open_data_dir() -> Result<Value, String> {
+pub(crate) async fn open_data_dir() -> Result<Value, String> {
+    run_blocking("打开数据目录", open_data_dir_impl).await
+}
+
+fn open_data_dir_impl() -> Result<Value, String> {
     let path = app_data_dir()?;
     fs::create_dir_all(&path).map_err(|err| format!("创建数据目录失败: {err}"))?;
     open::that(&path).map_err(|err| format!("打开数据目录失败: {err}"))?;
@@ -59,21 +64,28 @@ pub(crate) fn open_data_dir() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn get_settings() -> Result<Value, String> {
-    Ok(json!({
-        "ok": true,
-        "settings": apply_codex_proxy_env_state_to_settings(read_settings_value()?)?
-    }))
+pub(crate) async fn get_settings() -> Result<Value, String> {
+    run_blocking("读取设置", || {
+        Ok(json!({
+            "ok": true,
+            "settings": apply_codex_proxy_env_state_to_settings(read_settings_value()?)?
+        }))
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
+pub(crate) async fn update_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
+    run_blocking("保存设置", move || update_settings_impl(&app, &patch)).await
+}
+
+fn update_settings_impl(app: &AppHandle, patch: &Value) -> Result<Value, String> {
     let should_sync_auto_start =
-        has_key(&patch, "auto_start") || has_key(&patch, "auto_start_launch_mode");
-    let should_apply_api_mode = has_key(&patch, "api_mode");
+        has_key(patch, "auto_start") || has_key(patch, "auto_start_launch_mode");
+    let should_apply_api_mode = has_key(patch, "api_mode");
     let desired_auto_start = if should_sync_auto_start {
-        Some(if has_key(&patch, "auto_start") {
-            bool_field(&patch, "auto_start")
+        Some(if has_key(patch, "auto_start") {
+            bool_field(patch, "auto_start")
         } else {
             bool_field(&read_settings_value()?, "auto_start")
         })
@@ -83,12 +95,12 @@ pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, Str
     if let Some(enabled) = desired_auto_start {
         validate_system_auto_start(enabled)?;
     }
-    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(&patch)?)?;
+    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(patch)?)?;
     if should_apply_api_mode {
         apply_complete_api_mode_profile_if_active(&settings)?;
     }
     if let Some(enabled) = desired_auto_start {
-        sync_system_auto_start(&app, enabled)?;
+        sync_system_auto_start(app, enabled)?;
     }
     Ok(json!({
         "ok": true,
@@ -98,14 +110,25 @@ pub(crate) fn update_settings(app: AppHandle, patch: Value) -> Result<Value, Str
 }
 
 #[tauri::command]
-pub(crate) fn set_codex_model_instructions_enabled(
+pub(crate) async fn set_codex_model_instructions_enabled(
     app: AppHandle,
+    enabled: bool,
+    overwrite_local: Option<bool>,
+) -> Result<Value, String> {
+    run_blocking("切换模型指令", move || {
+        set_codex_model_instructions_enabled_impl(&app, enabled, overwrite_local)
+    })
+    .await
+}
+
+fn set_codex_model_instructions_enabled_impl(
+    app: &AppHandle,
     enabled: bool,
     overwrite_local: Option<bool>,
 ) -> Result<Value, String> {
     let backup_path = if enabled {
         let preparation =
-            prepare_model_instructions_for_enable(&app, overwrite_local).map_err(|err| {
+            prepare_model_instructions_for_enable(app, overwrite_local).map_err(|err| {
                 crate::session_sync_diagnostics::log_session_sync_event(
                     "model_instructions_prepare_error",
                     json!({ "enabled": enabled, "overwriteLocal": overwrite_local, "error": err }),
@@ -128,7 +151,7 @@ pub(crate) fn set_codex_model_instructions_enabled(
             }
         }
     } else {
-        sync_codex_model_instructions_config(&app, false)?;
+        sync_codex_model_instructions_config(app, false)?;
         None
     };
 
@@ -184,7 +207,11 @@ pub(crate) fn copy_text(text: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn open_external_url(url: String) -> Result<Value, String> {
+pub(crate) async fn open_external_url(url: String) -> Result<Value, String> {
+    run_blocking("打开外部链接", move || open_external_url_impl(&url)).await
+}
+
+fn open_external_url_impl(url: &str) -> Result<Value, String> {
     let target = url.trim();
     if !(target.starts_with("https://") || target.starts_with("http://")) {
         return Err("外部链接仅支持 http/https".to_string());
@@ -480,28 +507,34 @@ fn api_test_token_number(value: &Value, key: &str) -> Option<u64> {
 }
 
 #[tauri::command]
-pub(crate) fn open_codex_config_toml() -> Result<Value, String> {
-    let path = ensure_config_file()?;
-    open::that(&path).map_err(|err| format!("打开 config.toml 失败: {err}"))?;
-    Ok(json!({
-        "ok": true,
-        "path": path.to_string_lossy().to_string()
-    }))
+pub(crate) async fn open_codex_config_toml() -> Result<Value, String> {
+    run_blocking("打开 config.toml", || {
+        let path = ensure_config_file()?;
+        open::that(&path).map_err(|err| format!("打开 config.toml 失败: {err}"))?;
+        Ok(json!({
+            "ok": true,
+            "path": path.to_string_lossy().to_string()
+        }))
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn list_brand_voice_files(app: AppHandle) -> Value {
-    let files = app
-        .path()
-        .resolve("voice-pack", BaseDirectory::Resource)
-        .ok()
-        .map(|dir| collect_mp3_files(&dir))
-        .unwrap_or_default();
+pub(crate) async fn list_brand_voice_files(app: AppHandle) -> Result<Value, String> {
+    run_blocking("读取语音包", move || {
+        let files = app
+            .path()
+            .resolve("voice-pack", BaseDirectory::Resource)
+            .ok()
+            .map(|dir| collect_mp3_files(&dir))
+            .unwrap_or_default();
 
-    json!({
-        "ok": true,
-        "files": files
+        Ok(json!({
+            "ok": true,
+            "files": files
+        }))
     })
+    .await
 }
 
 fn collect_mp3_files(dir: &Path) -> Vec<String> {

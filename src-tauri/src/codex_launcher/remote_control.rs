@@ -9,6 +9,7 @@ use crate::{
         read_store_value, set_api_mode, set_subscription_mode, write_account_auth,
     },
     api_config::API_PROVIDER_ID,
+    blocking_task::run_blocking,
     codex_config::{
         read_root_config, read_table_config, remove_config_values, remove_remote_control_config,
         remove_table_config, set_config_values, set_table_config,
@@ -669,9 +670,7 @@ fn attach_remote_control_auto_disabled_response(
 
 #[tauri::command]
 pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(get_codex_remote_control_status_impl)
-        .await
-        .map_err(|err| format!("后台检测远程控制状态失败: {err}"))?
+    run_blocking("检测远程控制状态", get_codex_remote_control_status_impl).await
 }
 
 fn get_codex_remote_control_status_impl() -> Result<Value, String> {
@@ -781,7 +780,14 @@ fn get_codex_remote_control_status_impl() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, String> {
+pub(crate) async fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, String> {
+    run_blocking("切换远程控制", move || {
+        set_codex_remote_control_enabled_impl(enabled)
+    })
+    .await
+}
+
+fn set_codex_remote_control_enabled_impl(enabled: bool) -> Result<Value, String> {
     let codex_app_running =
         !super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty();
     if enabled {
@@ -825,7 +831,14 @@ pub(crate) fn set_codex_remote_control_enabled(enabled: bool) -> Result<Value, S
 }
 
 #[tauri::command]
-pub(crate) fn set_codex_remote_control_account_id(id: String) -> Result<Value, String> {
+pub(crate) async fn set_codex_remote_control_account_id(id: String) -> Result<Value, String> {
+    run_blocking("更新远程控制账号", move || {
+        set_codex_remote_control_account_id_impl(&id)
+    })
+    .await
+}
+
+fn set_codex_remote_control_account_id_impl(id: &str) -> Result<Value, String> {
     let account_id = id.trim();
     validate_remote_control_account_id(account_id)?;
 
