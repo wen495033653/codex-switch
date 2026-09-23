@@ -5,6 +5,7 @@ use super::{
 use crate::{
     api_config::normalize_api_base_url,
     json_util::string_field,
+    session_sync_diagnostics::log_session_sync_event_once,
     settings::{default_api_mode, read_settings_value},
 };
 use crate::{
@@ -56,7 +57,7 @@ fn read_auth_for_state() -> Value {
         Ok(Some(auth)) => auth,
         Ok(None) => json!({}),
         Err(err) => {
-            eprintln!("[codex_state] 读取 auth.json 失败，按空内容处理: {err}");
+            log_codex_state_read_error("auth.json", "按空内容处理", err);
             json!({})
         }
     }
@@ -67,10 +68,18 @@ fn read_config_for_state() -> Option<ConfigSnapshot> {
     match read_config_snapshot() {
         Ok(config) => Some(config),
         Err(err) => {
-            eprintln!("[codex_state] 读取 config.toml 失败，按空配置处理: {err}");
+            log_codex_state_read_error("config.toml", "按空配置处理", err);
             None
         }
     }
+}
+
+/// The state is read on every store update, so one lasting cause is recorded once per run.
+fn log_codex_state_read_error(file: &str, handling: &str, error: String) {
+    log_session_sync_event_once(
+        "codex_state_read_error",
+        json!({ "file": file, "handling": handling, "error": error }),
+    );
 }
 
 fn trimmed_string(value: Option<&Value>) -> String {

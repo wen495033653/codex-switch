@@ -8,13 +8,24 @@ use super::{
     parse::parse_session_file,
     pricing::estimate_cost,
 };
+use crate::session_sync_diagnostics::log_session_sync_event_once;
 use rusqlite::{params, Connection, Transaction};
+use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::SystemTime,
 };
+
+/// An unreadable session file is left out of the statistics. The page refreshes every 30 s,
+/// so each distinct failure is recorded once per run.
+fn log_scan_file_error(stage: &str, error: String) {
+    log_session_sync_event_once(
+        "usage_stats_scan_file_error",
+        json!({ "stage": stage, "error": error, "handling": "skipped" }),
+    );
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SessionFileStamp {
@@ -68,7 +79,7 @@ pub(super) fn scan_codex_sessions(
         let stamp = match session_file_stamp(&path) {
             Ok(stamp) => stamp,
             Err(err) => {
-                eprintln!("{err}");
+                log_scan_file_error("stamp", err);
                 continue;
             }
         };
@@ -89,7 +100,7 @@ pub(super) fn scan_codex_sessions(
         let parsed = match parse_session_file(&path) {
             Ok(parsed) => parsed,
             Err(err) => {
-                eprintln!("{err}");
+                log_scan_file_error("parse", err);
                 continue;
             }
         };

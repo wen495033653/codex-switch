@@ -5,27 +5,28 @@
 //! refresh therefore also reads the subscription endpoint; the claim stays as the fallback
 //! for accounts whose endpoint read has never succeeded.
 
+use super::auth_refresh::account_log_label;
 use crate::{
     accounts::{
         access_token_from_account, account_id_from_account, account_with_custom,
         find_store_account, get_subscription, set_subscription_state, update_store_account,
     },
     json_util::{raw_string_field, string_field, value_u64_field},
+    session_sync_diagnostics::log_session_sync_event,
 };
-use serde_json::Value;
-
-fn account_log_label(profile_id: &str) -> String {
-    profile_id.chars().take(8).collect()
-}
+use serde_json::{json, Value};
 
 fn log_subscription_error(profile_id: &str, error: &Value) {
-    eprintln!(
-        "[subscription] account={} 订阅信息刷新失败 code={:?} status={:?} message={:?} raw={:?}",
-        account_log_label(profile_id),
-        raw_string_field(error, "code"),
-        value_u64_field(error, "status"),
-        raw_string_field(error, "message"),
-        raw_string_field(error, "raw_message")
+    log_session_sync_event(
+        "account_subscription_refresh_error",
+        json!({
+            "account": account_log_label(profile_id),
+            "code": raw_string_field(error, "code"),
+            "status": value_u64_field(error, "status"),
+            "message": raw_string_field(error, "message"),
+            "rawMessage": raw_string_field(error, "raw_message"),
+            "handling": "keep_previous_snapshot"
+        }),
     );
 }
 
@@ -51,9 +52,13 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
     let account = match find_store_account(profile_id) {
         Ok(account) => account,
         Err(err) => {
-            eprintln!(
-                "[subscription] account={} 读取账号失败，跳过订阅信息刷新: {err}",
-                account_log_label(profile_id)
+            log_session_sync_event(
+                "account_subscription_account_read_error",
+                json!({
+                    "account": account_log_label(profile_id),
+                    "error": err,
+                    "handling": "skip_subscription_refresh"
+                }),
             );
             return None;
         }
@@ -88,19 +93,21 @@ pub(crate) fn refresh_account_subscription(profile_id: &str, timeout_ms: u64) ->
     match update {
         Ok(_) if !changed => None,
         Ok(store) => {
-            eprintln!(
-                "[subscription] account={} 订阅信息已更新 active_until={:?} will_renew={} is_delinquent={}",
-                account_log_label(profile_id),
-                string_field(&subscription, "active_until"),
-                subscription["will_renew"],
-                subscription["is_delinquent"]
+            log_session_sync_event(
+                "account_subscription_updated",
+                json!({
+                    "account": account_log_label(profile_id),
+                    "activeUntil": string_field(&subscription, "active_until"),
+                    "willRenew": subscription["will_renew"],
+                    "isDelinquent": subscription["is_delinquent"]
+                }),
             );
             Some(store)
         }
         Err(err) => {
-            eprintln!(
-                "[subscription] account={} 订阅信息写入失败: {err}",
-                account_log_label(profile_id)
+            log_session_sync_event(
+                "account_subscription_store_error",
+                json!({ "account": account_log_label(profile_id), "error": err }),
             );
             None
         }

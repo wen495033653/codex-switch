@@ -68,6 +68,12 @@ fn lock_account_rotation(profile_id: &str) -> AccountRotationGuard {
     }
 }
 
+/// Logs identify an account by the first 8 characters of its profile id (the ChatGPT account
+/// id prefix), never the full id, email or tokens.
+pub(super) fn account_log_label(profile_id: &str) -> String {
+    profile_id.chars().take(8).collect()
+}
+
 fn should_auto_refresh_account(account: &Value) -> bool {
     if normalize_tokens(account.get("tokens")).is_err() {
         return false;
@@ -187,17 +193,21 @@ fn refresh_due_account_tokens_once(app: &AppHandle) -> Result<Value, String> {
             Ok(DueRefresh::AlreadyRotated) => {}
             Err(err) => {
                 failed += 1;
-                match mark_account_auth_error(&profile_id, &err) {
-                    Ok(store) => emit_store_updated(app, store),
-                    Err(mark_err) => log_session_sync_event(
-                        "account_auth_auto_refresh_error",
-                        json!({
-                            "account": profile_id.chars().take(8).collect::<String>(),
-                            "error": err,
-                            "markError": mark_err
-                        }),
-                    ),
-                }
+                let mark_error = match mark_account_auth_error(&profile_id, &err) {
+                    Ok(store) => {
+                        emit_store_updated(app, store);
+                        None
+                    }
+                    Err(mark_err) => Some(mark_err),
+                };
+                log_session_sync_event(
+                    "account_auth_auto_refresh_error",
+                    json!({
+                        "account": account_log_label(&profile_id),
+                        "error": err,
+                        "markError": mark_error
+                    }),
+                );
             }
         }
     }
@@ -212,7 +222,10 @@ fn refresh_due_account_tokens_once(app: &AppHandle) -> Result<Value, String> {
 pub(crate) fn start_account_token_auto_refresher(app: AppHandle) {
     thread::spawn(move || loop {
         if let Err(err) = refresh_due_account_tokens_once(&app) {
-            eprintln!("认证自动刷新失败: {err}");
+            log_session_sync_event(
+                "account_auth_auto_refresh_pass_error",
+                json!({ "error": err, "nextRunSeconds": AUTO_AUTH_INTERVAL_SECONDS }),
+            );
         }
         thread::sleep(StdDuration::from_secs(AUTO_AUTH_INTERVAL_SECONDS));
     });

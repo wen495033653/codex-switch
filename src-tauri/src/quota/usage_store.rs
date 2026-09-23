@@ -1,5 +1,6 @@
 use super::{
-    auth_refresh::refresh_stored_account_tokens, subscription::refresh_account_subscription,
+    auth_refresh::{account_log_label, refresh_stored_account_tokens},
+    subscription::refresh_account_subscription,
 };
 use crate::{
     accounts::{
@@ -10,6 +11,7 @@ use crate::{
     },
     codex_session_usage::inherit_stored_usage_fields,
     events::emit_store_updated,
+    json_util::{raw_string_field, value_u64_field},
     session_sync_diagnostics::log_session_sync_event,
     time_util::now_string,
 };
@@ -38,7 +40,7 @@ pub(crate) fn sync_account_usage_in_background(
                 log_session_sync_event(
                     "account_usage_sync_store_error",
                     json!({
-                        "account": profile_id.chars().take(8).collect::<String>(),
+                        "account": account_log_label(&profile_id),
                         "usageOk": usage_ok,
                         "error": err
                     }),
@@ -67,6 +69,19 @@ pub(super) fn get_usage_with_auth_retry(
     match get_usage(access_token, account_id, timeout_ms) {
         Ok(usage_info) => Ok(usage_info),
         Err(error) if error_state_is_auth_rejected(&error) => {
+            // Evidence for the open question whether a 403 here is ever a Cloudflare page rather
+            // than a rejected token (docs/development/account-store.md, "待定").
+            log_session_sync_event(
+                "account_usage_rejected_error",
+                json!({
+                    "account": account_log_label(profile_id),
+                    "status": value_u64_field(&error, "status"),
+                    "code": raw_string_field(&error, "code"),
+                    "message": raw_string_field(&error, "message"),
+                    "rawMessage": truncate_for_log(&raw_string_field(&error, "raw_message")),
+                    "action": "rotate_tokens"
+                }),
+            );
             match refresh_stored_account_tokens(profile_id, Some(access_token)) {
                 Ok(store) => {
                     emit_store_updated(app, store);
@@ -79,14 +94,35 @@ pub(super) fn get_usage_with_auth_retry(
                     )
                 }
                 Err(refresh_err) => {
-                    if let Ok(store) = mark_account_auth_error(profile_id, &refresh_err) {
-                        emit_store_updated(app, store);
-                    }
+                    let mark_error = match mark_account_auth_error(profile_id, &refresh_err) {
+                        Ok(store) => {
+                            emit_store_updated(app, store);
+                            None
+                        }
+                        Err(mark_err) => Some(mark_err),
+                    };
+                    log_session_sync_event(
+                        "account_auth_retry_refresh_error",
+                        json!({
+                            "account": account_log_label(profile_id),
+                            "error": refresh_err,
+                            "markError": mark_error
+                        }),
+                    );
                     Err(error)
                 }
             }
         }
         Err(error) => Err(error),
+    }
+}
+
+/// Error bodies can be whole HTML pages; the start is enough to tell what answered.
+fn truncate_for_log(text: &str) -> String {
+    const LIMIT: usize = 300;
+    match text.char_indices().nth(LIMIT) {
+        Some((index, _)) => format!("{}…（共 {} 字符）", &text[..index], text.chars().count()),
+        None => text.to_string(),
     }
 }
 
@@ -180,6 +216,19 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn long_error_bodies_are_cut_for_the_log() {
+        assert_eq!(truncate_for_log("short"), "short");
+        let page = "<html>".repeat(100);
+        let cut = truncate_for_log(&page);
+        assert!(cut.starts_with("<html><html>"));
+        assert!(cut.ends_with("…（共 600 字符）"), "{cut}");
+        assert_eq!(
+            cut.chars().count(),
+            300 + "…（共 600 字符）".chars().count()
+        );
     }
 
     #[test]

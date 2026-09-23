@@ -81,19 +81,35 @@ fn main() {
                 );
                 return Ok(());
             }
-            if let Err(err) = sync_system_auto_start_from_settings(app.handle()) {
-                eprintln!("同步开机自启状态失败: {err}");
-            }
-            if let Err(err) = accounts::restore_api_mode_if_selected() {
-                eprintln!("恢复 Codex API 模式失败: {err}");
-            }
-            if let Err(err) =
-                commands::sync_codex_model_instructions_config_for_current_settings(app.handle())
-            {
-                eprintln!("同步 gpt破限配置失败: {err}");
-            }
-            if let Err(err) = usage_stats::record_current_attribution_if_available() {
-                eprintln!("记录当前 token 统计归属失败: {err}");
+            // Each startup step is independent; a failure is recorded and startup continues.
+            let startup_steps: [(&str, Result<(), String>); 4] = [
+                (
+                    "sync_system_auto_start",
+                    sync_system_auto_start_from_settings(app.handle()),
+                ),
+                (
+                    "restore_api_mode",
+                    accounts::restore_api_mode_if_selected().map(|_| ()),
+                ),
+                (
+                    "sync_model_instructions_config",
+                    commands::sync_codex_model_instructions_config_for_current_settings(
+                        app.handle(),
+                    )
+                    .map(|_| ()),
+                ),
+                (
+                    "record_usage_attribution",
+                    usage_stats::record_current_attribution_if_available().map(|_| ()),
+                ),
+            ];
+            for (step, result) in startup_steps {
+                if let Err(err) = result {
+                    session_sync_diagnostics::log_session_sync_event(
+                        "app_start_step_error",
+                        json!({ "step": step, "error": err }),
+                    );
+                }
             }
             let codex_desktop_status = codex_launcher::codex_desktop_support_status();
             let codex_desktop_supported = codex_desktop_status

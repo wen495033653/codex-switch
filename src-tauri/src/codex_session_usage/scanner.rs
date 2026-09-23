@@ -1,9 +1,20 @@
+use crate::session_sync_diagnostics::log_session_sync_event_once;
+use serde_json::json;
 use std::{
     cmp::Reverse,
     env, fs,
     path::{Path, PathBuf},
     time::SystemTime,
 };
+
+/// A directory or file the scan could not read is skipped. The scan runs every minute, so each
+/// distinct failure is recorded once per run.
+fn log_scan_error(error: String) {
+    log_session_sync_event_once(
+        "codex_session_usage_scan_error",
+        json!({ "error": error, "handling": "skipped" }),
+    );
+}
 
 pub(super) fn collect_recent_files(
     sessions_dir: &Path,
@@ -27,7 +38,7 @@ fn collect_recent_files_from_date_dirs(
         let month_dirs = match read_child_dirs(&year_dir, 2) {
             Ok(month_dirs) => month_dirs,
             Err(err) => {
-                eprintln!("{err}");
+                log_scan_error(err);
                 continue;
             }
         };
@@ -35,13 +46,13 @@ fn collect_recent_files_from_date_dirs(
             let day_dirs = match read_child_dirs(&month_dir, 2) {
                 Ok(day_dirs) => day_dirs,
                 Err(err) => {
-                    eprintln!("{err}");
+                    log_scan_error(err);
                     continue;
                 }
             };
             for (_, day_dir) in day_dirs {
                 if let Err(err) = collect_files_from_date_dir(&day_dir, files) {
-                    eprintln!("{err}");
+                    log_scan_error(err);
                 }
                 scanned_date_dirs += 1;
                 if scanned_date_dirs >= SESSION_DATE_DIR_SCAN_LIMIT {
@@ -65,7 +76,7 @@ fn read_child_dirs(dir: &Path, name_width: usize) -> Result<Vec<(String, PathBuf
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("读取 Codex session 目录条目失败: {err}");
+                log_scan_error(format!("读取 Codex session 目录条目失败: {err}"));
                 continue;
             }
         };
@@ -73,7 +84,10 @@ fn read_child_dirs(dir: &Path, name_width: usize) -> Result<Vec<(String, PathBuf
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(err) => {
-                eprintln!("读取 Codex session 目录类型失败 {}: {err}", path.display());
+                log_scan_error(format!(
+                    "读取 Codex session 目录类型失败 {}: {err}",
+                    path.display()
+                ));
                 continue;
             }
         };
@@ -102,7 +116,7 @@ fn collect_files_from_date_dir(
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("读取 Codex session 条目失败: {err}");
+                log_scan_error(format!("读取 Codex session 条目失败: {err}"));
                 continue;
             }
         };
@@ -110,7 +124,10 @@ fn collect_files_from_date_dir(
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(err) => {
-                eprintln!("读取 Codex session 文件类型失败 {}: {err}", path.display());
+                log_scan_error(format!(
+                    "读取 Codex session 文件类型失败 {}: {err}",
+                    path.display()
+                ));
                 continue;
             }
         };
@@ -160,10 +177,10 @@ impl RecentRolloutFiles {
         let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
             Ok(modified) => modified,
             Err(err) => {
-                eprintln!(
+                log_scan_error(format!(
                     "读取 Codex session 文件修改时间失败 {}: {err}",
                     path.display()
-                );
+                ));
                 return;
             }
         };
@@ -195,7 +212,7 @@ fn collect_recent_files_recursive(
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("读取 Codex session 条目失败: {err}");
+                log_scan_error(format!("读取 Codex session 条目失败: {err}"));
                 continue;
             }
         };
@@ -203,13 +220,16 @@ fn collect_recent_files_recursive(
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(err) => {
-                eprintln!("读取 Codex session 文件类型失败 {}: {err}", path.display());
+                log_scan_error(format!(
+                    "读取 Codex session 文件类型失败 {}: {err}",
+                    path.display()
+                ));
                 continue;
             }
         };
         if file_type.is_dir() {
             if let Err(err) = collect_recent_files_recursive(&path, files) {
-                eprintln!("{err}");
+                log_scan_error(err);
             }
             continue;
         }

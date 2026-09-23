@@ -18,6 +18,15 @@ use crate::{
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
+/// The switch itself succeeded; only the token statistics lose track of who owns the next
+/// sessions, so the failure is recorded rather than returned.
+fn log_attribution_error(owner_type: &str, error: String) {
+    crate::session_sync_diagnostics::log_session_sync_event(
+        "usage_stats_attribution_error",
+        json!({ "ownerType": owner_type, "error": error }),
+    );
+}
+
 fn codex_session_sync_enabled(settings: &Value) -> bool {
     settings
         .get("codex_session_sync_enabled")
@@ -205,7 +214,7 @@ pub(super) fn switch_account_impl(
     };
     let store = mark_store_account_used(profile_id)?;
     if let Err(err) = crate::usage_stats::record_attribution("subscription", profile_id, "openai") {
-        eprintln!("记录订阅 token 统计归属失败: {err}");
+        log_attribution_error("subscription", err);
     }
     refresh_active_account_usage_in_background(app);
     Ok(attach_ide_reopen(
@@ -259,7 +268,7 @@ pub(super) fn switch_api_mode_impl(
     if let Err(err) =
         crate::usage_stats::record_attribution("api_profile", &active_profile_id, "api")
     {
-        eprintln!("记录 API token 统计归属失败: {err}");
+        log_attribution_error("api_profile", err);
     }
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(

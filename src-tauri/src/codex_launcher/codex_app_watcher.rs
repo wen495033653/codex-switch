@@ -2,7 +2,7 @@ use super::{
     ide_snapshot::{codex_desktop_display_name, detect_ide_app},
     process_control::root_pids,
 };
-use crate::session_sync_diagnostics::log_session_sync_event;
+use crate::session_sync_diagnostics::{log_session_sync_event, log_session_sync_event_once};
 use crate::time_util::now_string;
 use serde_json::{json, Value};
 use std::{
@@ -242,7 +242,6 @@ where
                 .err()
                 .map(panic_payload_message)
                 .unwrap_or_else(|| "Watcher 意外退出".to_string());
-            eprintln!("Codex watcher 已停止，准备自动恢复: {panic}");
             log_session_sync_event(
                 "codex_app_watcher_panic_error",
                 json!({
@@ -279,8 +278,8 @@ where
         let processes = match running_codex_processes() {
             Ok(processes) => processes,
             Err(err) => {
-                eprintln!("Codex watcher 检测失败: {err}");
-                log_session_sync_event(
+                // Scanned every 5 s: one lasting cause is recorded once per run.
+                log_session_sync_event_once(
                     "codex_app_watcher_scan_error",
                     json!({ "error": err.clone() }),
                 );
@@ -495,7 +494,6 @@ where
         ),
     };
     disabled.store(true, Ordering::SeqCst);
-    eprintln!("Codex 自动处理失败，本次 Switch 运行期间不再自动重启 Codex: {error}");
     log_session_sync_event(
         event,
         json!({

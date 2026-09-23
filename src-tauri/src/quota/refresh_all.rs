@@ -90,7 +90,15 @@ pub(crate) fn start_background_quota_auto_refresher(
         let (enabled, interval_minutes) = match background_refresh_settings() {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("读取定时刷新全部账号设置失败: {err}");
+                log_session_sync_event(
+                    "background_refresh_settings_read_error",
+                    json!({
+                        "error": err,
+                        "handling": "use_defaults",
+                        "enabled": true,
+                        "intervalMinutes": BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES
+                    }),
+                );
                 (true, BACKGROUND_REFRESH_DEFAULT_INTERVAL_MINUTES)
             }
         };
@@ -101,11 +109,21 @@ pub(crate) fn start_background_quota_auto_refresher(
                         if let Err(err) =
                             begin_refresh_all_quotas(app.clone(), Arc::clone(&runtime), "auto")
                         {
-                            eprintln!("定时刷新全部账号失败: {err}");
+                            log_session_sync_event(
+                                "background_refresh_start_error",
+                                json!({ "error": err, "intervalMinutes": interval_minutes }),
+                            );
                         }
                     }
                 }
-                Err(err) => eprintln!("读取账号数据失败，已跳过定时刷新全部账号: {err}"),
+                Err(err) => log_session_sync_event(
+                    "background_refresh_store_read_error",
+                    json!({
+                        "error": err,
+                        "handling": "skip_this_round",
+                        "intervalMinutes": interval_minutes
+                    }),
+                ),
             }
         }
         thread::sleep(StdDuration::from_secs(interval_minutes * 60));

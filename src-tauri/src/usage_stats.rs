@@ -10,12 +10,14 @@ mod tests;
 
 use crate::{
     accounts::get_codex_state_value,
+    blocking_task::run_blocking,
     json_util::{raw_string_field, string_field},
     paths::codex_dir,
+    session_sync_diagnostics::log_session_sync_event_once,
     settings::read_settings_value,
     time_util::{now_string, parse_rfc3339_seconds},
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     path::Path,
     sync::{Mutex, OnceLock},
@@ -40,14 +42,15 @@ static USAGE_STATS_SCAN_LOCK: OnceLock<Mutex<Option<AggregateCache>>> = OnceLock
 
 #[tauri::command]
 pub(crate) async fn usage_stats_get() -> Result<Value, String> {
-    // The page polls silently and drops errors, and a failed refresh commits nothing, so the
-    // reason is logged here or a refresh that keeps failing would go unnoticed.
-    tauri::async_runtime::spawn_blocking(|| {
-        usage_stats_get_impl()
-            .inspect_err(|err| eprintln!("[usage_stats] 刷新 token 统计失败: {err}"))
+    // The page polls silently, and a failed refresh commits nothing, so the reason is logged here
+    // or a refresh that keeps failing would go unnoticed. It polls every 30 s, so each distinct
+    // failure is recorded once per run.
+    run_blocking("读取 token 统计", || {
+        usage_stats_get_impl().inspect_err(|err| {
+            log_session_sync_event_once("usage_stats_refresh_error", json!({ "error": err }))
+        })
     })
     .await
-    .map_err(|err| format!("读取 token 统计任务异常: {err}"))?
 }
 
 pub(crate) fn record_attribution(

@@ -54,6 +54,14 @@ TODO(verify): command 移出主线程后没有在真实界面上运行过。原�
 - `utils/errors.js` 引用 `i18n` 属于对基础层的依赖，不算越界。
 - `styles/visual-refresh.css` 是最后加载的改版层。能安全并回原文件的规则已经并回（提交 `ef77759`），剩下的并回后会改变样式或无法验证，保持原样。
 
+## 日志
+
+- 后端运行日志只走 `session_sync_diagnostics::log_session_sync_event`，不用 `eprintln!`：正式版是 `windows_subsystem = "windows"` 的窗口程序，没有控制台，stderr 的内容会全部丢失。唯一的例外是日志文件本身写不进去时的那一行。测试代码不受限制。
+- 失败事件名以 `_error` 结尾，才会追加到数据目录的 `logs/codex-switch-errors.jsonl`（5MB 轮转一次，保留一代）。其他事件只在 debug 构建的开发日志窗口里显示。
+- 事件详情要写判断依据：错误原文、HTTP status/code、原始响应的开头（长正文截到 300 字符）、处理方式（`handling`，例如 `skipped`、`use_defaults`）。账号只记 profile id 的前 8 位（`quota::auth_refresh::account_log_label`），不记完整 id、邮箱或 token。
+- 按分钟、按秒轮询的路径（watcher 扫描、当前账号额度同步、会话用量扫描、token 统计、状态读取）用 `log_session_sync_event_once`：同一事件加同一详情在一次运行里只记一次，避免持续失败时刷满日志。
+- 开发日志窗口里，没有专门摘要的错误事件也会原样显示，来源按事件名前缀归类（`account_`、`session_manager_`、`usage_stats_` 等）。
+
 ## 怎么验证
 
 - Rust：在 `src-tauri/` 下运行 `cargo fmt --check`、`cargo test`、`cargo clippy --all-targets -- -D warnings`。macOS 的代码本地编不了，以 CI 的 `Check Tauri (macos-latest)` 为准。

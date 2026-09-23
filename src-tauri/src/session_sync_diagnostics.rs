@@ -93,6 +93,18 @@ fn dev_log_source(event: &str) -> &'static str {
         "Codex App"
     } else if event.starts_with("ide_reopen_") {
         "IDE 重开"
+    } else if event.starts_with("account_") || event.starts_with("active_account_") {
+        "账号"
+    } else if event.starts_with("session_manager_") {
+        "会话管理"
+    } else if event.starts_with("usage_stats_") || event.starts_with("codex_session_usage_") {
+        "用量统计"
+    } else if event.starts_with("oauth_") {
+        "登录"
+    } else if event.starts_with("background_refresh_") || event.starts_with("refresh_all_") {
+        "定时刷新"
+    } else if event.starts_with("app_") || event.starts_with("window_state_") {
+        "应用"
     } else {
         "调试"
     }
@@ -187,6 +199,8 @@ fn dev_log_message(event: &str) -> &'static str {
         "codex_app_watcher_panic_error" => "Codex App Watcher 异常退出",
         "codex_desktop_data_migration_error" => "Codex Desktop 数据迁移失败",
         "codex_app_instance_data_migration_error" => "Codex 多开数据迁移失败",
+        "account_subscription_updated" => "订阅信息已更新",
+        event if is_error_event(event) => "错误（详见事件名与详情）",
         _ => "未知调试事件",
     }
 }
@@ -508,7 +522,10 @@ fn dev_log_details(event: &str, details: &Value) -> Option<Value> {
         | "codex_app_process_kill_finish"
         | "codex_app_process_kill_tree_exited"
         | "codex_app_launch_confirmation_error"
-        | "codex_app_launch_confirmation_finish" => Some(details.clone()),
+        | "codex_app_launch_confirmation_finish"
+        | "account_subscription_updated" => Some(details.clone()),
+        // Error events without a curated summary are shown as recorded rather than dropped.
+        event if is_error_event(event) => Some(details.clone()),
         _ => None,
     }
 }
@@ -538,6 +555,7 @@ fn dev_log_event_visible(event: &str) -> bool {
             | "session_sync_state_db_summary"
             | "ide_reopen_confirm_finish"
             | "ide_reopen_discard_without_config_apply"
+            | "account_subscription_updated"
     )
 }
 
@@ -666,6 +684,24 @@ pub(crate) fn get_dev_log_entries() -> Value {
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn error_events_without_a_curated_summary_still_reach_the_dev_log() {
+        let details = json!({ "account": "fixture1", "error": "fixture: HTTP 403" });
+        log_session_sync_event("account_fixture_dev_log_error", details.clone());
+
+        let entries = get_dev_log_entries();
+        let entry = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|entry| entry["details"]["event"] == "account_fixture_dev_log_error")
+            .expect("uncurated error event is shown");
+        assert_eq!(entry["level"], "error");
+        assert_eq!(entry["source"], "账号");
+        assert_eq!(entry["details"]["details"], details);
+    }
 
     #[test]
     fn permission_warning_stays_warn_through_disk_and_watcher_error_chain() {

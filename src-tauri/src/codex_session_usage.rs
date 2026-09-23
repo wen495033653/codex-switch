@@ -1,8 +1,9 @@
 mod parser;
 mod scanner;
 
+use crate::session_sync_diagnostics::log_session_sync_event_once;
 use parser::FileUsageProgress;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     fs,
@@ -58,9 +59,12 @@ fn latest_usage_info_in(
                 latest = parser::newer_usage_info(latest, usage_info);
             }
             Ok(None) => {}
-            Err(err) => {
-                eprintln!("{err}");
-            }
+            // One unreadable rollout must not hide the quota in the others; it runs every minute,
+            // so each distinct failure is recorded once per run.
+            Err(err) => log_session_sync_event_once(
+                "codex_session_usage_file_error",
+                json!({ "path": path.to_string_lossy(), "error": err, "handling": "skipped" }),
+            ),
         }
     }
     cache.retain(|cached_path, _| files.iter().any(|(_, path)| path == cached_path));

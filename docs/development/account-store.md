@@ -32,7 +32,7 @@
 
 ## 待定
 
-- `/wham/usage` 返回 Cloudflare 403 HTML 时是否也会触发一次轮换：代码上会（401 和 403 都算认证失败）。与 CPA 共用 refresh_token 的账号会因此失效（见 [subscription-refresh.md](subscription-refresh.md)）。目前没有 `/wham/usage` 返回 403 HTML 的现场记录，暂不改；出现时看错误日志里的 status 与 raw_message 再决定。
+- `/wham/usage` 返回 Cloudflare 403 HTML 时是否也会触发一次轮换：代码上会（401 和 403 都算认证失败）。与 CPA 共用 refresh_token 的账号会因此失效（见 [subscription-refresh.md](subscription-refresh.md)）。目前没有 `/wham/usage` 返回 403 HTML 的现场记录，暂不改。2026-09-23 起每次因 401/403 触发轮换都会在错误日志记一条 `account_usage_rejected_error`（`status`、`code`、`message`、`rawMessage` 前 300 字符）；出现 `status: 403` 且 `rawMessage` 是 HTML 页面时，就是改为“只在 401 时轮换”的证据。
 
 ## 验证记录
 
@@ -48,7 +48,7 @@
 
 ### 未验证
 
-TODO(verify): 真实运行下的并发轮换还没有观察过。原因：需要让自动认证刷新与刷新全部/手动刷新在同一账号上同时触发，离线测试只覆盖了锁本身。触发条件：安装包含本改动的版本后，第一次长时间离线（access_token 已过期）再启动应用，两个后台线程会在同一轮里处理同一批账号。检查：数据目录 `logs/codex-switch-errors.jsonl` 在启动后 5 分钟内不出现带 `refresh_token_reused` 的 `account_auth_auto_refresh_error`，账号卡片没有被标成认证失败；accounts.json 里每个账号的 `auth_status` 为 `active`。判据不成立时，从该错误记录的 `account` 前缀找到账号，对照 `quota/auth_refresh.rs::refresh_stored_account_tokens` 的 `stale_access_token` 判断是哪条路径做了第二次交换。
+TODO(verify): 真实运行下的并发轮换还没有观察过。原因：需要让自动认证刷新与刷新全部/手动刷新在同一账号上同时触发，离线测试只覆盖了锁本身。触发条件：安装包含本改动的版本后，第一次长时间离线（access_token 已过期）再启动应用，两个后台线程会在同一轮里处理同一批账号。检查：数据目录 `logs/codex-switch-errors.jsonl` 在启动后 5 分钟内不出现带 `refresh_token_reused` 的 `account_auth_auto_refresh_error` 或 `account_auth_retry_refresh_error`（2026-09-23 起每次失败都会记录，不再只在标记失败时记录），账号卡片没有被标成认证失败；accounts.json 里每个账号的 `auth_status` 为 `active`。判据不成立时，从该错误记录的 `account` 前缀找到账号，对照 `quota/auth_refresh.rs::refresh_stored_account_tokens` 的 `stale_access_token` 判断是哪条路径做了第二次交换。
 
 ## 回退
 

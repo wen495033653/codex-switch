@@ -4,6 +4,7 @@ use crate::{
     codex_session_usage,
     events::emit_store_updated,
     json_util::raw_string_field,
+    session_sync_diagnostics::log_session_sync_event_once,
     time_util::parse_rfc3339_seconds,
 };
 use serde_json::{json, Value};
@@ -107,10 +108,18 @@ fn refresh_active_account_usage_once(app: &AppHandle) -> Result<Value, String> {
     }
 }
 
+/// The timer runs every minute, so one lasting cause is recorded once per run and trigger.
+fn log_active_usage_sync_error(trigger: &str, error: String) {
+    log_session_sync_event_once(
+        "active_account_usage_sync_error",
+        json!({ "trigger": trigger, "error": error }),
+    );
+}
+
 pub(crate) fn refresh_active_account_usage_in_background(app: AppHandle) {
     thread::spawn(move || {
         if let Err(err) = refresh_active_account_usage_once(&app) {
-            eprintln!("当前账号配额同步失败: {err}");
+            log_active_usage_sync_error("account_switch", err);
         }
     });
 }
@@ -118,7 +127,7 @@ pub(crate) fn refresh_active_account_usage_in_background(app: AppHandle) {
 pub(crate) fn start_active_quota_auto_refresher(app: AppHandle) {
     thread::spawn(move || loop {
         if let Err(err) = refresh_active_account_usage_once(&app) {
-            eprintln!("当前账号配额同步失败: {err}");
+            log_active_usage_sync_error("timer", err);
         }
         thread::sleep(StdDuration::from_secs(ACTIVE_QUOTA_INTERVAL_SECONDS));
     });
