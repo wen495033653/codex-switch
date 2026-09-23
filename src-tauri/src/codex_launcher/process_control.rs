@@ -3,7 +3,7 @@ use crate::app_log::log_event;
 use serde_json::json;
 use std::process::Child;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     process::{Command, Stdio},
     thread,
@@ -165,18 +165,49 @@ fn terminate_process_tree(system: &System, _pid: u64, tree_pids: &[u64]) -> Resu
 }
 
 fn process_tree_pids(system: &System, root_pid: u64) -> Vec<u64> {
+    let processes = system
+        .processes()
+        .iter()
+        .map(|(pid, process)| TreeProcess {
+            pid: u64::from(pid.as_u32()),
+            parent_pid: process.parent().map(|parent| u64::from(parent.as_u32())),
+            start_time: process.start_time(),
+        })
+        .collect::<Vec<_>>();
+    tree_pids(root_pid, &processes)
+}
+
+struct TreeProcess {
+    pid: u64,
+    parent_pid: Option<u64>,
+    /// Seconds since the epoch.
+    start_time: u64,
+}
+
+/// Windows keeps a process's parent PID after the parent exits, and the PID can then be reused.
+/// An older, unrelated process whose parent PID now names a tree member is not a child: a real
+/// child never starts before its parent (start times have one-second resolution, so the same
+/// second still counts). Counting such a process made the termination wait for a process it
+/// never ends (CI 2026-09-23: treePids=[2788, 8200, 9188]; taskkill /T succeeded and 9188 was
+/// still alive 5 s later). Children of a root that is no longer listed are kept.
+fn tree_pids(root_pid: u64, processes: &[TreeProcess]) -> Vec<u64> {
+    let start_times = processes
+        .iter()
+        .map(|process| (process.pid, process.start_time))
+        .collect::<HashMap<_, _>>();
     let mut tree = vec![root_pid];
     let mut known = HashSet::from([root_pid]);
     loop {
         let mut added = false;
-        for (candidate_pid, process) in system.processes() {
-            let candidate_pid = u64::from(candidate_pid.as_u32());
-            if process
-                .parent()
-                .is_some_and(|parent| known.contains(&u64::from(parent.as_u32())))
-                && known.insert(candidate_pid)
-            {
-                tree.push(candidate_pid);
+        for process in processes {
+            let Some(parent_pid) = process.parent_pid else {
+                continue;
+            };
+            let started_before_parent = start_times
+                .get(&parent_pid)
+                .is_some_and(|parent_start| process.start_time < *parent_start);
+            if known.contains(&parent_pid) && !started_before_parent && known.insert(process.pid) {
+                tree.push(process.pid);
                 added = true;
             }
         }
@@ -745,6 +776,37 @@ mod tests {
                 .unwrap()
         );
         assert!(process_tree_kill_outcome(10, &[10], Ok(()), &[]).unwrap());
+    }
+
+    #[test]
+    fn process_that_only_shares_a_reused_parent_pid_is_not_in_the_tree() {
+        let process = |pid, parent_pid, start_time| TreeProcess {
+            pid,
+            parent_pid,
+            start_time,
+        };
+        let processes = [
+            process(100, Some(1), 50),
+            // Started in the same second as its parent: a real child.
+            process(200, Some(100), 50),
+            process(300, Some(200), 60),
+            // Older than 100: its parent PID was reused by 100, so it and its child stay out.
+            process(400, Some(100), 10),
+            process(500, Some(400), 70),
+        ];
+        assert_eq!(tree_pids(100, &processes), vec![100, 200, 300]);
+        // The root has already exited, so there is no start time to compare with.
+        assert_eq!(
+            tree_pids(700, &[process(800, Some(700), 5)]),
+            vec![700, 800]
+        );
+    }
+
+    #[test]
+    fn process_list_snapshot_carries_start_times() {
+        let pid = Pid::from_u32(std::process::id());
+        let system = process_list_snapshot(ProcessesToUpdate::Some(&[pid]));
+        assert!(system.process(pid).unwrap().start_time() > 0);
     }
 
     #[test]

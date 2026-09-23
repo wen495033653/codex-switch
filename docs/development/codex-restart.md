@@ -28,6 +28,12 @@
 - `kill_process_tree`：先快照目标进程树（根和全部后代），执行终止（Windows 用 `taskkill /F /T`，其他平台逐个 kill），再等待快照内的进程退出，上限 5000ms。成功只由“进程树全部退出”判定，两个平台一致。终止命令的返回值只作为依据记录：失败但树已退出时记 `codex_app_process_kill_tree_exited`（含 `treePids` 和 `terminationError` 原文）；仍有存活则返回错误，附存活 PID、`treePids` 和终止结果。
 - `kill_root_process_trees`：重启 Codex 和重开编辑器时只结束根进程（父进程不在同一应用的进程集合里），后代随进程树结束，之后仍等待全部 PID 退出。实测逐个结束 Electron helper 会让主进程把 helper 重新拉起，9 次 taskkill 约 9 秒后才轮到主进程。
 - watcher 识别根进程和上面的调用共用 `root_pids`。
+- 快照只把启动时间不早于父进程的进程算作后代（2026-09-23）。
+  - **原因。** Windows 在父进程退出后仍保留子进程记录的父 PID，这个 PID 之后可能被别的进程复用（`Win32_Process.ParentProcessId` 的官方说明）。一个更早启动、毫不相干的进程，会因此被当成树里某个进程的"子进程"，终止后等待它退出必然超时，整次结束被判为失败。
+  - **现场。** CI 2026-09-23 的 `actual_child_survives_confirmation_then_is_terminated`：`treePids=[2788, 8200, 9188]`，`taskkill /T` 返回成功，5 秒后 9188 仍存活。
+  - **推断。** 9188 属于上面这种情况。CI 上无法再查它是什么进程；本机构造复用 3000 次内没有轮到同一个 PID，所以没有复现。
+  - **比较规则。** 启动时间精度为秒，同一秒启动的仍算作子进程。根进程已不在列表里时，它的子进程照旧计入。
+  - **验证（离线）。** `process_that_only_shares_a_reused_parent_pid_is_not_in_the_tree` 用构造的数据覆盖：同一秒启动的子进程、比父进程早启动的"子进程"及其后代、根进程已退出。`process_list_snapshot_carries_start_times` 确认快照带启动时间。
 
 ## 进程枚举只取需要的字段（2026-09-23）
 
