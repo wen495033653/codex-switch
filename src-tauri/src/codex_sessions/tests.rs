@@ -1202,3 +1202,93 @@ fn malformed_json_lines_are_ignored() {
 
     assert_eq!(updated, None);
 }
+
+fn preview_rollouts(sessions_dir: &Path, target_provider: &str) -> usize {
+    preview_codex_session_rollout_dirs_to_provider_with_diagnostics(
+        &[sessions_dir.to_path_buf()],
+        target_provider,
+        &[],
+        None,
+    )
+    .unwrap()
+}
+
+fn append_to(path: &Path, text: &str) {
+    use std::io::Write as _;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+}
+
+#[test]
+fn preflight_checks_appended_lines_and_reuses_unchanged_results() {
+    let sessions_dir = unique_sessions_dir("preflight-append");
+    let path = sessions_dir.join("rollout-append.jsonl");
+    write_rollout_file(&path, "openai", r"E:\Project\ai");
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
+
+    // A line still being written is only judged once it is complete.
+    append_to(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"model_provider\":\"a",
+    );
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
+    append_to(&path, "pi\"}}\n");
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 1);
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 1);
+    // Another target provider is checked on its own.
+    assert_eq!(preview_rollouts(&sessions_dir, "api"), 1);
+
+    fs::remove_dir_all(&sessions_dir).unwrap();
+}
+
+#[test]
+fn preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time() {
+    let sessions_dir = unique_sessions_dir("preflight-sync");
+    let path = sessions_dir.join("rollout-sync.jsonl");
+    write_rollout_file(&path, "aaaa", r"E:\Project\ai");
+    assert_eq!(preview_rollouts(&sessions_dir, "bbbb"), 1);
+    let before = fs::metadata(&path).unwrap();
+
+    assert_eq!(
+        sync_codex_session_rollouts_to_provider(&sessions_dir, "bbbb").unwrap(),
+        1
+    );
+    let after = fs::metadata(&path).unwrap();
+    assert_eq!(after.len(), before.len());
+    assert!(
+        after
+            .modified()
+            .unwrap()
+            .duration_since(before.modified().unwrap())
+            .unwrap_or_default()
+            < StdDuration::from_secs(1)
+    );
+    assert_eq!(preview_rollouts(&sessions_dir, "bbbb"), 0);
+
+    fs::remove_dir_all(&sessions_dir).unwrap();
+}
+
+#[test]
+fn preflight_checks_a_file_rewritten_by_someone_else_from_the_start() {
+    let sessions_dir = unique_sessions_dir("preflight-rewrite");
+    let path = sessions_dir.join("rollout-rewrite.jsonl");
+    write_rollout_file(&path, "openai", r"E:\Project\ai");
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
+
+    let rewritten = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"openai\"", "\"api\"");
+    fs::write(
+        &path,
+        format!("{rewritten}{{\"type\":\"event_msg\",\"payload\":{{}}}}\n"),
+    )
+    .unwrap();
+    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 1);
+
+    fs::remove_dir_all(&sessions_dir).unwrap();
+}

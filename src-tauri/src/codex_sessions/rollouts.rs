@@ -2,10 +2,12 @@ use super::support::{provider_log_value, write_existing_file};
 use crate::{app_log::log_event, json_util::raw_string_field};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
-    io::{Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex, MutexGuard},
+    time::SystemTime,
 };
 
 // TODO(verify): only the 50 most recently active rollouts are rewritten, while the state DB is synced in
@@ -15,6 +17,60 @@ use std::{
 pub(super) const SESSION_SYNC_RECENT_ROLLOUT_LIMIT: usize = 50;
 
 const SESSION_SYNC_TAIL_SAMPLE_BYTES: u64 = 128 * 1024;
+
+const PREFLIGHT_RESUME_CHECK_BYTES: u64 = 64;
+
+/// What earlier preflights learned about each rollout file. The watcher runs a preflight every
+/// minute; without this it read the tail of every rollout and all of the 50 most recent ones
+/// each time (about 410 MB and 3.6 s on 2026-09-23). A sort key is reused while the file keeps
+/// its size and modification time. A provider check is reused the same way, and extended over
+/// the appended lines while the bytes before its offset still match.
+#[derive(Default)]
+struct RolloutPreflightCache {
+    sort_keys: HashMap<PathBuf, (FileStamp, String)>,
+    provider_checks: HashMap<PathBuf, ProviderCheck>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: SystemTime,
+}
+
+#[derive(Clone)]
+struct ProviderCheck {
+    target_provider: String,
+    stamp: FileStamp,
+    /// Complete lines before this offset were checked.
+    offset: u64,
+    resume_check: Vec<u8>,
+    would_change: bool,
+}
+
+static ROLLOUT_PREFLIGHT_CACHE: LazyLock<Mutex<RolloutPreflightCache>> =
+    LazyLock::new(Default::default);
+
+// Release builds abort on panic, so the lock can never be left poisoned there.
+fn preflight_cache() -> MutexGuard<'static, RolloutPreflightCache> {
+    ROLLOUT_PREFLIGHT_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The sync rewrites a file in place and then restores its modification time, so a same-length
+/// rewrite would look unchanged. It drops what the cache knows about the file instead.
+fn forget_cached_rollout(path: &Path) {
+    let mut cache = preflight_cache();
+    cache.sort_keys.remove(path);
+    cache.provider_checks.remove(path);
+}
+
+fn file_stamp(metadata: &fs::Metadata) -> Option<FileStamp> {
+    Some(FileStamp {
+        len: metadata.len(),
+        modified: metadata.modified().ok()?,
+    })
+}
 
 #[derive(Debug)]
 struct RolloutFileSyncOutcome {
@@ -329,6 +385,7 @@ fn sync_rollout_file_provider(
         // window to the write itself; it does not close it.
         ensure_rollout_unchanged_since_read(path, content.len(), original_modified)?;
         let wrote = write_existing_file(path, &updated_content, "写入 Codex session 文件")?;
+        forget_cached_rollout(path);
         if wrote {
             fs::OpenOptions::new()
                 .write(true)
@@ -375,17 +432,103 @@ fn ensure_rollout_unchanged_since_read(
 }
 
 fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Result<bool, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
-
-    for segment in content.split_inclusive('\n') {
-        let (line, _line_ending) = split_line_ending(segment);
-        if update_rollout_provider_line(line, target_provider)?.is_some() {
-            return Ok(true);
+    let read_error =
+        |err: std::io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
+    let metadata = fs::metadata(path).map_err(read_error)?;
+    let stamp = FileStamp {
+        len: metadata.len(),
+        modified: metadata.modified().map_err(read_error)?,
+    };
+    let previous = preflight_cache()
+        .provider_checks
+        .get(path)
+        .filter(|check| check.target_provider == target_provider)
+        .cloned();
+    if let Some(previous) = previous.as_ref() {
+        if previous.stamp == stamp {
+            return Ok(previous.would_change);
         }
     }
 
-    Ok(false)
+    let mut file = fs::File::open(path).map_err(read_error)?;
+    let resumed = match previous {
+        Some(previous)
+            if resumes_at(&mut file, previous.offset, &previous.resume_check)
+                .map_err(read_error)? =>
+        {
+            Some(previous)
+        }
+        _ => None,
+    };
+    // Each line decides on its own, so a file that already needs a change still does after more
+    // lines were appended.
+    let (offset, would_change) = match resumed {
+        Some(previous) if previous.would_change => (previous.offset, true),
+        Some(previous) => check_provider_lines(path, &mut file, previous.offset, target_provider)?,
+        None => check_provider_lines(path, &mut file, 0, target_provider)?,
+    };
+    let check_len = offset.min(PREFLIGHT_RESUME_CHECK_BYTES);
+    let mut resume_check = vec![0; check_len as usize];
+    file.seek(SeekFrom::Start(offset - check_len))
+        .and_then(|_| file.read_exact(&mut resume_check))
+        .map_err(read_error)?;
+    preflight_cache().provider_checks.insert(
+        path.to_path_buf(),
+        ProviderCheck {
+            target_provider: target_provider.to_string(),
+            stamp,
+            offset,
+            resume_check,
+            would_change,
+        },
+    );
+    Ok(would_change)
+}
+
+fn resumes_at(file: &mut fs::File, offset: u64, resume_check: &[u8]) -> std::io::Result<bool> {
+    let check_len = resume_check.len() as u64;
+    if offset < check_len || file.metadata()?.len() < offset {
+        return Ok(false);
+    }
+    let mut current = vec![0; resume_check.len()];
+    file.seek(SeekFrom::Start(offset - check_len))?;
+    file.read_exact(&mut current)?;
+    Ok(current == resume_check)
+}
+
+/// Checks the complete lines from `offset` on and stops at the first one that would change.
+/// Returns the offset after the last line checked. A trailing line without a newline is still
+/// being written and is checked once it is complete.
+fn check_provider_lines(
+    path: &Path,
+    file: &mut fs::File,
+    offset: u64,
+    target_provider: &str,
+) -> Result<(u64, bool), String> {
+    let read_error =
+        |err: std::io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
+    file.seek(SeekFrom::Start(offset)).map_err(read_error)?;
+    let mut reader = BufReader::new(&mut *file);
+    let mut offset = offset;
+    let mut segment = Vec::new();
+    loop {
+        segment.clear();
+        let read = reader.read_until(b'\n', &mut segment).map_err(read_error)?;
+        if read == 0 || segment.last() != Some(&b'\n') {
+            return Ok((offset, false));
+        }
+        offset += read as u64;
+        let segment = std::str::from_utf8(&segment).map_err(|err| {
+            format!(
+                "读取 Codex session 文件失败 {}: 不是有效的 UTF-8: {err}",
+                path.display()
+            )
+        })?;
+        let (line, _line_ending) = split_line_ending(segment);
+        if update_rollout_provider_line(line, target_provider)?.is_some() {
+            return Ok((offset, true));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -404,6 +547,7 @@ fn collect_recent_rollout_files_from_dirs(
             collect_rollout_file_candidates(dir, &mut files)?;
         }
     }
+    forget_missing_rollouts(dirs, &files);
     files.sort_by(|a, b| {
         b.sort_key
             .cmp(&a.sort_key)
@@ -442,7 +586,8 @@ fn collect_rollout_file_candidates(
         if file_type.is_dir() {
             collect_rollout_file_candidates(&path, files)?;
         } else if file_type.is_file() && is_rollout_jsonl(&path) {
-            let sort_key = rollout_activity_sort_key(&path);
+            let stamp = entry.metadata().ok().as_ref().and_then(file_stamp);
+            let sort_key = cached_rollout_activity_sort_key(&path, stamp);
             files.push(RolloutFileCandidate { path, sort_key });
         }
     }
@@ -454,6 +599,37 @@ fn is_rollout_jsonl(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .is_some_and(|file_name| file_name.starts_with("rollout-"))
         && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+}
+
+/// Drops cache entries of files under `dirs` that the walk no longer found (deleted, moved to
+/// the archive, or moved to the trash).
+fn forget_missing_rollouts(dirs: &[PathBuf], found: &[RolloutFileCandidate]) {
+    let found = found
+        .iter()
+        .map(|candidate| candidate.path.as_path())
+        .collect::<HashSet<_>>();
+    let stale = |path: &PathBuf| {
+        !found.contains(path.as_path()) && dirs.iter().any(|dir| path.starts_with(dir))
+    };
+    let mut cache = preflight_cache();
+    cache.sort_keys.retain(|path, _| !stale(path));
+    cache.provider_checks.retain(|path, _| !stale(path));
+}
+
+fn cached_rollout_activity_sort_key(path: &Path, stamp: Option<FileStamp>) -> String {
+    let Some(stamp) = stamp else {
+        return rollout_activity_sort_key(path);
+    };
+    if let Some((cached_stamp, sort_key)) = preflight_cache().sort_keys.get(path) {
+        if *cached_stamp == stamp {
+            return sort_key.clone();
+        }
+    }
+    let sort_key = rollout_activity_sort_key(path);
+    preflight_cache()
+        .sort_keys
+        .insert(path.to_path_buf(), (stamp, sort_key.clone()));
+    sort_key
 }
 
 fn rollout_activity_sort_key(path: &Path) -> String {

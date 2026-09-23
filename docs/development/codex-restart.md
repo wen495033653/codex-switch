@@ -37,6 +37,24 @@
 - 保留 `relaunch_running_codex_processes` 结束进程树后的 `wait_for_pids_exit(&pids, 12_000)`：`kill_process_tree` 在根进程已经退出时直接返回 `Ok(false)`，不结束也不等待它的后代，这时外层等待是唯一覆盖 watcher 列表里其余 PID 的检查。正常情况下它第一次检查就返回。
 - IDE 快照 `capture_open_ide_snapshot` 本来就只刷新 cmd 和 exe，没有用 `new_all`。试过先按名称筛候选再读 cmd/exe，本机 380 个进程下 235ms 对 236–385ms，开销主要在逐进程打开句柄取启动时间，收益不明显，没有提交。
 
+## 会话同步预检查的缓存（2026-09-23）
+
+- **问题。** watcher 每约 60 秒周期检查一次，每次都做会话同步预检查（`preview_codex_session_rollouts_to_provider_if_exists`）。这一步要读全部 rollout 文件末尾 128KB 来排出最近活跃的 50 个，再把这 50 个整份读进来逐行检查 provider。2026-09-23 实测每次读 411.6MB、耗时 3.6 秒，结果都是 0 项需要改。安装版空闲时每约 63 秒出现一次约 449MB 的读取，与之对应。
+- **做法。** 在 `codex_sessions/rollouts.rs` 的进程内缓存（`ROLLOUT_PREFLIGHT_CACHE`）里，按文件记住两样东西：
+  - **排序键。** 文件大小和修改时间不变就复用。
+  - **provider 检查结论。** 按目标 provider 分别记，同时记下已检查到的偏移和偏移前 64 字节：
+    - 文件没变，直接用上次的结论。
+    - 只追加了内容，只检查新增的完整行。
+    - 已判定"需要改"的文件，追加后结论不变，不再读取。
+    - 偏移前的字节对不上，从头检查。
+    - 未写完的最后一行等写完再检查。
+- **失效。** 同步改写文件后会恢复原修改时间，同长度的改写从大小和时间上看不出变化，所以 `sync_rollout_file_provider` 写入后会主动删掉这个文件的缓存。遍历时已找不到的文件（删除、移入归档或回收站），缓存也一起删掉。
+- **边界。** 缓存依赖"只有本程序的同步会原地改写并恢复修改时间"。如果别的程序同长度改写 rollout 并恢复修改时间，预检查会沿用旧结论，直到文件下一次变化。
+- **验证。**
+  - 离线：`preflight_checks_appended_lines_and_reuses_unchanged_results`（未写完的行、追加后结论改变、换目标 provider）、`preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time`（同步后大小、时间不变，结论变为 0）、`preflight_checks_a_file_rewritten_by_someone_else_from_the_start`。
+  - 真实数据（测试二进制对真实 `~/.codex` 只读）：第一次 420.36MB、3130ms；立即再做一次 0.66MB、28ms；60 秒后（Codex 正在写入）0.81MB、30ms。
+  - 安装版的空闲读盘量随 token 统计一起验证，见 [usage-stats.md](usage-stats.md) 的 TODO(verify)。
+
 ## 代码整理（2026-09-23）
 
 - 启动函数只在“已启动”和“出错”两种结果间返回，以前的 `Result<bool>` 从不返回 `Ok(false)`，改为 `Result<()>`，删掉 `Ok(false)` 分支和只做转调的 `launch_executable_with_options`、`relaunch_executable`。`relaunch_codex_executable_for_current_settings` 在可执行文件不存在时仍返回 `Ok(false)`，保留 `bool`。

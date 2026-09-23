@@ -112,7 +112,7 @@ TODO(verify)：新统计还没有在安装版里运行过。
 - **升级后检查。**
   - `meta.records_counted_after` 等于备份库 `MAX(session_scan_state.last_scanned_at)`。
   - 各卡片"全部"的 token 等于升级前的值加上升级后新增的用量。费用会变化：旧数据按新价格表重新计价。
-  - 让窗口保持可见、Codex 空闲 5 分钟，用 `Get-CimInstance Win32_Process` 每 30 秒采样 codex-switch 的 ReadTransferCount，确认没有每 30 秒约 63MB 的读取。
+  - 让窗口保持可见、Codex 空闲 5 分钟，用 `Get-CimInstance Win32_Process` 每 30 秒采样 codex-switch 的 ReadTransferCount。确认既没有每 30 秒约 63MB 的读取（token 统计），也没有每约 63 秒约 449MB 的读取（会话同步预检查，见 [codex-restart.md](codex-restart.md)）。
   - `logs/codex-switch-errors.jsonl` 里没有 `usage_stats_` 开头的错误。
 - **通过判据。** 以上 4 项全部满足。
 - **不通过时。** token 对不上，用备份库对比 `usage_totals` 和 `session_usage`，从 `db::migrate_session_statistics` 查起；读盘量没有下降，从 `scan::scan_sources` 的文件跳过条件查起。
