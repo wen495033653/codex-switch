@@ -1,5 +1,5 @@
 use super::{
-    auth_file::{read_auth_value, write_api_auth},
+    auth_file::{read_auth_value_if_exists, write_api_auth},
     store::profile_id_from_tokens_value,
 };
 use crate::{
@@ -10,8 +10,8 @@ use crate::{
 use crate::{
     api_config::API_PROVIDER_ID,
     codex_config::{
-        read_root_config, read_table_config, remove_config_values, remove_table_config,
-        set_config_values, set_table_config,
+        read_config_snapshot, remove_config_values, remove_table_config, set_config_values,
+        set_table_config, ConfigSnapshot,
     },
     json_util::raw_string_field,
 };
@@ -47,40 +47,62 @@ pub(crate) fn set_subscription_mode() -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn read_api_key_from_auth() -> String {
-    read_auth_value()
-        .ok()
-        .and_then(|auth| {
-            auth.get("OPENAI_API_KEY")
-                .and_then(Value::as_str)
-                .map(|value| value.trim().to_string())
-        })
+/// auth.json for read-only state checks. A missing file is the normal "not logged in" state. A
+/// read or parse failure is logged with its reason and then read as empty, as before: the
+/// callers (store payloads, `store-updated` events, mode checks) take a state value, not an
+/// error.
+fn read_auth_for_state() -> Value {
+    match read_auth_value_if_exists() {
+        Ok(Some(auth)) => auth,
+        Ok(None) => json!({}),
+        Err(err) => {
+            eprintln!("[codex_state] 读取 auth.json 失败，按空内容处理: {err}");
+            json!({})
+        }
+    }
+}
+
+/// config.toml for read-only state checks; a failure is logged and read as an empty config.
+fn read_config_for_state() -> Option<ConfigSnapshot> {
+    match read_config_snapshot() {
+        Ok(config) => Some(config),
+        Err(err) => {
+            eprintln!("[codex_state] 读取 config.toml 失败，按空配置处理: {err}");
+            None
+        }
+    }
+}
+
+fn trimmed_string(value: Option<&Value>) -> String {
+    value
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_string())
         .unwrap_or_default()
 }
 
-pub(crate) fn read_api_key_from_provider_config() -> String {
-    let model_provider = read_root_config()
-        .ok()
-        .and_then(|config| {
-            config
-                .get("model_provider")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_default();
-    if model_provider.is_empty() {
-        return String::new();
+/// The `[model_providers.<model_provider>]` table of the selected provider, empty without one.
+fn selected_provider_config(
+    config: &ConfigSnapshot,
+    root_config: &Map<String, Value>,
+) -> Map<String, Value> {
+    match root_config.get("model_provider").and_then(Value::as_str) {
+        Some(model_provider) if !model_provider.is_empty() => {
+            config.table(&format!("model_providers.{model_provider}"))
+        }
+        _ => Map::new(),
     }
+}
 
-    read_table_config(&format!("model_providers.{model_provider}"))
-        .ok()
-        .and_then(|config| {
-            config
-                .get("experimental_bearer_token")
-                .and_then(Value::as_str)
-                .map(|value| value.trim().to_string())
-        })
-        .unwrap_or_default()
+pub(crate) fn read_api_key_from_auth() -> String {
+    trimmed_string(read_auth_for_state().get("OPENAI_API_KEY"))
+}
+
+pub(crate) fn read_api_key_from_provider_config() -> String {
+    let Some(config) = read_config_for_state() else {
+        return String::new();
+    };
+    let provider_config = selected_provider_config(&config, &config.root());
+    trimmed_string(provider_config.get("experimental_bearer_token"))
 }
 
 fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Value)> {
@@ -153,10 +175,27 @@ impl ApiModeProfile {
     }
 }
 
+/// Reads auth.json and config.toml once each. It runs on every `store-updated` event, so the
+/// previous two reads of auth.json and up to four of config.toml per call added up.
 pub(crate) fn get_codex_state_value() -> Value {
-    let auth = read_auth_value().unwrap_or_else(|_| json!({}));
-    let root_config = read_root_config().unwrap_or_default();
-    let auth_mode = raw_string_field(&auth, "auth_mode");
+    let auth = read_auth_for_state();
+    let (root_config, provider_config) = match read_config_for_state() {
+        Some(config) => {
+            let root_config = config.root();
+            let provider_config = selected_provider_config(&config, &root_config);
+            (root_config, provider_config)
+        }
+        None => (Map::new(), Map::new()),
+    };
+    codex_state_from(&auth, &root_config, &provider_config)
+}
+
+fn codex_state_from(
+    auth: &Value,
+    root_config: &Map<String, Value>,
+    provider_config: &Map<String, Value>,
+) -> Value {
+    let auth_mode = raw_string_field(auth, "auth_mode");
     let preferred_auth_method = root_config
         .get("preferred_auth_method")
         .and_then(Value::as_str)
@@ -172,11 +211,6 @@ pub(crate) fn get_codex_state_value() -> Value {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let provider_config = if model_provider.is_empty() {
-        Map::new()
-    } else {
-        read_table_config(&format!("model_providers.{model_provider}")).unwrap_or_default()
-    };
     let provider_name = provider_config
         .get("name")
         .and_then(Value::as_str)
@@ -202,8 +236,8 @@ pub(crate) fn get_codex_state_value() -> Value {
         .filter(|value| !value.is_empty())
         .unwrap_or(&provider_base_url)
         .to_string();
-    let api_key_present =
-        !read_api_key_from_auth().is_empty() || !read_api_key_from_provider_config().is_empty();
+    let api_key_present = !trimmed_string(auth.get("OPENAI_API_KEY")).is_empty()
+        || !trimmed_string(provider_config.get("experimental_bearer_token")).is_empty();
     let account_id = auth
         .get("tokens")
         .and_then(|tokens| tokens.get("account_id"))
@@ -273,5 +307,83 @@ mod tests {
             config.get("requires_openai_auth").and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    fn map(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn codex_state_reports_api_mode_from_auth_key_and_provider_table() {
+        let state = codex_state_from(
+            &json!({ "auth_mode": "apikey", "OPENAI_API_KEY": " placeholder-key " }),
+            &map(json!({ "model_provider": "api" })),
+            &map(json!({
+                "name": "api",
+                "base_url": "https://example.test/v1",
+                "wire_api": "responses",
+                "supports_websockets": false
+            })),
+        );
+
+        assert_eq!(
+            state,
+            json!({
+                "mode": "api",
+                "auth_mode": "apikey",
+                "preferred_auth_method": "",
+                "forced_login_method": "",
+                "model_provider": "api",
+                "provider_name": "api",
+                "wire_api": "responses",
+                "supports_websockets": false,
+                "openai_base_url": "https://example.test/v1",
+                "api_key_present": true,
+                "api_provider_ready": true,
+                "account_id": "",
+                "profile_id": ""
+            })
+        );
+    }
+
+    #[test]
+    fn codex_state_counts_a_provider_bearer_token_as_api_key() {
+        let state = codex_state_from(
+            &json!({}),
+            &map(json!({
+                "model_provider": "api",
+                "openai_base_url": "https://override.test/v1"
+            })),
+            &map(json!({
+                "base_url": "https://example.test/v1",
+                "experimental_bearer_token": "placeholder-token"
+            })),
+        );
+
+        assert_eq!(state["mode"], "api");
+        assert_eq!(state["api_key_present"], true);
+        assert_eq!(state["openai_base_url"], "https://override.test/v1");
+    }
+
+    #[test]
+    fn codex_state_reports_chatgpt_and_unknown_modes() {
+        let chatgpt = codex_state_from(
+            &json!({ "auth_mode": "chatgpt", "tokens": { "account_id": "account-fixture" } }),
+            &Map::new(),
+            &Map::new(),
+        );
+        assert_eq!(chatgpt["mode"], "chatgpt");
+        assert_eq!(chatgpt["account_id"], "account-fixture");
+        assert_eq!(chatgpt["api_key_present"], false);
+
+        // A blank key does not count, and a provider without base_url is not ready.
+        let unknown = codex_state_from(
+            &json!({ "OPENAI_API_KEY": "  " }),
+            &map(json!({ "model_provider": "api" })),
+            &Map::new(),
+        );
+        assert_eq!(unknown["mode"], "unknown");
+        assert_eq!(unknown["api_key_present"], false);
+        assert_eq!(unknown["api_provider_ready"], false);
     }
 }

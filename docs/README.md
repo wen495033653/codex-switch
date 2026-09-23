@@ -11,6 +11,7 @@
 | [codex-settings.md](development/codex-settings.md) | 改 Codex 页：代理、远程控制、模型指令、原生插件 |
 | [subscription-refresh.md](development/subscription-refresh.md) | 改订阅到期日、套餐、重置次数的数据来源；改配额、订阅、token 端点的 HTTP 请求与错误信息 |
 | [account-store.md](development/account-store.md) | 改 accounts.json / settings.json 的读写、token 轮换或刷新全部 |
+| [codex-state.md](development/codex-state.md) | 改从 `auth.json` / `config.toml` 推出当前模式的逻辑 |
 | [usage-stats.md](development/usage-stats.md) | 改 token 用量统计的扫描、写库、计价或汇总 |
 | [integration-20260906.md](development/integration-20260906.md) | 2026-09-06 整合验收的一次性记录 |
 

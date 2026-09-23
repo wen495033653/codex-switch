@@ -11,6 +11,15 @@ pub(crate) fn read_auth_value() -> Result<Value, String> {
     read_json_file(&path, "auth.json")
 }
 
+/// Reads auth.json; `Ok(None)` when Codex has not written one yet, which is a normal state.
+pub(super) fn read_auth_value_if_exists() -> Result<Option<Value>, String> {
+    let path = auth_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file(&path, "auth.json").map(Some)
+}
+
 pub(crate) fn write_auth_value(auth: &Value) -> Result<(), String> {
     let path = auth_path()?;
     let mut data = auth.clone();
