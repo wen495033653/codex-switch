@@ -1,5 +1,5 @@
-use super::support::{write_existing_file, GLOBAL_STATE_FILE_NAME};
-use crate::session_sync_diagnostics::log_session_sync_event;
+use super::support::GLOBAL_STATE_FILE_NAME;
+use crate::{atomic_file::write_file_atomically, session_sync_diagnostics::log_session_sync_event};
 use serde_json::{json, Map, Value};
 use std::{
     collections::HashSet,
@@ -89,12 +89,16 @@ pub(crate) fn rewrite_global_state_file(
     let mut output = serde_json::to_string_pretty(&value)
         .map_err(|err| format!("序列化 Codex global state 失败: {err}"))?;
     output.push('\n');
-    if !write_existing_file(path, &output, "写入 Codex global state")? {
+    // The whole document is rewritten, so it is replaced atomically: a crash mid-write used to
+    // leave Codex a truncated global state. A file deleted since it was read is not recreated.
+    if !path.exists() {
         return Err(format!(
             "Codex global state 在写入前被删除，未重新创建: {}",
             path.display()
         ));
     }
+    write_file_atomically(path, output.as_bytes())
+        .map_err(|err| format!("写入 Codex global state 失败 {}: {err}", path.display()))?;
     Ok(updated)
 }
 

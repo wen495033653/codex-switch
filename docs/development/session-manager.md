@@ -67,7 +67,7 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 
 ### `.codex-global-state.json` 的改写（`codex_sessions::rewrite_global_state_file`）
 
-唯一的改写实现，会话同步（规范化工作区路径）和会话管理（删除被删/被覆盖会话的 id）都经过它：读取并解析 → 调用方修改 → 有改动时先把原文写到调用方指定的备份位置 → 仅在文件仍存在时原地改写；读写之间文件被删除则报错，不重新创建。备份位置保持原样：同步写同目录的 `.codex-global-state.json.bak`（每次覆盖），会话管理写数据目录 `session-manager/backups/<reason>/`（每次新文件，且无改动时不再创建该目录）。写入仍不是原子的（见待验证/待决事项）。
+唯一的改写实现，会话同步（规范化工作区路径）和会话管理（删除被删/被覆盖会话的 id）都经过它：读取并解析 → 调用方修改 → 有改动时先把原文写到调用方指定的备份位置 → 仅在文件仍存在时原地改写；读写之间文件被删除则报错，不重新创建。备份位置保持原样：同步写同目录的 `.codex-global-state.json.bak`（每次覆盖），会话管理写数据目录 `session-manager/backups/<reason>/`（每次新文件，且无改动时不再创建该目录）。2026-09-23 起改写用 `atomic_file::write_file_atomically` 原子替换（写入前确认文件仍存在），写到一半崩溃不再留下截断的 global state；“确认存在”与替换之间仍有极短窗口，文件恰在此时被删会被重新写出。
 
 ### 错误日志
 
@@ -136,7 +136,6 @@ TODO(verify): 流式读取与单行查找的耗时收益没有在真实规模上
 
 - state DB / global state 备份的保留与清理策略（目前每次有改动的批量操作都新增一份 `VACUUM INTO` 备份，永不清理）。
 - `.codex-global-state.json` 的两个备份位置是否统一（同步：同目录 `.bak` 覆盖式；会话管理：数据目录按次保留）。
-- 在 `main` 上把 `rewrite_global_state_file` 的原地写换成 `atomic_file::write_file_atomically`（需先确认文件仍存在，保持“不重新创建”）。
 
 ## 回退
 
