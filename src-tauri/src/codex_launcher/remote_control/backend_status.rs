@@ -51,7 +51,14 @@ pub(super) fn fetch_remote_control_backend_environment_status(
         .send()
         .map_err(|err| format!("读取 ChatGPT 桌面状态失败: {err}"))?;
     let status = response.status();
-    let text = response.text().unwrap_or_default();
+    // An unread body would otherwise look like an empty one: "HTTP 500 body: " or a JSON parse
+    // error that hides the real read failure.
+    let text = response.text().map_err(|err| {
+        format!(
+            "读取 ChatGPT 桌面状态响应失败: HTTP {}: {err}",
+            status.as_u16()
+        )
+    })?;
     if !status.is_success() {
         let raw = format!("HTTP {} body: {text}", status.as_u16());
         if let Some((kind, message)) = remote_control_backend_error_message(None, &raw) {
