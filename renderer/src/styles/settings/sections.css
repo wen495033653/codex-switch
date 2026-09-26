@@ -3,7 +3,10 @@
   gap: 18px;
 }
 
+/* Grid items default to their content's minimum width, so a long unbreakable value (the data
+   directory path) widened every column up to the page instead of being truncated. */
 .settings-section {
+  min-width: 0;
   display: grid;
   gap: 14px;
 }

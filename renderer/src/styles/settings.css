@@ -63,6 +63,7 @@
 }
 
 .settings-page-content {
+  min-width: 0;
   padding: 22px;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -80,6 +81,7 @@
 }
 
 .settings-path-card {
+  min-width: 0;
   min-height: 56px;
   padding: 12px 14px;
   border-radius: 12px;
