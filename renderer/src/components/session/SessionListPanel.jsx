@@ -2,6 +2,7 @@ import { useI18n } from '../../i18n';
 import {
   PAGE_SIZE_OPTIONS,
   deletedActiveKey,
+  formatCompactTime,
   formatSize,
   formatTime,
   statusLabel,
@@ -87,8 +88,11 @@ export default function SessionListPanel({
                   <strong title={item.title}>{item.title}</strong>
                 </span>
                 <span className={`session-status-pill ${item.status}`}>{statusLabel(item.status, t)}</span>
-                <span className="session-muted">
-                  {formatTime(isDeletedView ? item.deleted_at : item.updated_at, language, t)}
+                <span
+                  className="session-muted"
+                  title={formatTime(isDeletedView ? item.deleted_at : item.updated_at, language, t)}
+                >
+                  {formatCompactTime(isDeletedView ? item.deleted_at : item.updated_at, language, t)}
                 </span>
                 <span className="session-muted">{formatSize(item.size_bytes)}</span>
               </div>

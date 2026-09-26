@@ -127,7 +127,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                 </div>
             </div>
 
-            <div className="account-card-body">
+            <div className={`account-card-body ${accountNotice ? 'account-card-body-status' : ''}`}>
                 <div className={`account-card-quotas ${accountNotice ? 'account-card-quotas-status' : ''}`}>
                     {accountNotice ? (
                         <div

@@ -67,6 +67,10 @@
   flex: 1 1 auto;
 }
 
+.account-card-body-status {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
 .account-card-quotas {
   display: grid;
   gap: 5px;

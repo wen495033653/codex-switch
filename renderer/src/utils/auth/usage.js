@@ -79,7 +79,7 @@ export function getUsageNotice(custom, usage, usageWindows) {
         : '');
 
     if (usageStatus === 'error' || usageError) {
-        const message = usageStatusMessage || (usageError && usageError.message) || 'Usage state is abnormal';
+        const message = usageStatusMessage || (usageError && usageError.message) || '额度状态异常';
         return {
             tone: 'error',
             message,
@@ -88,7 +88,7 @@ export function getUsageNotice(custom, usage, usageWindows) {
     }
 
     if (usageStatus === 'syncing') {
-        const message = usageStatusMessage || 'Usage syncing, please wait...';
+        const message = usageStatusMessage || '正在同步额度，请稍候...';
         return {
             tone: 'info',
             message,
@@ -97,7 +97,7 @@ export function getUsageNotice(custom, usage, usageWindows) {
     }
 
     if (usageStatus === 'missing' || !usage || usageWindows.length === 0) {
-        const message = usageStatusMessage || 'Usage data missing, please refresh';
+        const message = usageStatusMessage || '暂无额度数据，请刷新';
         return {
             tone: 'info',
             message,

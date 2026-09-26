@@ -31,6 +31,18 @@ export function formatTime(value, language, t) {
   return date.toLocaleString(language);
 }
 
+// The list column only fits month, day and minutes (or the date for another year); the full
+// time from formatTime goes in the cell's title.
+export function formatCompactTime(value, language, t) {
+  if (!value) return t('未知');
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const options = date.getFullYear() === new Date().getFullYear()
+    ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }
+    : { year: 'numeric', month: '2-digit', day: '2-digit' };
+  return new Intl.DateTimeFormat(language, options).format(date);
+}
+
 export function statusLabel(status, t) {
   if (status === 'archived') return t('已归档');
   if (status === 'deleted') return t('已删除');

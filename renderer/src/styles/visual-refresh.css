@@ -24,6 +24,10 @@
   --accent-hover: #4aa8ff;
   --accent-soft: rgba(51, 156, 255, 0.12);
   --accent-border: rgba(51, 156, 255, 0.42);
+  /* #339cff reaches 2.5:1 as text on the soft accent and 2.9:1 under white text. */
+  --accent-text: #4aa8ff;
+  --accent-fill: #1a6fd1;
+  --accent-fill-hover: #2479dd;
   --success: #36d399;
   --warning: #f6c453;
   --danger: #ff7b8a;
@@ -60,7 +64,10 @@ html[data-theme="light"] {
   --accent-hover: #0285ff;
   --accent-soft: #e5f3ff;
   --accent-border: rgba(51, 156, 255, 0.38);
-  --success: #00a240;
+  --accent-text: #0a6ccf;
+  --accent-fill: #1a6fd1;
+  --accent-fill-hover: #2479dd;
+  --success: #00853a;
   --warning: #e25507;
   --danger: #e02e2a;
   --focus-ring: 0 0 0 3px rgba(51, 156, 255, 0.14);
@@ -221,9 +228,9 @@ html[data-theme="light"] .top-nav-item:hover {
 }
 
 .top-nav-item.active {
-  color: #ffffff;
+  color: var(--accent-text);
   border-color: transparent;
-  background: #343434;
+  background: var(--surface-selected);
   box-shadow: none;
 }
 
@@ -232,9 +239,9 @@ html[data-theme="light"] .top-nav-item:hover {
 }
 
 html[data-theme="light"] .top-nav-item.active {
-  color: var(--text-primary);
+  color: var(--accent-text);
   border-color: transparent;
-  background: rgba(26, 28, 31, 0.05);
+  background: var(--surface-selected);
   box-shadow: none;
 }
 
@@ -402,14 +409,14 @@ html[data-theme="light"] .api-mode-input:focus {
 }
 
 .btn-primary {
-  border-color: color-mix(in srgb, var(--accent) 82%, white 18%);
-  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent-fill) 82%, white 18%);
+  background: var(--accent-fill);
   color: #ffffff;
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.16);
 }
 
 .btn-primary:hover {
-  background: var(--accent-hover);
+  background: var(--accent-fill-hover);
   transform: translateY(-1px);
 }
 
@@ -517,13 +524,13 @@ html[data-theme="light"] .settings-tab:hover {
 .nav-item.active,
 .settings-tab.active {
   border-color: transparent;
-  background: #343434;
-  color: #ffffff;
+  background: var(--surface-selected);
+  color: var(--accent-text);
   box-shadow: none;
 }
 
 .nav-item.active .account-filter-count {
-  color: #ffffff;
+  color: inherit;
 }
 
 .account-filter-tabs .nav-item {
@@ -544,8 +551,8 @@ html[data-theme="light"] .settings-tab:hover {
 html[data-theme="light"] .nav-item.active,
 html[data-theme="light"] .settings-tab.active {
   border-color: transparent;
-  background: rgba(26, 28, 31, 0.05);
-  color: var(--text-primary);
+  background: var(--surface-selected);
+  color: var(--accent-text);
   box-shadow: none;
 }
 
@@ -637,7 +644,7 @@ html[data-theme="light"] .account-card-name {
 html[data-theme="light"] .current-badge {
   border-color: var(--accent-border);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .quota-track,
@@ -680,8 +687,8 @@ html[data-theme="light"] .panel-footer {
 
 .page-btn.active,
 html[data-theme="light"] .page-btn.active {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: #fff;
 }
 

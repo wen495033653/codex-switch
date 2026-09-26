@@ -90,7 +90,7 @@ pub(crate) fn account_from_exchange_syncing(
     custom = set_usage_state(
         Some(&custom),
         "syncing",
-        "Usage syncing, please wait...",
+        "正在同步额度，请稍候...",
         None,
         Value::Null,
     );

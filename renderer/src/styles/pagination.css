@@ -13,7 +13,7 @@
 .empty-state {
   padding: 40px;
   text-align: center;
-  color: #52525b;
+  color: var(--text-tertiary);
 }
 
 .empty-state-card {
