@@ -1457,6 +1457,7 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
                     price_label: UNPRICED_MISSING_MODEL_PRICE,
                     prices: None,
                 },
+                timing: RequestTiming::default(),
             };
         for (rollout, owner) in [(&path, "sub-a"), (&flex_path, "sub-b")] {
             let read = read_new_records(rollout, None).unwrap();
@@ -1591,5 +1592,345 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
     // Checked once: the next refresh reads nothing again and changes nothing.
     let again = stats(&db_path, &codex_home, "2026-06-15T03:01:00Z");
     assert_eq!(window(&again, "subscriptions", "sub-a", "all"), all);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A line laid out the way Codex writes it: `timestamp`, `ordinal`, `type`, then `payload`
+/// starting with its `type` (`json!` sorts the keys).
+fn written_line(timestamp: &str, kind: &str, payload_type: &str, rest: &str) -> String {
+    format!(
+        r#"{{"timestamp":"{timestamp}","ordinal":1,"type":"{kind}","payload":{{"type":"{payload_type}"{rest}}}}}"#
+    )
+}
+
+fn millis(timestamp: &str) -> i64 {
+    crate::time_util::parse_rfc3339_millis(timestamp).unwrap()
+}
+
+/// A rollout of two timed responses and one (a compaction) with no output item.
+fn timed_rollout_lines(thread_id: &str) -> Vec<String> {
+    vec![
+        session_meta_line("2026-06-15T01:00:00.000Z", thread_id, "openai"),
+        turn_context_line("2026-06-15T01:00:00.100Z", "turn-1", "gpt-5.5"),
+        written_line(
+            "2026-06-15T01:00:01.000Z",
+            "response_item",
+            "message",
+            r#","id":"msg_u","role":"user","content":[]"#,
+        ),
+        written_line(
+            "2026-06-15T01:00:01.500Z",
+            "event_msg",
+            "token_count",
+            r#","info":null"#,
+        ),
+        // Codex notes each item as completed just before writing it.
+        written_line(
+            "2026-06-15T01:00:04.000Z",
+            "event_msg",
+            "item_completed",
+            r#","item":{}"#,
+        ),
+        written_line(
+            "2026-06-15T01:00:04.003Z",
+            "response_item",
+            "reasoning",
+            r#","id":"rs_1","summary":[]"#,
+        ),
+        written_line(
+            "2026-06-15T01:00:06.000Z",
+            "response_item",
+            "custom_tool_call",
+            r#","id":"ctc_1","name":"exec","input":"""#,
+        ),
+        record_line("2026-06-15T01:00:06.400Z", "resp-1", thread_id, 100, 0, 40),
+        written_line(
+            "2026-06-15T01:00:06.700Z",
+            "event_msg",
+            "item_completed",
+            r#","item":{}"#,
+        ),
+        written_line(
+            "2026-06-15T01:00:07.000Z",
+            "response_item",
+            "custom_tool_call_output",
+            r#","call_id":"ctc_1","output":"ok""#,
+        ),
+        written_line(
+            "2026-06-15T01:00:07.001Z",
+            "event_msg",
+            "token_count",
+            r#","info":null"#,
+        ),
+        // Laid out otherwise (keys sorted): read through the parsed fallback.
+        json!({
+            "timestamp": "2026-06-15T01:00:09.000Z",
+            "type": "response_item",
+            "payload": { "type": "message", "role": "assistant", "content": [] }
+        })
+        .to_string(),
+        record_line("2026-06-15T01:00:10.001Z", "resp-2", thread_id, 120, 0, 30),
+        json!({
+            "timestamp": "2026-06-15T01:00:11.000Z",
+            "type": "compacted",
+            "payload": { "message": "" }
+        })
+        .to_string(),
+        record_line("2026-06-15T01:00:12.000Z", "resp-3", thread_id, 50, 0, 5),
+    ]
+}
+
+#[test]
+fn each_response_is_timed_from_the_line_before_its_first_output() {
+    let root = temp_root("timing-lines");
+    let codex_home = root.join("codex");
+    let lines = timed_rollout_lines("thread-t");
+    let path = write_rollout(&codex_home, "timed", &lines);
+
+    let read = read_new_records(&path, None).unwrap();
+    let timing = read
+        .records
+        .iter()
+        .map(|record| (record.request_started_ms, record.completed_ms))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timing,
+        [
+            (
+                Some(millis("2026-06-15T01:00:01.500Z")),
+                millis("2026-06-15T01:00:06.400Z")
+            ),
+            (
+                Some(millis("2026-06-15T01:00:07.001Z")),
+                millis("2026-06-15T01:00:10.001Z")
+            ),
+            (None, millis("2026-06-15T01:00:12.000Z")),
+        ]
+    );
+
+    // Read in two parts, split after the first output item: the start carries over.
+    let split = write_rollout(&codex_home, "split", &lines[..6]);
+    let first = read_new_records(&split, None).unwrap();
+    assert!(first.records.is_empty());
+    assert!(first.cursor.output_started);
+    append_lines(&split, &lines[6..]);
+    let second = read_new_records(&split, Some(&first.cursor)).unwrap();
+    assert_eq!(
+        second.records[0].request_started_ms,
+        Some(millis("2026-06-15T01:00:01.500Z"))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn write_codex_log(codex_home: &Path, name: &str, rows: &[(&str, &str, &str, &str)]) {
+    fs::create_dir_all(codex_home).unwrap();
+    let connection = Connection::open(codex_home.join(name)).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL, level TEXT NOT NULL, target TEXT NOT NULL,
+                feedback_log_body TEXT, module_path TEXT, file TEXT, line INTEGER,
+                thread_id TEXT, process_uuid TEXT, estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .unwrap();
+    for (timestamp, thread_id, target, body) in rows {
+        let at = millis(timestamp);
+        connection
+            .execute(
+                "INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id) \
+                 VALUES (?1, ?2, 'DEBUG', ?3, ?4, ?5)",
+                rusqlite::params![
+                    at.div_euclid(1000),
+                    at.rem_euclid(1000) * 1_000_000,
+                    target,
+                    body,
+                    thread_id
+                ],
+            )
+            .unwrap();
+    }
+}
+
+const STREAM_TARGET: &str = "codex_core::stream_events_utils";
+const OUTPUT_ADDED: &str =
+    r#"session_loop{}:try_run_sampling_request{}: Output item item_type="reasoning" item_id="rs""#;
+const OUTPUT_DONE: &str = r#"session_loop{}:receiving_stream:handle_responses{}:handle_output_item_done: Output item item_type="reasoning" item_id="rs""#;
+
+#[test]
+fn first_token_times_come_from_the_newest_codex_log() {
+    let root = temp_root("timing-log");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    write_rollout(&codex_home, "timed", &timed_rollout_lines("thread-t"));
+    // An older log database that would give a different answer.
+    write_codex_log(
+        &codex_home,
+        "logs_1.sqlite",
+        &[(
+            "2026-06-15T01:00:02.000Z",
+            "thread-t",
+            STREAM_TARGET,
+            OUTPUT_ADDED,
+        )],
+    );
+    write_codex_log(
+        &codex_home,
+        "logs_2.sqlite",
+        &[
+            // The previous response's item, before this request was sent.
+            (
+                "2026-06-15T01:00:01.200Z",
+                "thread-t",
+                STREAM_TARGET,
+                OUTPUT_ADDED,
+            ),
+            (
+                "2026-06-15T01:00:02.000Z",
+                "thread-o",
+                STREAM_TARGET,
+                OUTPUT_ADDED,
+            ),
+            (
+                "2026-06-15T01:00:02.500Z",
+                "thread-t",
+                "codex_core::session::turn",
+                "Output item item_type=\"x\"",
+            ),
+            (
+                "2026-06-15T01:00:03.250Z",
+                "thread-t",
+                STREAM_TARGET,
+                OUTPUT_ADDED,
+            ),
+            (
+                "2026-06-15T01:00:04.003Z",
+                "thread-t",
+                STREAM_TARGET,
+                OUTPUT_DONE,
+            ),
+        ],
+    );
+
+    stats(&db_path, &codex_home, "2026-06-15T01:05:00Z");
+    let page = bills(&db_path, "all", None, None, 1, 50, "2026-06-15T01:05:00Z");
+    let timing = page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            (
+                record["response_id"].as_str().unwrap().to_string(),
+                record["duration_ms"].clone(),
+                record["first_token_ms"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timing,
+        [
+            ("resp-3".to_string(), Value::Null, Value::Null),
+            ("resp-2".to_string(), json!(3_000), Value::Null),
+            ("resp-1".to_string(), json!(4_900), json!(1_750)),
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn records_stored_before_durations_get_them_from_one_reread() {
+    let root = temp_root("timing-fill");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let path = write_rollout(&codex_home, "timed", &timed_rollout_lines("thread-t"));
+    // What the previous version stored: the records without durations, and a cursor at the end.
+    {
+        let mut connection = open_usage_connection(&db_path, "2026-06-15T01:01:00Z").unwrap();
+        let transaction = connection.transaction().unwrap();
+        let read = read_new_records(&path, None).unwrap();
+        for record in &read.records {
+            let owner = OwnerAttribution {
+                owner_type: OWNER_TYPE_SUBSCRIPTION.to_string(),
+                owner_id: "sub-a".to_string(),
+            };
+            let cost = estimate_request_cost(
+                &record.model,
+                &record.usage,
+                ServiceTier::Standard,
+                &owner.owner_type,
+            );
+            let stored = UsageRecord {
+                response_id: record.response_id.clone(),
+                thread_id: record.thread_id.clone(),
+                timestamp_seconds: record.timestamp_seconds,
+                owner,
+                model: record.model.clone(),
+                usage: record.usage.clone(),
+                service_tier: ServiceTier::Standard,
+                cost,
+                timing: RequestTiming::default(),
+            };
+            insert_record(&transaction, &stored, true).unwrap();
+        }
+        let metadata = fs::metadata(&path).unwrap();
+        let stamp = FileStamp {
+            modified_nanos: metadata
+                .modified()
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64,
+            size: metadata.len(),
+        };
+        save_cursor(&transaction, &path.to_string_lossy(), stamp, &read.cursor).unwrap();
+        transaction.commit().unwrap();
+    }
+    let durations = |db_path: &Path| {
+        bills(db_path, "all", None, None, 1, 50, "2026-06-15T02:00:00Z")["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| record["duration_ms"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(durations(&db_path), [Value::Null, Value::Null, Value::Null]);
+
+    let before = stats(&db_path, &codex_home, "2026-06-15T02:00:00Z");
+    assert_eq!(
+        durations(&db_path),
+        [Value::Null, json!(3_000), json!(4_900)]
+    );
+    let filled: String = Connection::open(&db_path)
+        .unwrap()
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'request_timings_filled'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(filled, "2026-06-15T02:00:00Z");
+    // Once filled, a refresh reads nothing again and the totals stay as they were.
+    let after = stats(&db_path, &codex_home, "2026-06-15T02:01:00Z");
+    assert_eq!(
+        window(&after, "subscriptions", "sub-a", "all"),
+        window(&before, "subscriptions", "sub-a", "all")
+    );
     fs::remove_dir_all(root).unwrap();
 }

@@ -156,6 +156,7 @@ fn main() {
                     );
                 }
             }
+            usage_stats::start_usage_stats_auto_refresher();
             start_account_token_auto_refresher(app.handle().clone());
             start_active_quota_auto_refresher(app.handle().clone());
             start_background_quota_auto_refresher(

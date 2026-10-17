@@ -5,8 +5,11 @@ import {
   formatBillCost,
   formatBillTime,
   formatFullTime,
+  formatRate,
+  formatSeconds,
   isPriced,
   modelLabel,
+  outputRate,
   ownerLabel,
   priceLabelText,
   totalPages
@@ -39,11 +42,24 @@ export default function BillsTable({
           <span className="usage-bills-numeric">{t('缓存命中')}</span>
           <span className="usage-bills-numeric">{t('输出')}</span>
           <span className="usage-bills-numeric">{t('费用')}</span>
+          <span className="usage-bills-numeric">{t('耗时')}</span>
         </div>
         {records.map(record => {
           const priced = isPriced(record);
           const owner = ownerLabel(record.owner_type, record.owner_id, namesByKey, t);
           const model = modelLabel(record.model, t);
+          const rate = outputRate(record);
+          const timingTitle = record.duration_ms === null
+            ? t('没有耗时数据')
+            : record.first_token_ms === null
+              ? t('总耗时 {duration}，Codex 日志里已没有这次请求的首 Token', {
+                duration: formatSeconds(record.duration_ms)
+              })
+              : t('总耗时 {duration} · 首 Token {firstToken} · {rate}', {
+                duration: formatSeconds(record.duration_ms),
+                firstToken: formatSeconds(record.first_token_ms),
+                rate: formatRate(rate)
+              });
           return (
             <button
               key={record.response_id}
@@ -57,7 +73,9 @@ export default function BillsTable({
               <span className="usage-bills-text" title={owner}>{owner}</span>
               <span className="usage-bills-text" title={model}>{model}</span>
               <span className={`usage-bills-tier ${priced ? '' : 'unpriced'}`}>
-                <span className="usage-bills-text">{priceLabelText(record.price_label, t)}</span>
+                <span className="usage-bills-text" title={priceLabelText(record.price_label, t)}>
+                  {priceLabelText(record.price_label, t)}
+                </span>
                 {record.legacy ? <em>{t('旧版')}</em> : null}
               </span>
               <span className="usage-bills-numeric">{formatExactTokens(record.fresh_input_tokens, language)}</span>
@@ -65,6 +83,15 @@ export default function BillsTable({
               <span className="usage-bills-numeric">{formatExactTokens(record.output_tokens, language)}</span>
               <span className={`usage-bills-numeric usage-bills-cost ${priced ? '' : 'unpriced'}`}>
                 {priced ? formatBillCost(record.estimated_cost_usd) : t('未定价')}
+              </span>
+              <span className="usage-bills-numeric usage-bills-timing" title={timingTitle}>
+                <span>{formatSeconds(record.duration_ms)}</span>
+                {record.first_token_ms !== null ? (
+                  <small>{t('TTFT {firstToken} · {rate}', {
+                    firstToken: formatSeconds(record.first_token_ms),
+                    rate: formatRate(rate)
+                  })}</small>
+                ) : null}
               </span>
             </button>
           );

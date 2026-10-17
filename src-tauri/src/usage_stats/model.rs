@@ -126,6 +126,15 @@ pub(super) struct EstimatedCost {
     pub(super) prices: Option<TokenPrices>,
 }
 
+/// How long a response took, from its rollout and Codex's log (ms). Unknown parts are `None`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct RequestTiming {
+    /// From the request being sent to the response completing.
+    pub(super) duration_ms: Option<i64>,
+    /// From the request being sent to the first output item arriving.
+    pub(super) first_token_ms: Option<i64>,
+}
+
 /// One Responses API response, ready to be stored.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct UsageRecord {
@@ -139,6 +148,7 @@ pub(super) struct UsageRecord {
     /// while its model had no price.
     pub(super) service_tier: ServiceTier,
     pub(super) cost: EstimatedCost,
+    pub(super) timing: RequestTiming,
 }
 
 /// A summed group of records (one hourly bucket, one all-time total, or one record) as the

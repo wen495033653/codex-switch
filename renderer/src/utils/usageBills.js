@@ -152,6 +152,26 @@ export function formatFullTime(value, language) {
   }).format(date);
 }
 
+// Seconds with two decimals below 10 s, one below 100 s.
+export function formatSeconds(ms) {
+  if (ms === null || ms === undefined) return '—';
+  const seconds = Math.max(0, Number(ms) || 0) / 1000;
+  return `${seconds.toFixed(seconds < 10 ? 2 : seconds < 100 ? 1 : 0)}s`;
+}
+
+// Output tokens over the time from the first output to completion; null without a first token.
+export function outputRate(record) {
+  if (!record || record.duration_ms == null || record.first_token_ms == null) return null;
+  const generationMs = record.duration_ms - record.first_token_ms;
+  if (generationMs <= 0) return null;
+  return (Number(record.output_tokens) || 0) / (generationMs / 1000);
+}
+
+export function formatRate(rate) {
+  if (rate === null || rate === undefined) return '—';
+  return `${rate.toFixed(rate < 100 ? 1 : 0)} tok/s`;
+}
+
 export function totalPages(total, pageSize) {
   return Math.max(1, Math.ceil((Number(total) || 0) / pageSize));
 }

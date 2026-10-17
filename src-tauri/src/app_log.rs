@@ -71,6 +71,7 @@ const TIMELINE_EVENTS: &[&str] = &[
     "account_subscription_updated",
     "usage_stats_prices_backfilled",
     "usage_stats_unpriced_rechecked",
+    "usage_stats_timings_filled",
 ];
 
 /// Shown in the dev log of debug builds only: these run on the watcher's 60 s reconcile and
@@ -132,6 +133,19 @@ const EVENT_MESSAGES: &[(&str, &str)] = &[
         "未定价的 token 记录已按新价格表检查",
     ),
     ("usage_stats_rollout_reread", "token 统计从头重读会话文件"),
+    (
+        "usage_stats_timings_filled",
+        "token 统计为之前的记录补上请求耗时",
+    ),
+    (
+        "usage_stats_codex_log_error",
+        "读取 Codex 日志失败，首 Token 时间留空",
+    ),
+    (
+        "usage_stats_first_token_error",
+        "Codex 日志里找不到最近请求的首个输出",
+    ),
+    ("usage_stats_auto_refresh_error", "token 统计后台刷新失败"),
     ("session_sync_error", "会话 provider 同步失败"),
     ("session_sync_preflight_error", "会话 provider 预检查失败"),
     (

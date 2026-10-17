@@ -7,8 +7,11 @@ import {
   formatBillCost,
   formatBillTime,
   formatPercent,
+  formatRate,
+  formatSeconds,
   formatUnitPrice,
   modelQuery,
+  outputRate,
   ownerKey,
   ownerLabel,
   ownerQuery,
@@ -88,4 +91,18 @@ test('pages and times', () => {
   assert.equal(formatBillTime(`${thisYear}-03-04T05:06:07`, 'en-GB'), '04/03, 05:06:07');
   assert.equal(formatBillTime('2001-03-04T05:06:07', 'en-GB'), '04/03/2001, 05:06:07');
   assert.equal(formatBillTime('not a time', 'en-GB'), 'not a time');
+});
+
+test('durations, first token and output rate', () => {
+  assert.equal(formatSeconds(null), '—');
+  assert.equal(formatSeconds(4_900), '4.90s');
+  assert.equal(formatSeconds(12_720), '12.7s');
+  assert.equal(formatSeconds(135_400), '135s');
+  // 40 output tokens from the first token at 1.75 s to completion at 4.9 s.
+  const rate = outputRate({ duration_ms: 4_900, first_token_ms: 1_750, output_tokens: 40 });
+  assert.equal(formatRate(rate), '12.7 tok/s');
+  assert.equal(outputRate({ duration_ms: 4_900, first_token_ms: null, output_tokens: 40 }), null);
+  assert.equal(outputRate({ duration_ms: 1_000, first_token_ms: 1_000, output_tokens: 40 }), null);
+  assert.equal(formatRate(null), '—');
+  assert.equal(formatRate(154.2), '154 tok/s');
 });

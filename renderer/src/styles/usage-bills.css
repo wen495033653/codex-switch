@@ -141,7 +141,7 @@
 .usage-bills-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: 124px minmax(100px, 1.4fr) minmax(96px, 1fr) minmax(92px, 0.9fr) 88px 96px 76px 84px;
+  grid-template-columns: 100px minmax(92px, 1.3fr) minmax(86px, 1fr) minmax(80px, 0.8fr) 76px 80px 60px 70px 104px;
   align-items: center;
   column-gap: 8px;
 }
@@ -233,6 +233,18 @@
 .usage-bills-cost {
   color: var(--text-heading);
   font-weight: 700;
+}
+
+.usage-bills-row .usage-bills-timing {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.usage-bills-timing small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .usage-bills-empty {

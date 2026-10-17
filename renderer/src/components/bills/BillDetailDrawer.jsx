@@ -5,9 +5,12 @@ import {
   chargeLabel,
   formatBillCost,
   formatFullTime,
+  formatRate,
+  formatSeconds,
   formatUnitPrice,
   isPriced,
   modelLabel,
+  outputRate,
   ownerTypeLabel,
   priceLabelText
 } from '../../utils/usageBills';
@@ -85,6 +88,17 @@ export default function BillDetailDrawer({ ownerName, record, onClose }) {
             <Row label={t('输出')} value={tokens(record.output_tokens)} />
             <Row label={t('其中推理')} value={tokens(record.reasoning_output_tokens)} />
             <Row label={t('总计')} value={tokens(record.total_tokens)} />
+          </Section>
+
+          <Section title={t('时序')}>
+            <Row label={t('总耗时')} value={formatSeconds(record.duration_ms)} />
+            <Row label={t('首 Token（近似）')} value={formatSeconds(record.first_token_ms)} />
+            <Row label={t('输出速率')} value={formatRate(outputRate(record))} />
+            <p className="usage-bill-note">
+              {record.duration_ms === null
+                ? t('会话记录里没有这次请求的输出项（例如上下文压缩），或会话文件已删除，算不出耗时。')
+                : t('总耗时是会话记录里请求发出到响应完成的时间。首 Token 是 Codex 日志里第一个输出项到达的时间，Codex 每个会话只保留最近约 1,000 行日志，较早的请求没有。输出速率 = 输出 token ÷（总耗时 − 首 Token）。')}
+            </p>
           </Section>
 
           <Section title={t('费用明细（美元）')}>

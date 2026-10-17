@@ -1,5 +1,6 @@
 mod aggregate;
 mod bills;
+mod codex_logs;
 mod db;
 mod model;
 mod pricing;
@@ -19,14 +20,14 @@ use crate::{
     time_util::{now_string, parse_rfc3339_seconds},
 };
 use serde_json::{json, Value};
-use std::{path::Path, sync::Mutex};
+use std::{path::Path, sync::Mutex, thread, time::Duration};
 use {
     aggregate::aggregate_usage,
     bills::{list_bills, BillsQuery},
     db::{
-        count_unpriced_with_model_price, db_error, mark_service_tier_unknown,
-        mark_unpriced_checked, open_usage_connection, pending_reprice, record_attribution_at,
-        records_counted_after_seconds, usage_db_path,
+        count_unpriced_with_model_price, db_error, mark_service_tier_unknown, mark_timings_filled,
+        mark_unpriced_checked, open_usage_connection, pending_reprice, pending_timing_fill,
+        record_attribution_at, records_counted_after_seconds, usage_db_path,
     },
     model::{
         UsageScanSource, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API,
@@ -39,6 +40,20 @@ use {
 
 // One refresh at a time: two concurrent ones would read the same appended records.
 static USAGE_STATS_SCAN_LOCK: Mutex<()> = Mutex::new(());
+
+const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Stores the new records every minute, window open or not. The page refreshes only while it is
+/// shown, and the first-token times come from Codex's log, which keeps only the last ~140
+/// responses of a busy thread (`codex_logs`).
+pub(crate) fn start_usage_stats_auto_refresher() {
+    thread::spawn(|| loop {
+        thread::sleep(AUTO_REFRESH_INTERVAL);
+        if let Err(err) = store_new_usage_records() {
+            log_event_once("usage_stats_auto_refresh_error", json!({ "error": err }));
+        }
+    });
+}
 
 #[tauri::command]
 pub(crate) async fn usage_stats_get() -> Result<Value, String> {
@@ -155,12 +170,26 @@ fn usage_stats_get_for_scan_sources(
     let counted_after_seconds = records_counted_after_seconds(&connection)?;
     // After a price table change, the records stored without a price are checked once: the
     // rollouts holding the ones the table now prices are read again for the tier they ran on,
-    // and the ones none of them holds are marked as having an unknown tier.
+    // and the ones none of them holds are marked as having an unknown tier. Records stored
+    // before durations were kept get theirs from one re-read of every rollout as well.
     let reprice = pending_reprice(&connection)?;
-    let reread_since = reprice.as_ref().and_then(|check| check.reread_since);
+    let timing_fill_since = pending_timing_fill(&connection)?;
+    let reread_since = [
+        reprice.as_ref().and_then(|check| check.reread_since),
+        timing_fill_since,
+    ]
+    .into_iter()
+    .flatten()
+    .min();
     // Files are read before any write, so the database stays unlocked while they are read;
     // `record_attribution` writes through its own connection meanwhile.
-    let scan = scan_sources(&connection, sources, counted_after_seconds, reread_since)?;
+    let scan = scan_sources(
+        &connection,
+        sources,
+        counted_after_seconds,
+        reread_since,
+        now_seconds,
+    )?;
     // One transaction for every write of this refresh, committed only after the summary was
     // built. Any failure rolls all of it back and returns the error; the cursors then still
     // point before the new records, so the next refresh reads them again.
@@ -176,6 +205,9 @@ fn usage_stats_get_for_scan_sources(
         }
         None => None,
     };
+    if timing_fill_since.is_some() {
+        mark_timings_filled(&transaction, now)?;
+    }
     let response = aggregate_usage(&transaction, now_seconds)?;
     transaction
         .commit()
@@ -190,6 +222,27 @@ fn usage_stats_get_for_scan_sources(
                 "repriced": written.repriced,
                 "markedTierUnknown": tier_unknown,
                 "stillUnpricedWithModelPrice": still_unpriced
+            }),
+        );
+    }
+    if let Some(since) = timing_fill_since {
+        log_event(
+            "usage_stats_timings_filled",
+            json!({
+                "rereadSince": since,
+                "rereadFiles": scan.reread_files,
+                "filled": written.timings_filled
+            }),
+        );
+    }
+    // Recent responses with a known start and a readable Codex log should have their first
+    // output item there; none at all means the log no longer notes them as expected.
+    if scan.recent_first_token_lookups >= 5 && scan.recent_first_tokens_found == 0 {
+        log_event_once(
+            "usage_stats_first_token_error",
+            json!({
+                "recentResponses": scan.recent_first_token_lookups,
+                "handling": "first_token_left_empty"
             }),
         );
     }

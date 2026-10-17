@@ -1,7 +1,8 @@
 use super::{
     model::{
-        EstimatedCost, OwnerAttribution, ServiceTier, TokenPrices, TokenUsage, UsageRecord,
-        OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API, PROVIDER_SUBSCRIPTION,
+        EstimatedCost, OwnerAttribution, RequestTiming, ServiceTier, TokenPrices, TokenUsage,
+        UsageRecord, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API,
+        PROVIDER_SUBSCRIPTION,
     },
     pricing::{
         cost_parts, estimate_request_cost, estimate_summed_cost, has_model_price, prices_for_label,
@@ -29,6 +30,10 @@ pub(super) const META_RECORDS_COUNTED_AFTER: &str = "records_counted_after";
 /// The price table (its `PRICING_UPDATED_AT`) the records stored without a price were last
 /// checked against. Each new table is checked once; see `pending_reprice`.
 const META_UNPRICED_CHECKED_FOR: &str = "unpriced_records_checked_for";
+
+/// Set once the records stored before durations were kept got theirs from a re-read of the
+/// rollouts.
+const META_TIMINGS_FILLED: &str = "request_timings_filled";
 
 /// Records migrated from the per-session statistics, not single API responses.
 const LEGACY_RESPONSE_ID_PREFIX: &str = "legacy:";
@@ -109,7 +114,9 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
                 input_price REAL,
                 cached_input_price REAL,
                 cache_write_price REAL,
-                output_price REAL
+                output_price REAL,
+                duration_ms INTEGER,
+                first_token_ms INTEGER
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS usage_records_time_idx
                 ON usage_records(timestamp_seconds);
@@ -156,12 +163,30 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
                 resume_check BLOB NOT NULL,
                 provider TEXT NOT NULL,
                 model TEXT NOT NULL,
-                service_tier TEXT NOT NULL
+                service_tier TEXT NOT NULL,
+                request_started_ms INTEGER NOT NULL DEFAULT 0,
+                output_started INTEGER NOT NULL DEFAULT 0
             );
             "#,
         )
         .map_err(|err| db_error("初始化 token 统计库失败", err))?;
     add_price_columns(&transaction)?;
+    for (table, column, definition) in [
+        ("usage_records", "duration_ms", "INTEGER"),
+        ("usage_records", "first_token_ms", "INTEGER"),
+        (
+            "rollout_cursors",
+            "request_started_ms",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "rollout_cursors",
+            "output_started",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        add_column(&transaction, table, column, definition)?;
+    }
 
     if optional_meta_value(&transaction, META_RECORDS_COUNTED_AFTER)?.is_none() {
         let counted_after = if table_exists(&transaction, "session_usage")? {
@@ -174,6 +199,30 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
     transaction
         .commit()
         .map_err(|err| db_error("提交 token 统计库初始化失败", err))
+}
+
+/// Adds a column a database created by an earlier version lacks.
+fn add_column(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let exists = transaction
+        .query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
+            [column],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| db_error("读取 token 统计库结构失败", err))?;
+    if exists == 1 {
+        return Ok(());
+    }
+    transaction
+        .execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .map_err(|err| db_error(&format!("添加 token 统计库列 {table}.{column} 失败"), err))
 }
 
 fn table_exists(connection: &Connection, name: &str) -> Result<bool, String> {
@@ -391,6 +440,50 @@ pub(super) fn mark_unpriced_checked(transaction: &Transaction<'_>) -> Result<(),
     set_meta_value(transaction, META_UNPRICED_CHECKED_FOR, PRICING_UPDATED_AT)
 }
 
+/// Until the records stored before durations were kept got them: the rollouts modified after
+/// the records' start are read again once, from this second.
+pub(super) fn pending_timing_fill(connection: &Connection) -> Result<Option<i64>, String> {
+    if optional_meta_value(connection, META_TIMINGS_FILLED)?.is_some() {
+        return Ok(None);
+    }
+    records_counted_after_seconds(connection).map(Some)
+}
+
+pub(super) fn mark_timings_filled(transaction: &Transaction<'_>, now: &str) -> Result<(), String> {
+    set_meta_value(transaction, META_TIMINGS_FILLED, now)
+}
+
+/// A response read again gets the duration and first-token time its record lacks. Returns
+/// whether the record changed.
+pub(super) fn fill_record_timing(
+    transaction: &Transaction<'_>,
+    record: &UsageRecord,
+) -> Result<bool, String> {
+    if record.timing == RequestTiming::default() {
+        return Ok(false);
+    }
+    transaction
+        .prepare_cached(
+            r#"
+            UPDATE usage_records
+            SET duration_ms = COALESCE(duration_ms, ?2),
+                first_token_ms = COALESCE(first_token_ms, ?3)
+            WHERE response_id = ?1
+              AND ((duration_ms IS NULL AND ?2 IS NOT NULL)
+                OR (first_token_ms IS NULL AND ?3 IS NOT NULL))
+            "#,
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
+                record.response_id,
+                record.timing.duration_ms,
+                record.timing.first_token_ms
+            ])
+        })
+        .map(|changed| changed == 1)
+        .map_err(|err| db_error("写入 token 记录耗时失败", err))
+}
+
 pub(super) fn count_unpriced_with_model_price(connection: &Connection) -> Result<usize, String> {
     let mut statement = connection
         .prepare(
@@ -458,6 +551,7 @@ fn migrate_session_statistics(transaction: &Transaction<'_>, now: &str) -> Resul
                 usage: session.usage.clone(),
                 service_tier: ServiceTier::Standard,
                 cost,
+                timing: RequestTiming::default(),
             },
         )?;
     }
@@ -515,6 +609,7 @@ fn migrate_session_statistics(transaction: &Transaction<'_>, now: &str) -> Resul
                     usage,
                     service_tier: ServiceTier::Standard,
                     cost,
+                    timing: RequestTiming::default(),
                 },
                 false,
             )?;
@@ -661,10 +756,11 @@ pub(super) fn insert_record(
                 response_id, thread_id, owner_type, owner_id, model, timestamp_seconds,
                 input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens,
                 reasoning_output_tokens, total_tokens, price_label, estimated_cost_usd,
-                input_price, cached_input_price, cache_write_price, output_price
+                input_price, cached_input_price, cache_write_price, output_price, duration_ms,
+                first_token_ms
             )
             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                   ?18)
+                   ?18, ?19, ?20)
             "#,
         )
         .and_then(|mut statement| {
@@ -686,7 +782,9 @@ pub(super) fn insert_record(
                 record.cost.prices.map(|prices| prices.input),
                 record.cost.prices.and_then(|prices| prices.cached_input),
                 record.cost.prices.and_then(|prices| prices.cache_write),
-                record.cost.prices.map(|prices| prices.output)
+                record.cost.prices.map(|prices| prices.output),
+                record.timing.duration_ms,
+                record.timing.first_token_ms
             ])
         })
         .map_err(|err| db_error("写入 token 用量记录失败", err))?;
@@ -797,6 +895,7 @@ fn stored_record(
                 price_label: "",
                 prices: None,
             },
+            timing: RequestTiming::default(),
         },
         row.get(12)?,
         row.get(13)?,
@@ -1003,7 +1102,7 @@ pub(super) fn load_cursors(
         .prepare(
             r#"
             SELECT source_path, modified_nanos, file_size, byte_offset, resume_check,
-                   provider, model, service_tier
+                   provider, model, service_tier, request_started_ms, output_started
             FROM rollout_cursors
             "#,
         )
@@ -1023,6 +1122,8 @@ pub(super) fn load_cursors(
                         provider: row.get(5)?,
                         model: row.get(6)?,
                         service_tier: row.get(7)?,
+                        request_started_ms: row.get(8)?,
+                        output_started: row.get::<_, i64>(9)? != 0,
                     },
                 ),
             ))
@@ -1043,9 +1144,9 @@ pub(super) fn save_cursor(
             r#"
             INSERT INTO rollout_cursors(
                 source_path, modified_nanos, file_size, byte_offset, resume_check,
-                provider, model, service_tier
+                provider, model, service_tier, request_started_ms, output_started
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(source_path) DO UPDATE SET
                 modified_nanos = excluded.modified_nanos,
                 file_size = excluded.file_size,
@@ -1053,7 +1154,9 @@ pub(super) fn save_cursor(
                 resume_check = excluded.resume_check,
                 provider = excluded.provider,
                 model = excluded.model,
-                service_tier = excluded.service_tier
+                service_tier = excluded.service_tier,
+                request_started_ms = excluded.request_started_ms,
+                output_started = excluded.output_started
             "#,
         )
         .and_then(|mut statement| {
@@ -1065,7 +1168,9 @@ pub(super) fn save_cursor(
                 cursor.resume_check,
                 cursor.provider,
                 cursor.model,
-                cursor.service_tier
+                cursor.service_tier,
+                cursor.request_started_ms,
+                i64::from(cursor.output_started)
             ])
         })
         .map(|_| ())

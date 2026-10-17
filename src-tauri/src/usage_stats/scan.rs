@@ -1,11 +1,15 @@
 use super::{
+    codex_logs::CodexLog,
     db::{
-        delete_cursor, find_owner_attribution, insert_record, load_cursors, reprice_stored_record,
-        save_cursor, FileStamp,
+        delete_cursor, fill_record_timing, find_owner_attribution, insert_record, load_cursors,
+        reprice_stored_record, save_cursor, FileStamp,
     },
-    model::{OwnerAttribution, ServiceTier, UsageRecord, UsageScanSource, OWNER_TYPE_UNATTRIBUTED},
+    model::{
+        OwnerAttribution, RequestTiming, ServiceTier, UsageRecord, UsageScanSource,
+        OWNER_TYPE_UNATTRIBUTED,
+    },
     pricing::estimate_request_cost,
-    records::{read_new_records, RolloutCursor},
+    records::{read_new_records, RolloutCursor, RolloutRecord},
 };
 use crate::app_log::{log_event, log_event_once};
 use rusqlite::{Connection, Transaction};
@@ -24,14 +28,60 @@ pub(super) struct ScanResult {
     records: Vec<UsageRecord>,
     cursors: Vec<(String, FileStamp, RolloutCursor)>,
     stale_cursors: Vec<String>,
-    /// Files read again from the start for a price check.
+    /// Files read again from the start for a price check or the duration fill.
     pub(super) reread_files: usize,
+    /// Responses of the last ten minutes with a known start, looked up in a Codex log.
+    pub(super) recent_first_token_lookups: usize,
+    /// How many of those the log had a first output item for.
+    pub(super) recent_first_tokens_found: usize,
 }
 
 /// What `write_scan` stored.
 pub(super) struct ScanWrite {
     /// Records stored without a price that this refresh priced.
     pub(super) repriced: usize,
+    /// Records stored without a duration or first-token time that got one.
+    pub(super) timings_filled: usize,
+}
+
+const RECENT_RESPONSE_MS: i64 = 10 * 60 * 1000;
+
+/// The Codex log of one source, opened when the first response with a known start is read.
+enum SourceLog {
+    NotOpened,
+    Open(CodexLog),
+    Unavailable,
+}
+
+impl SourceLog {
+    fn get(&mut self, codex_home: &Path) -> Option<&CodexLog> {
+        if matches!(self, Self::NotOpened) {
+            *self = match CodexLog::open(codex_home) {
+                Ok(Some(log)) => Self::Open(log),
+                Ok(None) => Self::Unavailable,
+                Err(err) => {
+                    log_codex_log_error(codex_home, err);
+                    Self::Unavailable
+                }
+            };
+        }
+        match self {
+            Self::Open(log) => Some(log),
+            _ => None,
+        }
+    }
+}
+
+/// A Codex log that cannot be read leaves the first-token times empty; the statistics go on.
+fn log_codex_log_error(codex_home: &Path, error: String) {
+    log_event_once(
+        "usage_stats_codex_log_error",
+        json!({
+            "codexHome": codex_home.display().to_string(),
+            "error": error,
+            "handling": "first_token_left_empty"
+        }),
+    );
 }
 
 /// An unreadable file is left for the next refresh. The page refreshes every 30 s, so each
@@ -52,6 +102,7 @@ pub(super) fn scan_sources(
     sources: &[UsageScanSource],
     counted_after_seconds: i64,
     reread_since: Option<i64>,
+    now_seconds: i64,
 ) -> Result<ScanResult, String> {
     let known = load_cursors(connection)?;
     let to_nanos = |seconds: i64| {
@@ -64,6 +115,7 @@ pub(super) fn scan_sources(
     let mut result = ScanResult::default();
     let mut present = HashSet::new();
     for source in sources {
+        let mut source_log = SourceLog::NotOpened;
         for path in collect_rollout_files(&source.codex_home)? {
             let source_path = path.to_string_lossy().into_owned();
             present.insert(source_path.clone());
@@ -136,6 +188,13 @@ pub(super) fn scan_sources(
                     service_tier,
                     &owner.owner_type,
                 );
+                let timing = request_timing(
+                    &record,
+                    &mut source_log,
+                    &source.codex_home,
+                    now_seconds.saturating_mul(1000),
+                    &mut result,
+                );
                 result.records.push(UsageRecord {
                     response_id: record.response_id,
                     thread_id: record.thread_id,
@@ -145,6 +204,7 @@ pub(super) fn scan_sources(
                     usage: record.usage,
                     service_tier,
                     cost,
+                    timing,
                 });
             }
             result.cursors.push((source_path, stamp, read.cursor));
@@ -157,6 +217,37 @@ pub(super) fn scan_sources(
     Ok(result)
 }
 
+/// The duration from the rollout, and the first-token time from the Codex log of the same home.
+fn request_timing(
+    record: &RolloutRecord,
+    source_log: &mut SourceLog,
+    codex_home: &Path,
+    now_ms: i64,
+    result: &mut ScanResult,
+) -> RequestTiming {
+    let Some(started_ms) = record.request_started_ms else {
+        return RequestTiming::default();
+    };
+    let first_output = source_log.get(codex_home).and_then(|log| {
+        log.first_output_ms(&record.thread_id, started_ms, record.completed_ms)
+            .inspect_err(|err| log_codex_log_error(codex_home, err.clone()))
+            .ok()
+            .map(|found| (log, found))
+    });
+    if let Some((_, found)) = &first_output {
+        if now_ms - record.completed_ms <= RECENT_RESPONSE_MS {
+            result.recent_first_token_lookups += 1;
+            result.recent_first_tokens_found += usize::from(found.is_some());
+        }
+    }
+    RequestTiming {
+        duration_ms: Some(record.completed_ms - started_ms),
+        first_token_ms: first_output
+            .and_then(|(_, found)| found)
+            .map(|at| at - started_ms),
+    }
+}
+
 /// Stores one refresh inside the caller's transaction. A failure leaves the transaction to roll
 /// back, so the cursors still point before these records and the next refresh reads them again.
 pub(super) fn write_scan(
@@ -164,12 +255,18 @@ pub(super) fn write_scan(
     scan: &ScanResult,
 ) -> Result<ScanWrite, String> {
     let mut repriced = 0;
+    let mut timings_filled = 0;
     for record in &scan.records {
+        if insert_record(transaction, record, true)? {
+            continue;
+        }
         // A response seen again (a fork's copy, a rewritten or re-read file) may be one stored
-        // while its model had no price.
-        if !insert_record(transaction, record, true)? && reprice_stored_record(transaction, record)?
-        {
+        // while its model had no price, or before durations were kept.
+        if reprice_stored_record(transaction, record)? {
             repriced += 1;
+        }
+        if fill_record_timing(transaction, record)? {
+            timings_filled += 1;
         }
     }
     for (source_path, stamp, cursor) in &scan.cursors {
@@ -178,7 +275,10 @@ pub(super) fn write_scan(
     for source_path in &scan.stale_cursors {
         delete_cursor(transaction, source_path)?;
     }
-    Ok(ScanWrite { repriced })
+    Ok(ScanWrite {
+        repriced,
+        timings_filled,
+    })
 }
 
 fn file_stamp(path: &Path) -> Result<FileStamp, String> {

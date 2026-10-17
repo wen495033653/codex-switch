@@ -24,7 +24,8 @@ const MAX_PAGE_SIZE: u32 = 200;
 const RECORD_COLUMNS: &str = "response_id, thread_id, owner_type, owner_id, model, \
      timestamp_seconds, input_tokens, cached_input_tokens, cache_write_input_tokens, \
      output_tokens, reasoning_output_tokens, total_tokens, price_label, estimated_cost_usd, \
-     input_price, cached_input_price, cache_write_price, output_price";
+     input_price, cached_input_price, cache_write_price, output_price, duration_ms, \
+     first_token_ms";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum BillsRange {
@@ -240,6 +241,8 @@ struct BillRow {
     price_label: String,
     cost_usd: Option<f64>,
     prices: Option<TokenPrices>,
+    duration_ms: Option<i64>,
+    first_token_ms: Option<i64>,
 }
 
 fn bill_row(row: &Row<'_>) -> rusqlite::Result<BillRow> {
@@ -271,6 +274,8 @@ fn bill_row(row: &Row<'_>) -> rusqlite::Result<BillRow> {
             }),
             _ => None,
         },
+        duration_ms: row.get(18)?,
+        first_token_ms: row.get(19)?,
     })
 }
 
@@ -320,7 +325,9 @@ fn bill_json(row: &BillRow) -> Result<Value, String> {
         "reasoning_output_tokens": row.usage.reasoning_output_tokens,
         "total_tokens": row.usage.total_tokens,
         "estimated_cost_usd": row.cost_usd,
-        "charges": charges_json(row)?
+        "charges": charges_json(row)?,
+        "duration_ms": row.duration_ms,
+        "first_token_ms": row.first_token_ms
     }))
 }
 
