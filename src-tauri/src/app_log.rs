@@ -319,11 +319,9 @@ pub(crate) fn log_event(event: &str, details: Value) {
         }
     }
 
-    let shown = if cfg!(debug_assertions) {
-        timeline || DEV_ONLY_EVENTS.contains(&event)
-    } else {
-        error
-    };
+    // Only debug builds have the dev log window; a release build neither subscribes to the event
+    // nor reads the buffer.
+    let shown = cfg!(debug_assertions) && (timeline || DEV_ONLY_EVENTS.contains(&event));
     if !shown {
         return;
     }

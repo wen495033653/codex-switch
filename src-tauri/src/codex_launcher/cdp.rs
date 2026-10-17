@@ -1,5 +1,6 @@
 use super::{
-    codex_app_watcher::CodexProcess, process_control::sanitize_desktop_app_launch_env,
+    codex_app_watcher::CodexProcess,
+    process_control::{launch_codex_process_with_options, sanitize_desktop_app_launch_env},
     shell::hide_command_window,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -187,18 +188,26 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
 
     let debug_port = select_loopback_port(CODEX_CDP_DEBUG_PORT)?;
     let scripts = cdp_scripts_for_hooks(hooks);
+    let mut launch_args = vec![
+        format!("--remote-debugging-port={debug_port}"),
+        format!("--remote-allow-origins=http://127.0.0.1:{debug_port}"),
+    ];
+    launch_args.extend(args.iter().cloned());
+    // With nothing to inject, Codex only has to start with its debug port open, which the normal
+    // launch confirms. Waiting for a page here would end a Codex that is slow to show one.
+    if scripts.scripts.is_empty() {
+        return launch_codex_process_with_options(
+            &executable_path.to_string_lossy(),
+            &launch_args,
+            envs,
+        );
+    }
     let mut command = Command::new(executable_path);
     command
-        .arg(format!("--remote-debugging-port={debug_port}"))
-        .arg(format!(
-            "--remote-allow-origins=http://127.0.0.1:{debug_port}"
-        ))
+        .args(&launch_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    for arg in args {
-        command.arg(arg);
-    }
     for (name, value) in envs {
         command.env(name, value);
     }

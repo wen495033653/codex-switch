@@ -100,22 +100,33 @@ where
         ));
     }
 
-    before_relaunch()?;
+    // Every editor is closed now. Each one is reopened even when the sync or another reopen
+    // fails, and all failures are reported together, so none is left closed.
+    let mut errors = Vec::new();
+    if let Err(err) = before_relaunch() {
+        errors.push(err);
+    }
 
     let mut restarted_paths = HashSet::new();
     for executable in executables {
         let restarted = if is_codex_executable(&entries, &executable) {
             crate::codex_launcher::codex_app_open::relaunch_codex_executable_for_current_settings(
                 &executable,
-            )?
+            )
         } else {
-            relaunch_executable_with_retry(&executable)?;
-            true
+            relaunch_executable_with_retry(&executable).map(|()| true)
         };
-        if restarted {
-            restarted_paths.insert(normalize_executable_path(&executable));
+        match restarted {
+            Ok(true) => {
+                restarted_paths.insert(normalize_executable_path(&executable));
+            }
+            Ok(false) => {}
+            Err(err) => errors.push(format!("重新打开 {executable} 失败: {err}")),
         }
         thread::sleep(StdDuration::from_millis(120));
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("；"));
     }
 
     let restarted_entries: Vec<Value> = entries

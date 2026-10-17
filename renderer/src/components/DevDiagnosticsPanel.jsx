@@ -3,7 +3,6 @@ import { useI18n } from '../i18n';
 export default function DevDiagnosticsPanel({
   entries,
   errorCount,
-  isOpen,
   onClear,
   onToggle,
   warningCount
@@ -14,10 +13,6 @@ export default function DevDiagnosticsPanel({
     errors: errorCount,
     warnings: warningCount
   });
-
-  if (!isOpen) {
-    return null;
-  }
 
   return (
     <section className="dev-diagnostics-panel" aria-label={t('开发日志')}>

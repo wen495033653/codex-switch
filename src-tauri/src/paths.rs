@@ -42,6 +42,11 @@ pub(crate) fn app_data_dir() -> Result<PathBuf, String> {
     app_data_dir_named(APP_DATA_DIR_NAME)
 }
 
+/// One directory per standalone Codex instance (its codex home, user data and marker).
+pub(crate) fn codex_app_instances_dir() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("codex-app-instances"))
+}
+
 pub(crate) fn settings_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("settings.json"))
 }

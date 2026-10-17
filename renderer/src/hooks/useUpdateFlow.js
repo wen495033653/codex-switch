@@ -29,14 +29,20 @@ export function useUpdateFlow({
       const percent = data.progress && Number.isFinite(Number(data.progress.percent))
         ? Math.max(0, Math.min(100, Number(data.progress.percent)))
         : 0;
-      setUpdateModal(prev => ({
-        ...prev,
-        visible: true,
-        loading: true,
-        status: 'downloading',
-        progress: percent,
-        error: ''
-      }));
+      // Progress arrives for every downloaded chunk; keeping the same object until the shown
+      // percent changes saves a re-render of the whole App per chunk.
+      setUpdateModal(prev => (
+        prev.status === 'downloading' && Math.round(prev.progress) === Math.round(percent)
+          ? prev
+          : {
+            ...prev,
+            visible: true,
+            loading: true,
+            status: 'downloading',
+            progress: percent,
+            error: ''
+          }
+      ));
       return;
     }
     if (data.status === 'downloaded') {

@@ -131,16 +131,10 @@ impl ZipArchiveLite {
     }
 }
 
+// The table-driven / SIMD CRC-32 already linked in through png and flate2; the bit-by-bit loop it
+// replaces was the slowest step of exporting and importing large session archives.
 fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffffu32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            let mask = 0u32.wrapping_sub(crc & 1);
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
+    crc32fast::hash(data)
 }
 
 pub(super) fn write_zip_store(path: &Path, entries: &[(String, Vec<u8>)]) -> Result<(), String> {
@@ -266,4 +260,16 @@ fn read_u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
         .get(offset..offset + 4)
         .ok_or_else(|| "zip 数据越界".to_string())?;
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::crc32;
+
+    #[test]
+    fn crc32_matches_the_standard_check_value() {
+        // CRC-32/ISO-HDLC check value, the CRC the zip format uses.
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b""), 0);
+    }
 }

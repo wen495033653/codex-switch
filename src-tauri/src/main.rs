@@ -69,15 +69,28 @@ fn main() {
         .setup(move |app| {
             app_log::init_app_log(app.handle().clone());
             app_log::log_event("app_start", json!({}));
-            restore_main_window_state(app.handle()).map_err(setup_error)?;
-            setup_tray(app.handle()).map_err(setup_error)?;
+            // Window size and the tray-only start come from settings.json. A file that cannot be
+            // read must not end the process before the window can show that error, so both are
+            // recorded and startup continues with the default window.
+            if let Err(err) = restore_main_window_state(app.handle()) {
+                app_log::log_event(
+                    "app_start_step_error",
+                    json!({ "step": "restore_main_window_state", "error": err }),
+                );
+            }
+            setup_tray(app.handle()).map_err(|err| fatal_setup_error("setup_tray", err))?;
             let launch_args: Vec<String> = std::env::args().collect();
-            apply_main_window_startup_behavior(app.handle(), &launch_args).map_err(setup_error)?;
+            if let Err(err) = apply_main_window_startup_behavior(app.handle(), &launch_args) {
+                app_log::log_event(
+                    "app_start_step_error",
+                    json!({ "step": "apply_main_window_startup_behavior", "error": err }),
+                );
+            }
             // 独立 Dev 预览只执行用户手动操作，不在启动时同步正式版状态。
             if dev_preview {
                 app_log::log_event(
                     "app_dev_preview",
-                    json!({ "automaticSync": false, "dataDir": paths::app_data_dir().map_err(setup_error)?, "codexHome": paths::codex_dir().map_err(setup_error)? }),
+                    json!({ "automaticSync": false, "dataDir": paths::app_data_dir().map_err(|err| fatal_setup_error("dev_preview_paths", err))?, "codexHome": paths::codex_dir().map_err(|err| fatal_setup_error("dev_preview_paths", err))? }),
                 );
                 return Ok(());
             }
@@ -216,6 +229,12 @@ fn main() {
         .expect("failed to run Codex Switch");
 }
 
-fn setup_error(message: String) -> Box<dyn std::error::Error> {
+/// Tauri panics on a setup error and the release build aborts without a console, so the reason
+/// is written to the log first.
+fn fatal_setup_error(step: &str, message: String) -> Box<dyn std::error::Error> {
+    app_log::log_event(
+        "app_start_step_error",
+        json!({ "step": step, "error": message, "fatal": true }),
+    );
     std::io::Error::other(message).into()
 }

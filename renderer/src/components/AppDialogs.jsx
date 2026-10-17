@@ -64,7 +64,6 @@ export default function AppDialogs({
           oauth={addAccount.oauth}
           oauthCallbackSubmitting={addAccount.oauthCallbackSubmitting}
           oauthCallbackUrl={addAccount.oauthCallbackUrl}
-          oauthTimeoutHint={addAccount.oauthTimeoutHint}
           refreshTokenInput={addAccount.refreshTokenInput}
           refreshTokenLoading={addAccount.refreshTokenLoading}
           showRefreshTokenPanel={addAccount.showRefreshTokenPanel}

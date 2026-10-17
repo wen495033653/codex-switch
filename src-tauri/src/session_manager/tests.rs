@@ -361,6 +361,50 @@ fn restore_conflict_supports_ask_skip_and_modify_id() {
 }
 
 #[test]
+fn sessions_with_a_non_utf8_line_list_and_restore_unchanged() {
+    let base = temp_path("restore-non-utf8");
+    let root = base.join("codex");
+    let deleted_root = base.join("deleted-sessions");
+    let relative = PathBuf::from("sessions/2026/07/13/rollout-non-utf8.jsonl");
+    let session_id = "019f0000-0000-7000-8000-000000000011";
+    let source = write_test_session(&root, &relative, session_id, "broken line");
+    let mut file = fs::OpenOptions::new().append(true).open(&source).unwrap();
+    file.write_all(b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\n")
+        .unwrap();
+    drop(file);
+    let original = fs::read(&source).unwrap();
+
+    let summary = parse_session_file_for_list(&source).unwrap();
+    assert_eq!(summary.id.as_deref(), Some(session_id));
+
+    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+    let restored =
+        restore_deleted_sessions_locked(&deleted_root, vec![delete_id], ConflictStrategy::Ask)
+            .unwrap();
+    assert_eq!(restored["report"]["restored"], 1, "{restored}");
+    assert_eq!(fs::read(&source).unwrap(), original);
+
+    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, b"existing target\n").unwrap();
+    let modified =
+        restore_deleted_sessions_locked(&deleted_root, vec![delete_id], ConflictStrategy::ModifyId)
+            .unwrap();
+    assert_eq!(modified["report"]["restored"], 1, "{modified}");
+    let copy = fs::read_dir(source.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| *path != source)
+        .unwrap();
+    let copy_bytes = fs::read(&copy).unwrap();
+    assert!(copy_bytes.ends_with(b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\n"));
+    let copy_summary = parse_session_file_for_list(&copy).unwrap();
+    assert_ne!(copy_summary.id.as_deref(), Some(session_id));
+
+    fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
 fn relative_path_rejects_traversal() {
     assert!(normalize_relative_path("../sessions/a.jsonl").is_err());
     assert!(normalize_relative_path("sessions/2026/05/01/a.jsonl").is_ok());
@@ -1599,6 +1643,28 @@ fn legacy_migration_rejects_unwritable_schema_without_marker_or_backup() {
 }
 
 #[test]
+fn legacy_migration_writes_its_marker_and_runs_once() {
+    let root = temp_path("legacy-migration-marker");
+    let marker = root.join("markers").join("migration.json");
+    drop(create_current_state_db(&root));
+
+    let first = migrate_legacy_codex_data_with_marker(&root, &marker).unwrap();
+    let marker_report: Value = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+    let leftovers = fs::read_dir(marker.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != "migration.json")
+        .count();
+    let second = migrate_legacy_codex_data_with_marker(&root, &marker).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(first["completed"], true, "{first}");
+    assert_eq!(marker_report["completed"], true);
+    assert_eq!(leftovers, 0);
+    assert_eq!(second, marker_report);
+}
+
+#[test]
 fn export_bundle_manifest_matches_exported_bytes_and_imports_cleanly() {
     let base = temp_path("export-bundle");
     let source_root = base.join("source");
@@ -2322,6 +2388,53 @@ fn status_change_without_state_rows_takes_no_backup() {
 }
 
 #[test]
+fn status_overwrite_never_replaces_a_session_moved_earlier_in_the_batch() {
+    let root = temp_path("status-same-batch-target");
+    let file_name = session_file_name("019e20f9-34b7-7a82-a95b-fe461de89810");
+    let first_relative = PathBuf::from("sessions/2026/05/13").join(&file_name);
+    let second_relative = PathBuf::from("sessions/2026/05/14").join(&file_name);
+    let first = write_test_session(&root, &first_relative, "first-id", "first");
+    let second = write_test_session(&root, &second_relative, "second-id", "second");
+    let first_bytes = fs::read(&first).unwrap();
+    let second_bytes = fs::read(&second).unwrap();
+    drop(create_current_state_db(&root));
+    let paths = vec![
+        path_to_slash(&first_relative),
+        path_to_slash(&second_relative),
+    ];
+
+    let asked = set_conversation_status_impl(
+        root.to_string_lossy().to_string(),
+        paths.clone(),
+        "archived".to_string(),
+        None,
+    )
+    .unwrap();
+    let overwritten = set_conversation_status_impl(
+        root.to_string_lossy().to_string(),
+        paths,
+        "archived".to_string(),
+        Some("overwrite".to_string()),
+    )
+    .unwrap();
+    let archived = fs::read(root.join("archived_sessions").join(&file_name)).unwrap();
+    let second_left = fs::read(&second).unwrap();
+    let first_left = first.exists();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(asked["report"]["conflict_action_required"], true, "{asked}");
+    assert_eq!(asked["report"]["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(overwritten["report"]["changed"], 1, "{overwritten}");
+    assert!(overwritten["report"]["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("重复目标"));
+    assert_eq!(archived, first_bytes);
+    assert_eq!(second_left, second_bytes);
+    assert!(!first_left);
+}
+
+#[test]
 fn single_path_lookup_matches_the_full_catalog() {
     let root = temp_path("catalog-single-path");
     let name = "rollout-2026-05-13T18-54-23-019e20f9-34b7-7a82-a95b-fe461de89807.jsonl";
@@ -2512,4 +2625,34 @@ fn concurrent_backups_with_the_same_reason_get_distinct_files() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files, 32);
     assert!(rows.iter().all(|count| *count == 1));
+}
+
+#[test]
+fn per_session_failures_in_a_report_are_logged() {
+    let failed = serde_json::json!({
+        "ok": false,
+        "report": { "errors": ["移动会话失败 rollout-x.jsonl: 拒绝访问"] }
+    });
+    super::log_item_errors(
+        "session_manager_status_error",
+        Some("C:/root-under-test"),
+        &failed,
+    );
+    super::log_item_errors(
+        "session_manager_purge_error",
+        None,
+        &serde_json::json!({ "ok": true, "errors": [] }),
+    );
+
+    let entries = crate::app_log::get_dev_log_entries();
+    let logged = entries.as_array().unwrap().iter().filter(|entry| {
+        entry["details"]["event"] == "session_manager_status_error"
+            && entry["details"]["details"]["root"] == "C:/root-under-test"
+    });
+    assert_eq!(logged.count(), 1, "{entries}");
+    assert!(!entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| { entry["details"]["event"] == "session_manager_purge_error" }));
 }

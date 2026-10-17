@@ -3,7 +3,7 @@ use super::codex_app_watcher::process_command_line;
 use super::process_control::kill_process_tree;
 use crate::{
     accounts::{
-        auth_error_is_login_expired, get_codex_state_value, lookup_store_account,
+        account_login_expired, get_codex_state_value, lookup_store_account,
         mark_account_auth_error, profile_id_from_account, profile_id_from_tokens_value,
         read_api_key_from_auth, read_api_key_from_provider_config, read_auth_value,
         read_store_value, set_api_mode, set_subscription_mode, write_account_auth,
@@ -93,23 +93,6 @@ impl RemoteControlAccountIssue {
     }
 }
 
-fn remote_control_account_login_expired(account: &Value) -> bool {
-    let custom = account.get("custom").unwrap_or(&Value::Null);
-    if string_field(custom, "auth_status") != "error" {
-        return false;
-    }
-
-    let auth_error = custom.get("auth_error").unwrap_or(&Value::Null);
-    let text = format!(
-        "{} {} {} {}",
-        string_field(custom, "auth_status_message"),
-        string_field(auth_error, "code"),
-        string_field(auth_error, "message"),
-        string_field(auth_error, "raw_message")
-    );
-    auth_error_is_login_expired(&text)
-}
-
 fn remote_control_account_issue_with_lookup<F>(
     settings: &Value,
     lookup: F,
@@ -129,7 +112,7 @@ where
     let Some(account) = lookup(&account_id)? else {
         return Ok(Some(RemoteControlAccountIssue::Missing(account_id)));
     };
-    if remote_control_account_login_expired(&account) {
+    if account_login_expired(&account) {
         return Ok(Some(RemoteControlAccountIssue::LoginExpired(account_id)));
     }
     Ok(None)
@@ -293,6 +276,13 @@ fn restore_api_config_after_remote_control_disabled(settings: &Value) -> Result<
         return Ok(());
     }
     set_api_mode(&api_mode)
+}
+
+/// With remote control off, the API config is put back only when the API mode is selected, or
+/// when a leftover mixed config was running Codex on the API profile. A mode never selected (the
+/// default `""`) leaves auth.json and the API provider as they are.
+fn restores_api_config(settings: &Value, mixed_config_present: bool) -> bool {
+    mixed_config_present || string_field(settings, "codex_active_mode") == "api"
 }
 
 fn legacy_remote_control_home_removed() -> Result<bool, String> {
@@ -542,7 +532,9 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
         }
         RemoteControlRuntimeTarget::Api => {
             let pending = remote_control_mixed_config_present()?;
-            restore_api_config_after_remote_control_disabled(&settings)?;
+            if restores_api_config(&settings, pending) {
+                restore_api_config_after_remote_control_disabled(&settings)?;
+            }
             remove_remote_control_config()?;
             pending
         }
@@ -586,11 +578,18 @@ fn remote_control_backend_environment_status(settings: &Value) -> Result<Option<
         .and_then(|account| fetch_remote_control_backend_environment_status(&account));
     Ok(match status {
         Ok(status) => Some(status),
-        Err(err) => Some(json!({
-            "status": "lookup_failed",
-            "message": "桌面状态查询失败",
-            "raw": truncate_remote_control_error_text(&err)
-        })),
+        Err(err) => {
+            // The status page polls every 4 s; each distinct failure is recorded once per run.
+            log_event_once(
+                "codex_remote_control_backend_lookup_error",
+                json!({ "account": account_label(&account_id), "error": err.clone() }),
+            );
+            Some(json!({
+                "status": "lookup_failed",
+                "message": "桌面状态查询失败",
+                "raw": truncate_remote_control_error_text(&err)
+            }))
+        }
     })
 }
 
@@ -669,10 +668,12 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
         if let Err(err) = mark_account_auth_error(&account_id, "控制账号登录已过期，请重新登录")
         {
             log_event(
-                "codex_remote_control_account_status_update_failed",
+                "codex_remote_control_account_status_update_error",
                 json!({
+                    "account": account_label(&account_id),
                     "reason": "login_expired",
-                    "error": err
+                    "error": err,
+                    "handling": "remote_control_disabled_anyway"
                 }),
             );
         }
@@ -686,7 +687,7 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
 }
 
 pub(crate) fn remote_control_codex_app_running() -> Result<bool, String> {
-    Ok(!super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty())
+    Ok(!super::codex_app_watcher::refresh_default_codex_app_processes()?.is_empty())
 }
 
 fn attach_remote_control_auto_disabled_response(
@@ -845,7 +846,7 @@ pub(crate) async fn set_codex_remote_control_enabled(enabled: bool) -> Result<Va
 
 fn set_codex_remote_control_enabled_impl(enabled: bool) -> Result<Value, String> {
     let codex_app_running =
-        !super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty();
+        !super::codex_app_watcher::refresh_default_codex_app_processes()?.is_empty();
     if enabled {
         validate_remote_control_enable_prerequisites()?;
     }
@@ -899,7 +900,7 @@ fn set_codex_remote_control_account_id_impl(id: &str) -> Result<Value, String> {
     validate_remote_control_account_id(account_id)?;
 
     let codex_app_running =
-        !super::codex_app_watcher::refresh_current_codex_app_processes()?.is_empty();
+        !super::codex_app_watcher::refresh_default_codex_app_processes()?.is_empty();
     let settings = update_settings_value(&json!({
         REMOTE_CONTROL_ACCOUNT_SETTING_KEY: account_id
     }))?;
@@ -1186,6 +1187,20 @@ mod tests {
             remote_control_runtime_target(&settings),
             RemoteControlRuntimeTarget::Subscription
         );
+    }
+
+    #[test]
+    fn api_config_is_restored_only_for_a_selected_api_mode_or_a_leftover_mixed_config() {
+        let unselected = json!({ "codex_remote_control_enabled": false, "codex_active_mode": "" });
+        let api = json!({ "codex_remote_control_enabled": false, "codex_active_mode": "api" });
+
+        assert_eq!(
+            remote_control_runtime_target(&unselected),
+            RemoteControlRuntimeTarget::Api
+        );
+        assert!(!restores_api_config(&unselected, false));
+        assert!(restores_api_config(&unselected, true));
+        assert!(restores_api_config(&api, false));
     }
 
     #[test]

@@ -3,13 +3,13 @@ use crate::{
         find_store_account, profile_id_from_account, read_api_key_from_auth,
         read_api_key_from_provider_config,
     },
-    app_log::{log_event, log_event_once},
+    app_log::{account_label, log_event, log_event_once},
     json_file::write_json_file,
     json_util::string_field,
     model_instructions::{
         resolve_model_instructions_file, SETTING_KEY as MODEL_INSTRUCTIONS_ENABLED_SETTING_KEY,
     },
-    paths::{app_data_dir, codex_dir},
+    paths::{codex_app_instances_dir, codex_dir},
     session_manager::migrate_legacy_codex_data_for_root,
     settings::{default_api_mode, read_settings_value},
     time_util::now_string,
@@ -29,8 +29,6 @@ mod desktop_install;
 mod instance_config;
 
 pub(crate) use desktop_install::{codex_desktop_cli_source_path, codex_desktop_support_status};
-
-const CODEX_APP_INSTANCES_DIR: &str = "codex-app-instances";
 
 const MULTI_OPEN_SUPPRESS_SOURCE: &str = "multi_open_target_channel";
 
@@ -81,7 +79,7 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
         "codex_app_multi_open_start",
         json!({
             "kind": channel.kind,
-            "channel": channel.label,
+            "target": log_target(channel.kind, &channel.target_id),
             "executable": executable,
             "instanceRoot": paths.root.to_string_lossy(),
             "codexHome": paths.codex_home.to_string_lossy(),
@@ -101,7 +99,7 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
                 "codex_app_multi_open_finish",
                 json!({
                     "kind": channel.kind,
-                    "channel": channel.label,
+                    "target": log_target(channel.kind, &channel.target_id),
                     "instanceRoot": paths.root.to_string_lossy()
                 }),
             );
@@ -140,9 +138,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
     let target_kind = string_field(&payload, "kind");
     let target_id = string_field(&payload, "id");
     let instance_key = instance_key_for_target(&target_kind, &target_id)?;
-    let root = app_data_dir()?
-        .join(CODEX_APP_INSTANCES_DIR)
-        .join(instance_key);
+    let root = codex_app_instances_dir()?.join(instance_key);
     let codex_home = root.join("codex-home");
     let user_data_dir = root.join("user-data");
     if !user_data_dir.exists() {
@@ -159,7 +155,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
             "codex_app_multi_open_show_window_error",
             json!({
                 "kind": target_kind,
-                "targetId": target_id,
+                "target": log_target(&target_kind, &target_id),
                 "userDataDir": user_data_dir.to_string_lossy(),
                 "pids": pids,
                 "error": err
@@ -171,7 +167,7 @@ pub(crate) fn show_codex_app_instance(payload: Value) -> Result<Value, String> {
         "codex_app_multi_open_show_window",
         json!({
             "kind": target_kind,
-            "targetId": target_id,
+            "target": log_target(&target_kind, &target_id),
             "instanceRoot": root.to_string_lossy(),
             "codexHome": codex_home.to_string_lossy(),
             "userDataDir": user_data_dir.to_string_lossy(),
@@ -197,7 +193,15 @@ pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
         }));
     }
 
-    let instances_dir = app_data_dir()?.join(CODEX_APP_INSTANCES_DIR);
+    let instances_dir = codex_app_instances_dir()?;
+    // Polled every 3 s on the account and API pages; with no instance ever opened there is
+    // nothing to match, so the process scan is skipped.
+    if !instances_dir.exists() {
+        return Ok(json!({
+            "ok": true,
+            "instances": []
+        }));
+    }
     let processes = super::codex_app_watcher::refresh_current_codex_app_processes()?;
     let instances = read_codex_app_instance_statuses(&instances_dir, &processes)?;
 
@@ -554,9 +558,7 @@ fn prepare_instance_paths(
     app: &AppHandle,
     channel: &CodexAppChannel,
 ) -> Result<CodexAppInstancePaths, String> {
-    let root = app_data_dir()?
-        .join(CODEX_APP_INSTANCES_DIR)
-        .join(&channel.key);
+    let root = codex_app_instances_dir()?.join(&channel.key);
     let codex_home = root.join("codex-home");
     let user_data_dir = root.join("user-data");
 
@@ -630,8 +632,8 @@ fn sync_instance_codex_home(
         model_instructions_file.as_deref(),
     )?;
 
-    copy_optional_file(&source_home.join(".env"), &target_home.join(".env"))?;
-    copy_optional_file(
+    mirror_optional_file(&source_home.join(".env"), &target_home.join(".env"))?;
+    mirror_optional_file(
         &source_home.join("AGENTS.md"),
         &target_home.join("AGENTS.md"),
     )?;
@@ -661,11 +663,21 @@ fn write_instance_marker(root: &Path, channel: &CodexAppChannel) -> Result<(), S
     )
 }
 
-fn copy_optional_file(source: &Path, target: &Path) -> Result<(), String> {
-    if !source.exists() {
-        return Ok(());
+/// The instance's copy follows the main home: a file removed there (turning the proxy off deletes
+/// a `.env` that held only the proxy) is removed from the instance too, or the instance would keep
+/// using a proxy that is gone.
+fn mirror_optional_file(source: &Path, target: &Path) -> Result<(), String> {
+    if source.exists() {
+        return copy_file(source, target);
     }
-    copy_file(source, target)
+    match fs::remove_file(target) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "删除 Codex 多开实例中已不存在于主目录的文件失败 {}: {err}",
+            target.display()
+        )),
+    }
 }
 
 fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
@@ -688,6 +700,15 @@ fn first_non_empty(values: Vec<String>) -> String {
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty())
         .unwrap_or_default()
+}
+
+/// An account is logged by its first characters only (its profile id ends with the email).
+fn log_target(kind: &str, target_id: &str) -> String {
+    if kind == "account" {
+        account_label(target_id)
+    } else {
+        target_id.to_string()
+    }
 }
 
 fn compact_id(value: &str) -> String {
@@ -805,6 +826,31 @@ mod tests {
             .unwrap();
         assert_eq!(valid["targetKey"], "account:profile-1");
         assert!(valid["markerError"].is_null());
+    }
+
+    #[test]
+    fn instance_copy_follows_a_file_removed_from_the_main_home() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codex-switch-mirror-{stamp}"));
+        let source = root.join("main").join(".env");
+        let target = root.join("instance").join(".env");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "HTTP_PROXY=http://127.0.0.1:7890\n").unwrap();
+
+        mirror_optional_file(&source, &target).unwrap();
+        let copied = fs::read(&target).unwrap();
+        fs::remove_file(&source).unwrap();
+        mirror_optional_file(&source, &target).unwrap();
+        let removed = !target.exists();
+        // Nothing on either side stays nothing.
+        mirror_optional_file(&source, &target).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(copied, b"HTTP_PROXY=http://127.0.0.1:7890\n");
+        assert!(removed);
     }
 
     #[test]

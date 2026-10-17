@@ -3,6 +3,7 @@ use crate::{
         account_from_exchange_syncing, add_account_to_store, build_oauth_auth_url, generate_pkce,
         profile_id_from_account, random_urlsafe, sync_auth_file_if_active,
     },
+    app_log::log_event,
     events::emit_store_updated,
     json_util::string_field,
     quota::sync_account_usage_in_background,
@@ -49,6 +50,12 @@ pub(super) fn oauth_start_impl(
             } else {
                 ""
             };
+            // The message names the failed step (token endpoint answer, state mismatch, port in
+            // use, timeout, saving the account); it carries no token.
+            log_event(
+                "oauth_flow_error",
+                json!({ "error": message, "errorCode": error_code }),
+            );
             emit_oauth_update(
                 &app,
                 json!({
@@ -137,7 +144,11 @@ fn run_oauth_flow(
 
 fn open_oauth_url_in_background(app: AppHandle, auth_url: String) {
     thread::spawn(move || {
-        if open::that(&auth_url).is_err() {
+        if let Err(err) = open::that(&auth_url) {
+            log_event(
+                "oauth_open_browser_error",
+                json!({ "error": err.to_string(), "handling": "user_copies_the_link" }),
+            );
             emit_oauth_update(
                 &app,
                 json!({

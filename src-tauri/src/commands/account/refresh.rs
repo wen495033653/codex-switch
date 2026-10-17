@@ -5,9 +5,11 @@ use crate::{
         find_store_account, get_usage, mark_account_auth_error, refresh_token_from_account,
         INTERACTIVE_REQUEST_TIMEOUT_MS,
     },
+    app_log::{account_label, log_event},
     json_util::raw_string_field,
     quota::{
-        refresh_account_subscription, refresh_stored_account_tokens, store_account_usage_result,
+        log_usage_rejected, refresh_account_subscription, refresh_stored_account_tokens,
+        store_account_usage_result,
     },
 };
 use serde_json::{json, Value};
@@ -74,7 +76,18 @@ fn prepare_account_refresh(
 }
 
 fn auth_error_payload(profile_id: &str, message: &str) -> Result<Value, String> {
-    let store = mark_account_auth_error(profile_id, message)?;
+    let marked = mark_account_auth_error(profile_id, message);
+    log_event(
+        "account_auth_manual_refresh_error",
+        json!({
+            "account": account_label(profile_id),
+            "error": message,
+            "markError": marked.as_ref().err()
+        }),
+    );
+    // A failed mark (the account was just removed) must not hide why the exchange failed.
+    let store =
+        marked.map_err(|mark_err| format!("{message}\n标记账号认证状态失败: {mark_err}"))?;
     Ok(json!({
         "ok": false,
         "message": message,
@@ -115,7 +128,7 @@ pub(super) fn refresh_account_impl(id: String) -> Result<Value, String> {
                     "store": store
                 }));
             }
-            Err(_) => {}
+            Err(error) => log_usage_rejected(target_profile_id, &error),
         }
     }
 

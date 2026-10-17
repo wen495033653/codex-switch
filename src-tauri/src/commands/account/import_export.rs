@@ -52,7 +52,7 @@ pub(super) fn import_accounts_impl(app: AppHandle) -> Result<Value, String> {
         _ => return Err("导入已取消".to_string()),
     }
 
-    let payload = import_accounts_from_refresh_tokens(refresh_tokens, false)?;
+    let payload = import_accounts_from_refresh_tokens(refresh_tokens)?;
     if let Err(err) = read_store_with_active_sync() {
         log_event("account_import_active_sync_error", json!({ "error": err }));
     }

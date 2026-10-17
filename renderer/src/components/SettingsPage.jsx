@@ -14,7 +14,6 @@ export default function SettingsPage({
     checkingUpdate,
     isDevBuild,
     updateSettingsDraftAndSave,
-    normalizeBackgroundRefreshInterval,
     openDataDir,
     openRepository,
     handleCheckUpdate,
@@ -56,7 +55,6 @@ export default function SettingsPage({
 
                     {activeSettingsTab === 'account' && (
                         <AccountSettingsTab
-                            normalizeBackgroundRefreshInterval={normalizeBackgroundRefreshInterval}
                             setSettingsDraft={setSettingsDraft}
                             settingsDraft={settingsDraft}
                             updateSettingsDraftAndSave={updateSettingsDraftAndSave}

@@ -102,8 +102,7 @@ export default function ProxySettingsTab({
     setCodexSessionSyncEnabled,
     settingsDraft,
     switching,
-    updateCodexProxySettings,
-    updateSettingsDraftAndSave
+    updateCodexProxySettings
 }) {
     const { t, translateRuntimeText } = useI18n();
     const proxyEnvEnabled = settingsDraft.codex_proxy_env_enabled === true;

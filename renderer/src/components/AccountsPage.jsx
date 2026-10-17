@@ -29,7 +29,7 @@ export default function AccountsPage({
     page,
     pageSize,
     refreshAllStatus,
-    refreshingAccountId,
+    refreshingAccountIds,
     search,
     startIdx,
     switching,
@@ -115,7 +115,7 @@ export default function AccountsPage({
                                 key={accountId}
                                 acc={acc}
                                 isCurrent={accountId === currentAccountId}
-                                refreshing={refreshAllStatus.running || refreshingAccountId === accountId}
+                                refreshing={refreshAllStatus.running || refreshingAccountIds.has(accountId)}
                                 switching={switching}
                                 usageStats={usageStats}
                                 maskAccountName={maskAccountName}

@@ -1,6 +1,55 @@
 use crate::json_util::{raw_string_field, string_field, value_u64_field};
 use serde_json::{json, Value};
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
+
+/// One running process as the instance check needs it.
+pub(crate) struct ProcessLink<'a> {
+    pub(crate) pid: u64,
+    pub(crate) parent_pid: u64,
+    pub(crate) started_at: u64,
+    pub(crate) command_line: &'a str,
+}
+
+/// The processes of Codex Switch's standalone instances. Each instance runs the same ChatGPT
+/// executable with a `--user-data-dir` under `instances_dir`; processes below such a process
+/// belong to it too, even when their command line does not repeat the directory. A parent that
+/// started after the child is a reused PID and links nothing.
+pub(crate) fn codex_instance_pids(
+    processes: &[ProcessLink<'_>],
+    instances_dir: &Path,
+) -> HashSet<u64> {
+    let marker = format!(
+        "{}/",
+        normalize_executable_path(&instances_dir.to_string_lossy()).trim_end_matches('/')
+    );
+    let mut pids = processes
+        .iter()
+        .filter(|process| normalize_executable_path(process.command_line).contains(&marker))
+        .map(|process| process.pid)
+        .collect::<HashSet<_>>();
+    let started_at = processes
+        .iter()
+        .map(|process| (process.pid, process.started_at))
+        .collect::<HashMap<_, _>>();
+    loop {
+        let before = pids.len();
+        for process in processes {
+            let parent_is_instance = pids.contains(&process.parent_pid)
+                && started_at
+                    .get(&process.parent_pid)
+                    .is_some_and(|parent_started| *parent_started <= process.started_at);
+            if parent_is_instance {
+                pids.insert(process.pid);
+            }
+        }
+        if pids.len() == before {
+            return pids;
+        }
+    }
+}
 
 pub(crate) fn executable_leaf_name(name: &str, executable_path: &str) -> String {
     let trimmed = name.trim();
@@ -196,6 +245,63 @@ pub(crate) fn build_ide_summary(entries: &[Value]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_processes_and_their_children_are_told_apart_from_the_default_codex() {
+        let instances_dir = Path::new(r"C:\Data\Roaming\codex-switch\codex-app-instances");
+        let processes = [
+            // Default Codex: its user data lives elsewhere.
+            ProcessLink {
+                pid: 10,
+                parent_pid: 1,
+                started_at: 100,
+                command_line: r#""C:\App\ChatGPT.exe""#,
+            },
+            ProcessLink {
+                pid: 11,
+                parent_pid: 10,
+                started_at: 101,
+                command_line: r#""C:\App\ChatGPT.exe" --type=renderer --user-data-dir="C:\Data\Roaming\Codex""#,
+            },
+            // Instance root, a child repeating the directory in another spelling, and a grandchild without it.
+            ProcessLink {
+                pid: 20,
+                parent_pid: 1,
+                started_at: 200,
+                command_line: r#""C:\App\ChatGPT.exe" --user-data-dir="C:\Data\Roaming\codex-switch\codex-app-instances\account-a\user-data""#,
+            },
+            ProcessLink {
+                pid: 21,
+                parent_pid: 20,
+                started_at: 201,
+                command_line: r#"C:\App\ChatGPT.exe --type=gpu --user-data-dir=c:/data/roaming/codex-switch/codex-app-instances/account-a/user-data"#,
+            },
+            ProcessLink {
+                pid: 22,
+                parent_pid: 21,
+                started_at: 202,
+                command_line: r#""C:\App\ChatGPT.exe" --type=utility"#,
+            },
+            // Its parent PID 20 was reused: this process is older than the instance.
+            ProcessLink {
+                pid: 30,
+                parent_pid: 20,
+                started_at: 150,
+                command_line: r#""C:\App\ChatGPT.exe""#,
+            },
+            // A sibling directory whose name only starts like the instances directory.
+            ProcessLink {
+                pid: 40,
+                parent_pid: 1,
+                started_at: 300,
+                command_line: r#""C:\App\ChatGPT.exe" --user-data-dir="C:\Data\Roaming\codex-switch\codex-app-instances-old\x""#,
+            },
+        ];
+
+        let pids = codex_instance_pids(&processes, instances_dir);
+
+        assert_eq!(pids, HashSet::from([20, 21, 22]));
+    }
 
     #[test]
     fn rejects_legacy_codex_desktop_executable() {

@@ -1,10 +1,10 @@
 use super::{
     backup::status_overwrite_backup_path,
     codex_home::{
-        ensure_session_relative_path, extract_uuid_like, normalize_relative_path, normalize_status,
-        path_to_slash, reassigned_relative_path, remove_empty_parent_dirs,
-        remove_from_global_state, resolve_codex_root, status_from_relative_path,
-        validate_codex_root, validate_session_file_path,
+        conversation_path_key, ensure_session_relative_path, extract_uuid_like,
+        normalize_relative_path, normalize_status, path_to_slash, reassigned_relative_path,
+        remove_empty_parent_dirs, remove_from_global_state, resolve_codex_root,
+        status_from_relative_path, validate_codex_root, validate_session_file_path,
     },
     model::{parse_conflict_strategy, ConflictStrategy, SessionSummary, StatusMove},
     rollout::{
@@ -43,6 +43,9 @@ pub(super) fn set_conversation_status_impl(
     let mut errors = Vec::new();
     let mut conflicts = Vec::new();
     let mut moves = Vec::new();
+    // Targets taken by earlier moves of this batch: two sessions with the same file name must not
+    // land on one path, where the second would replace the first.
+    let mut reserved_targets = HashSet::new();
 
     for relative_path in relative_paths {
         let relative = match normalize_relative_path(&relative_path).and_then(|relative| {
@@ -99,8 +102,11 @@ pub(super) fn set_conversation_status_impl(
         let mut target_id = id.clone();
         let mut final_target_path = target_path.clone();
         let mut rewrite_id = None;
+        let mut overwrite = false;
         let mut overwritten_id = None;
-        if target_path.exists() {
+        let reserved = |path: &Path| reserved_targets.contains(&conversation_path_key(path));
+        let target_taken = |path: &Path| path.exists() || reserved(path);
+        if target_taken(&target_path) {
             match conflict_strategy {
                 ConflictStrategy::Ask => {
                     conflicts.push(json!({
@@ -115,6 +121,14 @@ pub(super) fn set_conversation_status_impl(
                     continue;
                 }
                 ConflictStrategy::Overwrite => {
+                    if reserved(&target_path) {
+                        errors.push(format!(
+                            "同一批包含重复目标，已跳过以避免覆盖刚移动的会话: {}",
+                            path_to_slash(&target_relative)
+                        ));
+                        continue;
+                    }
+                    overwrite = true;
                     overwritten_id = parse_session_file_for_list(&target_path)
                         .ok()
                         .and_then(|summary| summary.id)
@@ -124,7 +138,7 @@ pub(super) fn set_conversation_status_impl(
                     let new_id = new_session_id(&id);
                     let reassigned = reassigned_relative_path(&target_relative, &id, &new_id)?;
                     final_target_path = root.join(&reassigned);
-                    while final_target_path.exists() {
+                    while target_taken(&final_target_path) {
                         let next_id = new_session_id(&new_id);
                         let next = reassigned_relative_path(&target_relative, &id, &next_id)?;
                         final_target_path = root.join(&next);
@@ -138,12 +152,14 @@ pub(super) fn set_conversation_status_impl(
                 }
             }
         }
+        reserved_targets.insert(conversation_path_key(&final_target_path));
         moves.push(StatusMove {
             id,
             target_id,
             source_path,
             target_path: final_target_path,
             rewrite_id,
+            overwrite,
             overwritten_id,
         });
     }
@@ -169,7 +185,7 @@ pub(super) fn set_conversation_status_impl(
     // keeps its backup until the state DB has committed, so a DB failure can put every file back.
     let mut applied_moves = Vec::new();
     for status_move in &moves {
-        match apply_status_move_file(&root, status_move, conflict_strategy) {
+        match apply_status_move_file(&root, status_move) {
             Ok(applied) => applied_moves.push(applied),
             Err(err) => errors.push(err),
         }
@@ -298,7 +314,6 @@ struct AppliedStatusMove {
 fn apply_status_move_file(
     root: &Path,
     status_move: &StatusMove,
-    conflict_strategy: ConflictStrategy,
 ) -> Result<AppliedStatusMove, String> {
     let target_relative = status_move
         .target_path
@@ -309,9 +324,7 @@ fn apply_status_move_file(
         fs::create_dir_all(parent)
             .map_err(|err| format!("创建目标目录失败 {}: {err}", parent.display()))?;
     }
-    let overwrite_backup = if status_move.target_path.exists()
-        && conflict_strategy == ConflictStrategy::Overwrite
-    {
+    let overwrite_backup = if status_move.overwrite && status_move.target_path.exists() {
         let backup_path = status_overwrite_backup_path(&status_move.target_path, &status_move.id);
         fs::rename(&status_move.target_path, &backup_path)
             .map_err(|err| format!("备份覆盖目标会话失败 {}: {err}", target_relative))?;

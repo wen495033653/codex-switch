@@ -68,7 +68,7 @@ export default function ApiModePage({
   });
   const detailTest = checkModalProfileId ? baseUrlTests[checkModalProfileId] || null : null;
   const detailProfile = checkModalProfileId
-    ? profiles.find((profile, index) => (profile.id || `api-${index}`) === checkModalProfileId)
+    ? profiles.find(profile => profile.id === checkModalProfileId)
     : null;
   const detailProfileName = detailProfile ? detailProfile.name || checkModalProfileId : '';
   const detailModelValue = checkModalProfileId
@@ -191,7 +191,7 @@ export default function ApiModePage({
             <div className="list-panel api-profile-panel">
               <div className="account-grid api-profile-grid" ref={apiProfileGridRef} role="list" aria-label={t('API 配置列表')}>
                 {currentItems.map((profile, index) => {
-                  const profileId = profile.id || `api-${startIdx + index}`;
+                  const profileId = profile.id;
                   const configured = Boolean(profile.name && profile.base_url && profile.api_key);
                   const codexAppTargetKey = `api:${profileId}`;
                   const codexAppInstanceKey = getCodexAppInstanceKey('api', profileId);

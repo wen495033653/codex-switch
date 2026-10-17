@@ -172,8 +172,7 @@ html[data-theme="light"] .api-test-message.loading {
   color: #1d4ed8;
 }
 
-html[data-theme="light"] .api-test-panel-state.success,
-html[data-theme="light"] .api-test-message.success {
+html[data-theme="light"] .api-test-panel-state.success {
   background: #ecfdf5;
   border-color: #a7f3d0;
   color: #047857;

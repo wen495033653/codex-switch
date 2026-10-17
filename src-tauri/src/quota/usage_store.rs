@@ -18,6 +18,24 @@ use serde_json::{json, Value};
 use std::thread;
 use tauri::AppHandle;
 
+/// Every usage request rejected with 401/403 leads to a token exchange. The record is the evidence
+/// for the open question whether a 403 here is ever a Cloudflare page rather than a rejected token
+/// (docs/development/account-store.md, "待定").
+pub(crate) fn log_usage_rejected(profile_id: &str, error: &Value) {
+    log_event(
+        "account_usage_rejected_error",
+        json!({
+            "account": account_label(profile_id),
+            "status": value_u64_field(error, "status"),
+            "code": raw_string_field(error, "code"),
+            "message": raw_string_field(error, "message"),
+            // Error bodies can be whole HTML pages; the start tells what answered.
+            "rawMessage": truncate_for_log(&raw_string_field(error, "raw_message"), 300),
+            "action": "rotate_tokens"
+        }),
+    );
+}
+
 pub(crate) fn sync_account_usage_in_background(
     app: AppHandle,
     profile_id: String,
@@ -68,20 +86,7 @@ pub(super) fn get_usage_with_auth_retry(
     match get_usage(access_token, account_id, timeout_ms) {
         Ok(usage_info) => Ok(usage_info),
         Err(error) if error_state_is_auth_rejected(&error) => {
-            // Evidence for the open question whether a 403 here is ever a Cloudflare page rather
-            // than a rejected token (docs/development/account-store.md, "待定").
-            log_event(
-                "account_usage_rejected_error",
-                json!({
-                    "account": account_label(profile_id),
-                    "status": value_u64_field(&error, "status"),
-                    "code": raw_string_field(&error, "code"),
-                    "message": raw_string_field(&error, "message"),
-                    // Error bodies can be whole HTML pages; the start tells what answered.
-                    "rawMessage": truncate_for_log(&raw_string_field(&error, "raw_message"), 300),
-                    "action": "rotate_tokens"
-                }),
-            );
+            log_usage_rejected(profile_id, &error);
             match refresh_stored_account_tokens(profile_id, Some(access_token)) {
                 Ok(store) => {
                     emit_store_updated(app, store);

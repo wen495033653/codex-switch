@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react';
 import { AppDialogs, AppMainView, AppNavbar, DevDiagnosticsPanel, UsageStatsDetailDrawer } from './components';
-import { DEFAULT_UI_LANGUAGE, getStoredLanguagePreference, I18nProvider } from './i18n';
+import { DEFAULT_UI_LANGUAGE, getStoredLanguagePreference, I18nProvider, translate, translateRuntimeText } from './i18n';
 import {
   DEFAULT_CODEX_STATE,
   DEFAULT_SETTINGS,
   GPT_POOL_URL,
   getActiveApiProfile,
-  normalizeApiProfiles,
-  normalizeBackgroundRefreshInterval,
-  OAUTH_TIMEOUT_HINT
+  normalizeApiProfiles
 } from './utils/appState';
 import { createPollingErrorLog } from './utils/pollingErrorLog';
 import {
@@ -59,8 +57,9 @@ function DevLogWindow() {
       try {
         await window.api.hideDevLogWindow();
         return;
-      } catch (_err) {
+      } catch (err) {
         // Fall through to the browser close path in dev:renderer.
+        console.error('[hide_dev_log_window] failed to hide the dev log window', err);
       }
     }
     window.close();
@@ -71,7 +70,6 @@ function DevLogWindow() {
       <DevDiagnosticsPanel
         entries={devDiagnostics.entries}
         errorCount={devDiagnostics.errorCount}
-        isOpen
         onClear={devDiagnostics.clear}
         onToggle={hideDevLogWindow}
         warningCount={devDiagnostics.warningCount}
@@ -109,7 +107,7 @@ function MainApp() {
     message: ''
   });
   const [usageStatsErrorLog] = useState(() => createPollingErrorLog('usage_stats_get'));
-  const refreshUsageStats = async ({ silent = false } = {}) => {
+  const refreshUsageStats = async () => {
     if (!window.api || typeof window.api.getUsageStats !== 'function') return null;
     try {
       const res = await window.api.getUsageStats();
@@ -121,8 +119,7 @@ function MainApp() {
       }
       return res;
     } catch (err) {
-      if (silent) usageStatsErrorLog.failed(err);
-      else toastError(err, '加载 token 统计失败', 7000);
+      usageStatsErrorLog.failed(err);
       return null;
     }
   };
@@ -189,14 +186,10 @@ function MainApp() {
     return nextSettings;
   };
 
+  // useRemoteControlStatus only calls this with a result that carries settings.
   const handleCodexRemoteControlAutoDisabled = (res) => {
     try {
-      if (res && res.settings) {
-        applySettings(res);
-      } else {
-        setSettings(prev => ({ ...prev, codex_remote_control_enabled: false }));
-        setSettingsDraft(prev => ({ ...prev, codex_remote_control_enabled: false }));
-      }
+      applySettings(res);
     } catch (err) {
       toastError(err, '同步远程控制状态失败', 7000);
     }
@@ -214,12 +207,13 @@ function MainApp() {
       toastError(new Error(res.runtimeError), '远程控制运行配置同步失败', 7000);
     }
 
+    const autoDisabledMessage = translateRuntimeText(res.message || '远程控制已关闭并切换到 API 模式');
     const noticeMessage = res.runtimeError
       ? '远程控制已关闭并清空账号；API 运行配置同步失败，请重试'
       : res.restartRequired
-        ? `${res.message || '远程控制已关闭并切换到 API 模式'}；重启 Codex 后生效`
+        ? translate('{message}；重启 Codex 后生效', { message: autoDisabledMessage })
         : res.processStatusError
-          ? `${res.message || '远程控制已关闭并切换到 API 模式'}；无法确认 Codex 运行状态，建议重启`
+          ? translate('{message}；无法确认 Codex 运行状态，建议重启', { message: autoDisabledMessage })
           : (res.message || '当前控制账号过期，远程控制关闭');
 
     setRemoteControlNotice({
@@ -297,7 +291,6 @@ function MainApp() {
     maskAccountName,
     subscriptionModeActive
   } = useCurrentModeSummary({
-    apiDraft,
     codexState,
     settings,
     store
@@ -342,7 +335,7 @@ function MainApp() {
     apiProfiles,
     applySettings,
     handleRes,
-    onUsageStatsRefresh: () => refreshUsageStats({ silent: true }),
+    onUsageStatsRefresh: () => refreshUsageStats(),
     showIdeReopen,
     toastError
   });
@@ -431,7 +424,7 @@ function MainApp() {
     exportAccountsToBackup,
     handleRefreshAccount,
     openDeleteAccountModal,
-    refreshingAccountId
+    refreshingAccountIds
   } = useAccountOperations({
     applySettings,
     handleRes,
@@ -459,12 +452,12 @@ function MainApp() {
   });
 
   useAsyncPolling(
-    () => refreshUsageStats({ silent: true }),
+    () => refreshUsageStats(),
     { intervalMs: 30000, refreshOnFocus: true }
   );
   // Only the account and API cards show whether a standalone Codex is running.
   useAsyncPolling(
-    () => refreshCodexAppInstanceStatus({ silent: true }),
+    () => refreshCodexAppInstanceStatus(),
     { enabled: viewMode === 'accounts' || viewMode === 'api', intervalMs: 3000, refreshOnFocus: true }
   );
 
@@ -476,7 +469,6 @@ function MainApp() {
         ? (systemTheme.matches ? 'dark' : 'light')
         : themePreference;
       document.documentElement.dataset.theme = resolvedTheme;
-      document.documentElement.dataset.themePreference = themePreference;
     };
 
     applyTheme();
@@ -490,10 +482,8 @@ function MainApp() {
     if (!IS_DEV_BUILD) return undefined;
     const baseTitle = (document.title || 'Codex Switch').replace(/^\[DEV\]\s*/, '') || 'Codex Switch';
     document.title = `[DEV] ${baseTitle}`;
-    document.documentElement.dataset.build = 'dev';
     return () => {
       document.title = baseTitle;
-      delete document.documentElement.dataset.build;
     };
   }, []);
 
@@ -559,7 +549,6 @@ function MainApp() {
             checkingUpdate,
             isDevBuild: IS_DEV_BUILD,
             updateSettingsDraftAndSave,
-            normalizeBackgroundRefreshInterval,
             openDataDir,
             openRepository,
             handleCheckUpdate,
@@ -588,7 +577,6 @@ function MainApp() {
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
             switching,
             updateCodexProxySettings,
-            updateSettingsDraftAndSave,
             onCodexRemoteControlAutoDisabled: handleCodexRemoteControlAutoDisabled,
             onOpenCodexConfigToml: openCodexConfigToml,
             onOpenCodexDesktopUpdate: openCodexDesktopUpdatePage
@@ -639,7 +627,7 @@ function MainApp() {
             page,
             pageSize,
             refreshAllStatus,
-            refreshingAccountId,
+            refreshingAccountIds,
             search,
             startIdx,
             switching,
@@ -666,7 +654,6 @@ function MainApp() {
             oauth,
             oauthCallbackSubmitting,
             oauthCallbackUrl,
-            oauthTimeoutHint: OAUTH_TIMEOUT_HINT,
             refreshTokenInput,
             refreshTokenLoading,
             showRefreshTokenPanel,

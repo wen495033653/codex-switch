@@ -1,4 +1,4 @@
-import { getChatgptAccountId, isApiModeAccount } from './account';
+import { isApiModeAccount } from './account';
 import { safeParseJwt } from './jwt';
 import { getSubscription } from './subscription';
 import { getResetCredits, getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
@@ -37,13 +37,11 @@ export function isAuthSessionInvalid(info) {
     ].some(pattern => message.includes(pattern));
 }
 
-// Every field the card and settings pages read; the early returns below only override
-// what differs, so a new field is declared once.
+// The fields callers read; the early returns below only override what differs, so a new
+// field is declared once.
 const EMPTY_AUTH_INFO = Object.freeze({
     isApiMode: false,
-    email: '',
     planType: '',
-    usage: null,
     usageWindows: [],
     resetCredits: null,
     subscription: null,
@@ -53,10 +51,7 @@ const EMPTY_AUTH_INFO = Object.freeze({
     showExpiresAt: false,
     authStatus: 'active',
     authStatusMessage: '',
-    usageStatus: 'missing',
-    usageStatusMessage: '',
-    usageNotice: null,
-    workspace: ''
+    usageNotice: null
 });
 
 /**
@@ -73,14 +68,12 @@ export function parseAuthInfo(account, now = Date.now()) {
             planType: 'API',
             authStatus: configured ? 'active' : 'error',
             authStatusMessage: configured ? '' : '请先在设置中填写 API Key',
-            usageStatus: 'ok',
             usageNotice: {
                 tone: configured ? 'info' : 'error',
                 message: baseUrl
                     ? `Base URL: ${baseUrl}`
                     : '未配置 API Base URL'
-            },
-            workspace: 'API 模式'
+            }
         };
     }
 
@@ -94,15 +87,13 @@ export function parseAuthInfo(account, now = Date.now()) {
             usageNotice: {
                 tone: 'error',
                 message: '账号数据异常，请重新导入或删除后添加'
-            },
-            workspace: '账号数据异常'
+            }
         };
     }
 
     const claims = parsed.claims;
     const auth = claims['https://api.openai.com/auth'] || {};
 
-    const accountId = getChatgptAccountId(account);
     const custom = account && account.custom ? account.custom : {};
     const usage = custom.usage_info;
     // /wham/usage plan_type refreshes with every quota sync; the id_token claim only
@@ -124,17 +115,6 @@ export function parseAuthInfo(account, now = Date.now()) {
     const expiresAtStale = !subscription && Boolean(usagePlanType) && !isFreePlan
         && Number.isFinite(claimExpiresAtTime) && claimExpiresAtTime <= now;
 
-    const orgs = Array.isArray(auth.organizations) ? auth.organizations : [];
-    let workspace = '工作空间缺失';
-    if (orgs.length > 0) {
-        const currentOrg = orgs.find(o => o && o.id === accountId);
-        if (currentOrg) {
-            const rawName = currentOrg.title ? currentOrg.title : currentOrg.name;
-            if (typeof rawName === 'string' && rawName) workspace = rawName;
-        }
-    }
-
-    const email = claims.email || '';
     const usageWindows = getUsageWindows(usage);
     const resetCredits = getResetCredits(usage);
     const authError = normalizeErrorState(custom.auth_error);
@@ -144,18 +124,10 @@ export function parseAuthInfo(account, now = Date.now()) {
     const authStatusMessage = typeof custom.auth_status_message === 'string'
         ? custom.auth_status_message
         : (authError && authError.message ? authError.message : '');
-    const usageStatus = typeof custom.usage_status === 'string' && custom.usage_status
-        ? custom.usage_status
-        : (usage ? 'ok' : 'missing');
-    const usageStatusMessage = typeof custom.usage_status_message === 'string'
-        ? custom.usage_status_message
-        : '';
     const usageNotice = getUsageNotice(custom, usage, usageWindows);
 
     return {
-        email,
         planType,
-        usage,
         usageWindows,
         resetCredits,
         subscription,
@@ -165,10 +137,7 @@ export function parseAuthInfo(account, now = Date.now()) {
         showExpiresAt: !isFreePlan,
         authStatus,
         authStatusMessage,
-        usageStatus,
-        usageStatusMessage,
-        usageNotice,
-        workspace
+        usageNotice
     };
 }
 

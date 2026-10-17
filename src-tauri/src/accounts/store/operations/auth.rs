@@ -5,7 +5,7 @@ use super::super::super::{
 };
 use super::{mutation::update_store_account, query::find_store_account};
 use crate::accounts::account_with_custom;
-use crate::json_util::raw_string_field;
+use crate::json_util::{raw_string_field, string_field};
 use crate::settings::remote_control_enabled_from_settings;
 use crate::settings::{read_settings_value, update_settings_value};
 use serde_json::{json, Value};
@@ -54,7 +54,7 @@ pub(crate) fn mark_account_auth_error(profile_id: &str, message: &str) -> Result
     Ok(store)
 }
 
-pub(crate) fn auth_error_is_login_expired(message: &str) -> bool {
+fn auth_error_is_login_expired(message: &str) -> bool {
     let text = message.to_ascii_lowercase();
     [
         "refresh_token_invalidated",
@@ -70,6 +70,26 @@ pub(crate) fn auth_error_is_login_expired(message: &str) -> bool {
     ]
     .iter()
     .any(|pattern| text.contains(pattern))
+}
+
+/// The last token exchange of this account failed because its login ended. Only a new login,
+/// an import or an explicit refresh brings it back; background refreshes leave it alone and
+/// remote control stops using it.
+pub(crate) fn account_login_expired(account: &Value) -> bool {
+    let custom = account.get("custom").unwrap_or(&Value::Null);
+    if string_field(custom, "auth_status") != "error" {
+        return false;
+    }
+
+    let auth_error = custom.get("auth_error").unwrap_or(&Value::Null);
+    let text = format!(
+        "{} {} {} {}",
+        string_field(custom, "auth_status_message"),
+        string_field(auth_error, "code"),
+        string_field(auth_error, "message"),
+        string_field(auth_error, "raw_message")
+    );
+    auth_error_is_login_expired(&text)
 }
 
 fn remote_control_disable_patch_for_auth_error(

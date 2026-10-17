@@ -1,9 +1,9 @@
 use crate::{
     accounts::{
-        access_token_from_account, account_id_from_account, profile_id_from_account,
-        read_store_with_active_sync, BACKGROUND_REQUEST_TIMEOUT_MS,
+        access_token_from_account, account_id_from_account, account_login_expired,
+        profile_id_from_account, read_store_with_active_sync, BACKGROUND_REQUEST_TIMEOUT_MS,
     },
-    app_log::log_event,
+    app_log::{account_label, log_event, log_event_once},
     events::emit_store_updated,
     json_util::{bool_field, value_u64_field},
     quota::{
@@ -31,7 +31,9 @@ pub(crate) fn begin_refresh_all_quotas(
     source: &'static str,
 ) -> Result<Value, String> {
     let store = read_store_with_active_sync()?;
-    let targets = refresh_targets_from_store(&store);
+    // The automatic refresh leaves out accounts whose login ended: their usage request and token
+    // exchange fail the same way every round. "Refresh all" by the user still tries them.
+    let targets = refresh_targets_from_store(&store, source == "auto");
     let status = match start_refresh_all_status_if_idle(
         runtime.as_ref(),
         json!({
@@ -82,15 +84,21 @@ fn background_refresh_settings() -> Result<(bool, u64), String> {
     Ok((enabled, interval_minutes))
 }
 
+/// Checks once a minute whether an account is due. Each account is due by its own last refresh,
+/// so the short check adds no requests, and a changed interval or a re-enabled refresh applies
+/// within a minute instead of after the previous interval.
+const BACKGROUND_REFRESH_CHECK_SECONDS: u64 = 60;
+
 pub(crate) fn start_background_quota_auto_refresher(
     app: AppHandle,
     runtime: Arc<RefreshAllRuntime>,
 ) {
     thread::spawn(move || loop {
+        // Checked every minute: a lasting cause is recorded once per run.
         let (enabled, interval_minutes) = match background_refresh_settings() {
             Ok(value) => value,
             Err(err) => {
-                log_event(
+                log_event_once(
                     "background_refresh_settings_read_error",
                     json!({
                         "error": err,
@@ -109,14 +117,14 @@ pub(crate) fn start_background_quota_auto_refresher(
                         if let Err(err) =
                             begin_refresh_all_quotas(app.clone(), Arc::clone(&runtime), "auto")
                         {
-                            log_event(
+                            log_event_once(
                                 "background_refresh_start_error",
                                 json!({ "error": err, "intervalMinutes": interval_minutes }),
                             );
                         }
                     }
                 }
-                Err(err) => log_event(
+                Err(err) => log_event_once(
                     "background_refresh_store_read_error",
                     json!({
                         "error": err,
@@ -126,7 +134,7 @@ pub(crate) fn start_background_quota_auto_refresher(
                 ),
             }
         }
-        thread::sleep(StdDuration::from_secs(interval_minutes * 60));
+        thread::sleep(StdDuration::from_secs(BACKGROUND_REFRESH_CHECK_SECONDS));
     });
 }
 
@@ -204,13 +212,14 @@ struct RefreshTarget {
     pub(super) access_token: String,
 }
 
-fn refresh_targets_from_store(store: &Value) -> Vec<RefreshTarget> {
+fn refresh_targets_from_store(store: &Value, skip_login_expired: bool) -> Vec<RefreshTarget> {
     store
         .get("accounts")
         .and_then(Value::as_array)
         .map(|accounts| {
             accounts
                 .iter()
+                .filter(|account| !(skip_login_expired && account_login_expired(account)))
                 .filter_map(|account| {
                     let profile_id = profile_id_from_account(account).ok()?;
                     let account_id = account_id_from_account(account).ok()?;
@@ -263,7 +272,7 @@ fn should_background_refresh_account_quota(
     now: i64,
     interval_seconds: i64,
 ) -> bool {
-    if !quota_refresh_target(account) {
+    if !quota_refresh_target(account) || account_login_expired(account) {
         return false;
     }
 
@@ -313,8 +322,12 @@ fn start_refresh_all_quotas_in_background(
             let usage_ok = usage_result.is_ok();
             let store_result = update_account_usage_result(&target.profile_id, usage_result);
             let store_update_ok = store_result.is_ok();
-            if let Ok(store) = store_result {
-                emit_store_updated(&app, store);
+            match store_result {
+                Ok(store) => emit_store_updated(&app, store),
+                Err(err) => log_event(
+                    "refresh_all_store_update_error",
+                    json!({ "account": account_label(&target.profile_id), "error": err }),
+                ),
             }
             if usage_ok && store_update_ok {
                 if let Some(store) =
@@ -362,4 +375,50 @@ fn start_refresh_all_quotas_in_background(
         });
         emit_refresh_all_status(&app, status);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(profile_id: &str, auth_status_message: Option<&str>) -> Value {
+        let mut custom = json!({});
+        if let Some(message) = auth_status_message {
+            custom = json!({ "auth_status": "error", "auth_status_message": message });
+        }
+        json!({
+            "profile_id": profile_id,
+            "tokens": {
+                "id_token": "id",
+                "access_token": format!("access-{profile_id}"),
+                "refresh_token": "refresh",
+                "account_id": format!("acct-{profile_id}")
+            },
+            "custom": custom
+        })
+    }
+
+    #[test]
+    fn automatic_refresh_leaves_out_ended_logins_and_manual_refresh_keeps_them() {
+        let ended = account(
+            "ended",
+            Some("Refresh Token 刷新失败\nHTTP 401\nerror.code: refresh_token_invalidated"),
+        );
+        let store = json!({ "accounts": [account("live", None), ended.clone()] });
+        let ids = |skip| {
+            refresh_targets_from_store(&store, skip)
+                .into_iter()
+                .map(|target| target.profile_id)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(ids(true), vec!["live".to_string()]);
+        assert_eq!(ids(false), vec!["live".to_string(), "ended".to_string()]);
+        assert!(!should_background_refresh_account_quota(&ended, 0, 60));
+        assert!(should_background_refresh_account_quota(
+            &account("live", None),
+            0,
+            60
+        ));
+    }
 }

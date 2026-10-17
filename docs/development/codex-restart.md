@@ -82,6 +82,46 @@
 - 待确认快照最多 20 个，超出时按创建时间淘汰最旧的；以前按 HashMap 的任意顺序淘汰，可能恰好删掉刚交给界面的那个。快照状态锁异常时不再返回一个并未保存的快照 id，而是不弹提示并记 `ide_reopen_snapshot_store_error`。
 - 验证（离线）：`only_the_same_live_process_is_confirmed` 用测试进程自身构造三条快照（正确启动时间、启动时间差 1 秒、可执行路径不同），只有第一条被确认；`overflow_drops_the_oldest_snapshots` 覆盖淘汰顺序。没有在真实编辑器上运行。
 
+## 结束进程树前的两项检查（2026-10-17）
+
+- 已退出的根进程：从扫描进程到结束之间要做会话预检查和远控预检查（首轮约 3.6 秒），这期间用户自己关掉 Codex、关掉一个窗口或 Codex 自行重启，根进程就已不在；以前仍对它做权限预检查，`OpenProcess` 失败被记成 `codex_app_process_kill_error`（`stage: permission_preflight`），“重启 Codex”失败且不重开，watcher 本次运行内停用自动处理。现在只对仍存活的根做预检查和结束，已退出的交给外层对整棵进程树的等待。
+- 进程树里有 Codex Switch 自己：从 VS Code 集成终端或 Codex 的命令行启动 Codex Switch 时，它在 VS Code / Codex 的进程树里，`taskkill /T` 会在“结束 → 同步 → 重开”的中途把它一起结束，不留日志。现在算出进程树后若包含自身 PID，直接返回错误，不结束任何进程，错误随 `codex_app_process_kill_error` 记下。
+- 验证（离线）：`roots_that_already_exited_are_neither_checked_nor_killed`（不存在的 PID 不再预检查失败）、`a_tree_holding_codex_switch_itself_is_refused`；`taskkill_not_found_for_already_exited_tree_is_success_and_logged` 按新签名照常通过。
+
+## 重开编辑器：全部重开后再报错（2026-10-17）
+
+- 确认“重新打开编辑器”后，快照里的 Codex 和 VS Code 先全部被结束，然后同步会话、逐个重开。以前同步失败或排在前面的一个重开失败就直接返回，后面已被结束的应用不再打开，用户只看到第一条错误。现在与 `codex_app_open` 关闭后的原则一致：每个可执行文件都重开一次，所有错误用“；”连接后一起返回。
+- 验证：只过了编译和 Clippy；这条路径要真实结束并重开编辑器，没有单元测试，也没有真实运行。
+
+## watcher 60 秒复查不再重复一次性步骤（2026-10-17）
+
+- Codex 开着时，watcher 每约 60 秒复查一次并调用打开处理。以前每次都会再启动一次旧版数据迁移；迁移在合并前先用 `VACUUM INTO` 备份 `state_5.sqlite`，备份数量没有上限，合并之后的某一步持续失败时每分钟多一份完整备份。现在迁移在本次运行里完成或出错后不再启动（错误记 `codex_desktop_data_migration_error`，`handling: not_retried_until_restart`），只是在等新版桌面数据库时仍在下一次打开时再试；同一时间只跑一个。
+- 同一路径上的远控运行配置同步失败（`codex_app_open_handler_remote_control_runtime_error`）和 CDP hook 注入失败（`codex_app_open_handler_cdp_hook_error`）改用 `log_event_once`，持续性错误不再每分钟各写一条进错误日志和时间线。
+- 验证：只过了编译、Clippy 和 codex_launcher 的全部测试；迁移和打开处理会动正式的 Codex 数据，没有单元测试，也没有真实运行。
+
+## 没有脚本要注入时的 CDP 重启（2026-10-17）
+
+- 会话同步需要重启时，Codex 总是带调试端口重开（提交 `942013b`：保留 CDP 流程）。远程控制关闭时没有任何脚本要注入，以前仍要在 12 秒内等到可连接的页面，等不到（机器慢、刚更新）就结束刚重开的 Codex 并报错，watcher 随之停用自动处理。现在没有脚本时，带上同样的两个调试参数走普通启动，按“启动后 1.5 秒仍在运行”确认（`codex_app_launch_confirmation_*`），不再等页面；有脚本时不变。
+- 验证：只过了编译、Clippy 和 cdp 的测试；没有真实运行。
+
+## 会话排序时读不了文件末尾（2026-10-17）
+
+- 同步只改写“最近活动”的 50 个 rollout，排序依据是文件末尾最后一行的时间。以前读末尾时的 I/O 错误（例如共享冲突）被吞掉，退回按文件名里的创建时间排序，并且按当前文件状态缓存下来：这个文件在下次变化前一直排在靠后的位置，可能被排除在同步之外，日志里没有任何记录。现在读不了末尾时记 `session_sync_rollout_tail_read_error`（每种错误每次运行一条），本次按文件名排序但不缓存，下一次预检查重新读。
+- 验证：会话同步 31 个测试通过；I/O 错误这条路径没有测试，也没有真实触发。
+
+## 同步期间被 Codex 移走的会话文件（2026-10-17）
+
+- 会话同步的预检查和改写先列出最近的 rollout，再逐个读取。Codex 归档一个线程时会把文件移到 `archived_sessions`，恰好发生在两步之间时，读取返回“系统找不到指定的文件”，整次预检查失败，watcher 因此停用自动处理直到 Codex Switch 重启，手动“重启 Codex”也报错。本机 2026-10-14 的错误日志里 token 统计扫描就遇到过两次同样的“列出后文件消失”。
+- 现在预检查和改写遇到“文件不存在”时跳过这个文件（预检查顺带清掉它的缓存），按没有需要改的处理；文件在新位置的下一次列出时再检查。同一函数里写回时本来就把“已不存在”当作跳过、不重新创建。
+- 验证（离线）：`a_rollout_moved_away_after_listing_is_skipped_not_an_error`（不存在的路径：预检查返回不需要改、批量预检查为 0 且不报错、改写返回未改动且没有重新创建文件）。
+
+## 多开实例不再被当成默认 Codex（2026-10-17）
+
+- 现象（代码审查发现）：多开实例和默认 Codex 是同一个 `ChatGPT.exe`，进程扫描只按名称和路径识别。“重启 Codex”、watcher 的接管和 60 秒复查、切换模式后重开编辑器都会把实例进程一起结束，之后只按可执行文件无参数重开默认 Codex，实例窗口和其中的任务不会恢复；只开了实例时，watcher 还会按默认 `~/.codex` 做会话同步并重启。
+- 现在：命令行里 `--user-data-dir` 位于数据目录 `codex-app-instances/` 下的进程，以及进程树中它们下面的进程（父进程比子进程晚启动的视为 PID 复用，不算），都属于实例（`ide_snapshot/detect.rs` 的 `codex_instance_pids`）。watcher 的接管判断、“重启 Codex”、远程控制的“Codex 是否在运行”、重开编辑器的快照只看排除实例后的进程；Codex 页的进程快照和多开状态仍用完整列表。只开了实例时，这些流程都当作默认 Codex 没有运行。
+- 实例目录的位置收到 `paths::codex_app_instances_dir`，多开和 token 统计以前各写一份。
+- 验证（离线）：`instance_processes_and_their_children_are_told_apart_from_the_default_codex`（默认 Codex 及其带自己 user-data-dir 的子进程不算；实例根、写法不同的子进程、不带参数的孙进程都算；PID 复用、名字只是前缀相同的目录都不算）。codex_launcher 全部测试和 Clippy 通过。没有真实运行。
+
 ## 验证记录
 
 ### 2026-09-23：watcher 候选确认
@@ -164,6 +204,8 @@ TODO(verify): watcher 路径的 CDP 重启和注入还没有在最终实现上�
 TODO(verify): 会话文件里残留的旧 provider 是否有影响，还不知道。事实：数据库的同步是全量的，会话文件只改写最近活动的 50 个（`SESSION_SYNC_RECENT_ROLLOUT_LIMIT`）。前后两次同步的“最近 50 个”范围不同，2026-09-17 晚同步回 `openai` 之后，仍有 16 个会话（最后更新在 09-14 21:10 到 09-15 21:26 之间）的文件首行 `session_meta.payload.model_provider` 是 `api`，而数据库里是 `openai`。未知：Codex 恢复会话时取的是数据库还是文件里的值。触发条件：在订阅模式下打开这个时间段内的任意一个会话。通过判据：能正常继续对话，说明文件里的旧标记无害，删除本条并在这里记下结果。判据不成立（仍报 “Model provider `api` not found”）时，从 `codex_sessions/rollouts.rs` 的 `collect_recent_rollout_files_from_dirs` 继续：文件同步的范围需要覆盖所有被上一次同步改写过的会话，而不只是当前最近的 50 个。
 
 TODO(verify): 远程控制运行时出错时的真实表现还没有运行过（2026-09-23 的改动只有单元测试）。触发条件：数据目录下 `logs/codex-switch-errors.jsonl` 出现 `codex_app_restart_command_remote_control_runtime_error` 或 `codex_app_relaunch_processes_post_exit_config_apply_error`。检查：前者出现时，同一次操作里没有 `codex_app_process_kill_*` 记录，Codex 进程未被结束，界面显示该错误；后者出现时，随后有新的 ChatGPT 主进程启动，`codex_app_restart_command_error` 或 `codex_app_watcher_on_open_error` 的 `error` 字段包含同一条配置错误。判据不成立时，从 `codex_app_open.rs` 的 `restart_current_codex_app_normal` 和 `reopen_after_post_exit_steps` 继续。
+
+TODO(verify): 多开实例在“重启 Codex”后是否保留，还没有真实运行（2026-10-17 的改动只有单元测试）。触发条件：下一次同时开着默认 Codex 和一个多开实例时点“重启 Codex”，或只开着实例超过 60 秒。检查：事件日志 `codex-switch-events.jsonl` 里 `codex_app_relaunch_processes_start` 的 `pids` 不含实例窗口的进程；重启后实例窗口仍在，账号卡片仍显示“窗口运行中”；只开实例时没有 `codex_app_watcher_on_open_invoke`。判据不成立时，看 `codex_app_restart_command_start` 的 `processes` 里实例进程的 `commandLine` 是否带 `--user-data-dir`，从 `detect.rs` 的 `codex_instance_pids` 继续。
 
 ## 回退
 

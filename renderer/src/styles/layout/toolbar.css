@@ -20,29 +20,6 @@
   gap: 16px;
 }
 
-.mode-page-notice {
-  padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid var(--border-app);
-  background: var(--bg-panel);
-  box-shadow: none;
-}
-
-.mode-page-notice > div {
-  display: grid;
-  gap: 4px;
-}
-
-.mode-page-notice strong {
-  color: #fff;
-  font-size: 14px;
-}
-
-.mode-page-notice span {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
 .account-filter-tabs {
   flex: 0 0 auto;
   max-width: none;

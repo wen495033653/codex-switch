@@ -16,7 +16,7 @@ use super::{
     },
 };
 use crate::{
-    app_log::log_event,
+    app_log::{log_event, log_event_once},
     codex_sessions::{
         preview_codex_sessions_to_current_mode_now_from,
         sync_codex_sessions_to_current_mode_now_from,
@@ -27,7 +27,10 @@ use crate::{
 use serde_json::{json, Value};
 use std::{
     path::Path,
-    sync::{Mutex, MutexGuard, TryLockError},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Mutex, MutexGuard, TryLockError,
+    },
     thread,
     time::Duration as StdDuration,
 };
@@ -148,7 +151,8 @@ pub(crate) fn handle_codex_app_open(
                     "codex_app_open_handler_cdp_hook_injected",
                     json!({ "hook": "codex_mobile_no_replace", "injectedCount": injected }),
                 ),
-                Err(err) => log_event(
+                // Also reached on the 60 s reconcile: a lasting cause is recorded once per run.
+                Err(err) => log_event_once(
                     "codex_app_open_handler_cdp_hook_error",
                     json!({ "hook": "codex_mobile_no_replace", "error": err }),
                 ),
@@ -177,8 +181,30 @@ pub(crate) fn handle_codex_app_open(
     })
 }
 
+const MIGRATION_IDLE: u8 = 0;
+const MIGRATION_RUNNING: u8 = 1;
+const MIGRATION_SETTLED: u8 = 2;
+
+/// The handler also runs on the watcher's 60 s reconcile. The migration takes a state DB backup
+/// before merging, so once it completed or failed in this run it is not started again (a failure
+/// retried every minute would leave a backup every minute); while it is only waiting for the new
+/// desktop database it is tried again on the next open.
+static LEGACY_MIGRATION_STATE: AtomicU8 = AtomicU8::new(MIGRATION_IDLE);
+
 fn trigger_legacy_codex_data_migration() {
+    if LEGACY_MIGRATION_STATE
+        .compare_exchange(
+            MIGRATION_IDLE,
+            MIGRATION_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return;
+    }
     thread::spawn(|| {
+        let mut next_state = MIGRATION_IDLE;
         for delay in [0, 2, 5] {
             if delay > 0 {
                 thread::sleep(StdDuration::from_secs(delay));
@@ -188,18 +214,21 @@ fn trigger_legacy_codex_data_migration() {
                     let completed = report.get("completed").and_then(Value::as_bool) == Some(true);
                     log_event("codex_desktop_data_migration", report);
                     if completed {
+                        next_state = MIGRATION_SETTLED;
                         break;
                     }
                 }
                 Err(err) => {
                     log_event(
                         "codex_desktop_data_migration_error",
-                        json!({ "error": err }),
+                        json!({ "error": err, "handling": "not_retried_until_restart" }),
                     );
+                    next_state = MIGRATION_SETTLED;
                     break;
                 }
             }
         }
+        LEGACY_MIGRATION_STATE.store(next_state, Ordering::SeqCst);
     });
 }
 
@@ -400,7 +429,7 @@ fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
                     "changed": changed
                 }),
             ),
-            Err(err) => log_event(
+            Err(err) => log_event_once(
                 "codex_app_open_handler_remote_control_runtime_error",
                 json!({
                     "trigger": trigger,
@@ -412,7 +441,8 @@ fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
             "codex_app_open_handler_remote_control_runtime_skip",
             json!({ "reason": "runtime_current" }),
         ),
-        Err(err) => log_event(
+        // Reached on the watcher's 60 s reconcile too: one lasting cause is recorded once per run.
+        Err(err) => log_event_once(
             "codex_app_open_handler_remote_control_runtime_error",
             json!({
                 "trigger": trigger,
@@ -425,7 +455,7 @@ fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
 pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
     let command = "restart_current_codex_app_normal";
     let _relaunch_guard = lock_codex_relaunch();
-    let processes = super::codex_app_watcher::refresh_current_codex_app_processes()?;
+    let processes = super::codex_app_watcher::refresh_default_codex_app_processes()?;
     log_event(
         "codex_app_restart_command_start",
         json!({

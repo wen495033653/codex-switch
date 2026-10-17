@@ -2,7 +2,7 @@ use crate::app_log::log_event_once;
 use serde_json::json;
 use std::{
     cmp::Reverse,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -16,140 +16,16 @@ fn log_scan_error(error: String) {
     );
 }
 
+/// The most recently modified rollout files under `sessions_dir`, newest first. Every date folder
+/// is listed: a thread resumed days later keeps writing to the file in the folder of the day it
+/// started, so taking only the latest folders misses the session in use. Listing reads the
+/// directory entries only; no rollout file is opened here.
 pub(super) fn collect_recent_files(
     sessions_dir: &Path,
 ) -> Result<Vec<(SystemTime, PathBuf)>, String> {
     let mut files = RecentRolloutFiles::new();
-    collect_recent_files_from_date_dirs(sessions_dir, &mut files)?;
-    if files.len() < SESSION_FILE_LIMIT {
-        collect_recent_files_recursive(sessions_dir, &mut files)?;
-    }
+    collect_recent_files_recursive(sessions_dir, &mut files)?;
     Ok(files.into_vec())
-}
-
-const SESSION_DATE_DIR_SCAN_LIMIT: usize = 7;
-
-fn collect_recent_files_from_date_dirs(
-    sessions_dir: &Path,
-    files: &mut RecentRolloutFiles,
-) -> Result<(), String> {
-    let mut scanned_date_dirs = 0;
-    for (_, year_dir) in read_child_dirs(sessions_dir, 4)? {
-        let month_dirs = match read_child_dirs(&year_dir, 2) {
-            Ok(month_dirs) => month_dirs,
-            Err(err) => {
-                log_scan_error(err);
-                continue;
-            }
-        };
-        for (_, month_dir) in month_dirs {
-            let day_dirs = match read_child_dirs(&month_dir, 2) {
-                Ok(day_dirs) => day_dirs,
-                Err(err) => {
-                    log_scan_error(err);
-                    continue;
-                }
-            };
-            for (_, day_dir) in day_dirs {
-                if let Err(err) = collect_files_from_date_dir(&day_dir, files) {
-                    log_scan_error(err);
-                }
-                scanned_date_dirs += 1;
-                if scanned_date_dirs >= SESSION_DATE_DIR_SCAN_LIMIT {
-                    return Ok(());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_fixed_width_digits(value: &str, width: usize) -> bool {
-    value.len() == width && value.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn read_child_dirs(dir: &Path, name_width: usize) -> Result<Vec<(String, PathBuf)>, String> {
-    let entries = fs::read_dir(dir)
-        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", dir.display()))?;
-    let mut dirs = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                log_scan_error(format!("读取 Codex session 目录条目失败: {err}"));
-                continue;
-            }
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(err) => {
-                log_scan_error(format!(
-                    "读取 Codex session 目录类型失败 {}: {err}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else {
-            continue;
-        };
-        if is_fixed_width_digits(name, name_width) {
-            dirs.push((name.to_string(), path));
-        }
-    }
-    dirs.sort_unstable_by(|left, right| right.0.cmp(&left.0));
-    Ok(dirs)
-}
-
-fn collect_files_from_date_dir(
-    date_dir: &Path,
-    files: &mut RecentRolloutFiles,
-) -> Result<(), String> {
-    let entries = fs::read_dir(date_dir)
-        .map_err(|err| format!("读取 Codex sessions 目录失败 {}: {err}", date_dir.display()))?;
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                log_scan_error(format!("读取 Codex session 条目失败: {err}"));
-                continue;
-            }
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(err) => {
-                log_scan_error(format!(
-                    "读取 Codex session 文件类型失败 {}: {err}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-        if file_type.is_file() {
-            files.push_from_entry(&entry, &path);
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn codex_home_dir() -> PathBuf {
-    if let Some(value) = env::var_os("CODEX_HOME") {
-        return PathBuf::from(value);
-    }
-    #[cfg(windows)]
-    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
-    #[cfg(not(windows))]
-    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
-    if let Some(value) = home {
-        return PathBuf::from(value).join(".codex");
-    }
-    PathBuf::from(".codex")
 }
 
 const SESSION_FILE_LIMIT: usize = 24;
@@ -161,10 +37,6 @@ struct RecentRolloutFiles {
 impl RecentRolloutFiles {
     pub(super) fn new() -> Self {
         Self { files: Vec::new() }
-    }
-
-    pub(super) fn len(&self) -> usize {
-        self.files.len()
     }
 
     pub(super) fn push_from_entry(&mut self, entry: &fs::DirEntry, path: &Path) {
@@ -276,6 +148,32 @@ mod tests {
 
         assert_eq!(file_count, 4);
         assert!(includes_older_date_dir);
+    }
+
+    #[test]
+    fn a_resumed_thread_in_an_old_date_dir_is_found_among_many_newer_files() {
+        let sessions_dir = unique_temp_session_dir("sessions-resumed");
+        for day in 2..=9 {
+            let dir = sessions_dir
+                .join("2026")
+                .join("05")
+                .join(format!("{day:02}"));
+            for index in 0..4 {
+                write_rollout_file(&dir, &format!("rollout-2026-05-{day:02}-{index}.jsonl"));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // The thread started on 05-01 is written to again after all the others.
+        let resumed_dir = sessions_dir.join("2026").join("05").join("01");
+        write_rollout_file(&resumed_dir, "rollout-2026-05-01-resumed.jsonl");
+
+        let files = collect_recent_files(&sessions_dir).unwrap();
+        let newest = files[0].1.clone();
+        let file_count = files.len();
+        fs::remove_dir_all(&sessions_dir).unwrap();
+
+        assert_eq!(file_count, SESSION_FILE_LIMIT);
+        assert!(newest.ends_with("rollout-2026-05-01-resumed.jsonl"));
     }
 
     #[test]

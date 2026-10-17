@@ -8,7 +8,7 @@ use super::{
     rollout::readable_payload_text,
     util::non_empty,
 };
-use crate::json_util::raw_string_field;
+use crate::{codex_sessions::lock_codex_session_io, json_util::raw_string_field};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -64,6 +64,9 @@ pub(super) fn preview_conversation_impl(
     validate_codex_root(&root)?;
     let relative = normalize_relative_path(&relative_path)?;
     ensure_session_relative_path(&relative)?;
+    // The session sync rewrites rollouts in place (truncate, then write); reading one meanwhile
+    // returns a cut file. The preview waits for the sync like every other session reader.
+    let _io_guard = lock_codex_session_io("读取会话预览")?;
     let path = root.join(&relative);
     if !path.exists() {
         return Err(format!("会话文件不存在: {}", relative.display()));

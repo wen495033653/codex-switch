@@ -55,18 +55,13 @@ html[data-theme="light"] .top-nav-item.active {
   box-shadow: none;
 }
 
-html[data-theme="light"] .current-mode-pill,
-html[data-theme="light"] .mode-page-notice {
+html[data-theme="light"] .current-mode-pill {
   background: rgba(255, 255, 255, 0.74);
   border-color: var(--border-app);
 }
 
 html[data-theme="light"] .current-mode-detail {
   color: var(--text-tertiary);
-}
-
-html[data-theme="light"] .mode-page-notice strong {
-  color: var(--text-primary);
 }
 
 html[data-theme="light"] .settings-tab {

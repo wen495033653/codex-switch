@@ -1,7 +1,7 @@
 use super::{
     account_builders::account_from_exchange,
     oauth_tokens::{decode_jwt_payload, exchange_refresh_token},
-    store::{import_store_accounts, store_payload_from_store},
+    store::{import_store_accounts, store_payload_from_store, sync_auth_file_if_active},
     usage::BACKGROUND_REQUEST_TIMEOUT_MS,
 };
 use crate::{
@@ -92,7 +92,6 @@ fn failure_summary(results: &[ImportTokenResult]) -> String {
 
 pub(crate) fn import_accounts_from_refresh_tokens(
     refresh_tokens: Vec<String>,
-    overwrite: bool,
 ) -> Result<Value, String> {
     let handles: Vec<_> = refresh_tokens
         .into_iter()
@@ -137,7 +136,12 @@ pub(crate) fn import_accounts_from_refresh_tokens(
         .iter()
         .filter(|result| result.account.is_some() && !result.usage_ok)
         .count();
-    let store = import_store_accounts(accounts, overwrite)?;
+    let (store, profile_ids) = import_store_accounts(accounts)?;
+    // Importing exchanged each refresh_token. The account Codex runs on (or remote control
+    // uses) must get the new tokens in auth.json too, or Codex keeps the consumed one.
+    for profile_id in &profile_ids {
+        sync_auth_file_if_active(profile_id)?;
+    }
 
     let mut message = format!("导入成功 {imported_count} 个账号");
     if failed_count > 0 {

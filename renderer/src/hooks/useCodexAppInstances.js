@@ -31,7 +31,7 @@ export function useCodexAppInstances({ toast, toastError }) {
     setCodexAppInstanceStatus(prev => (isSameCodexAppInstanceStatus(prev, next) ? prev : next));
   };
 
-  const refreshCodexAppInstanceStatus = async ({ silent = true } = {}) => {
+  const refreshCodexAppInstanceStatus = async () => {
     if (!window.api || typeof window.api.getCodexAppInstanceStatus !== 'function') {
       applyInstanceStatus(null);
       return null;
@@ -42,8 +42,7 @@ export function useCodexAppInstances({ toast, toastError }) {
       applyInstanceStatus(res);
       return res;
     } catch (err) {
-      if (silent) statusErrorLog.failed(err);
-      else toastError(err, '加载 Codex 多开状态失败', 7000);
+      statusErrorLog.failed(err);
       return null;
     }
   };
@@ -79,7 +78,7 @@ export function useCodexAppInstances({ toast, toastError }) {
         setCodexAppInstanceStatus(prev => markCodexAppInstanceRunning(prev, res));
       }
       toast((res && res.message) || (usedOpenCommand ? '已打开 Codex' : '已打开 Codex 窗口'));
-      window.setTimeout(() => refreshCodexAppInstanceStatus({ silent: true }), 1200);
+      window.setTimeout(() => refreshCodexAppInstanceStatus(), 1200);
     } catch (err) {
       toastError(err, '打开 Codex 失败', 7000);
     } finally {

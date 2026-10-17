@@ -2,6 +2,7 @@ use crate::{
     accounts::store_payload,
     blocking_task::run_blocking,
     json_util::{bool_field, string_field, value_u64_field},
+    paths::codex_app_instances_dir,
     time_util::now_string,
 };
 use crate::{app_log::log_event, codex_sessions::sync_codex_sessions_to_provider_now_from};
@@ -30,7 +31,9 @@ mod restart;
 pub(crate) use pending::{attach_ide_reopen, build_ide_reopen_payload};
 
 use detect::{build_ide_summary, normalize_ide_entries, process_entry_pid};
-pub(crate) use detect::{codex_desktop_display_name, detect_ide_app};
+pub(crate) use detect::{
+    codex_desktop_display_name, codex_instance_pids, detect_ide_app, ProcessLink,
+};
 use restart::restart_from_ide_snapshot;
 
 fn ide_summary_text(value: &Value) -> String {
@@ -92,6 +95,20 @@ pub(crate) fn capture_open_ide_snapshot() -> Result<Value, String> {
             }))
         })
         .collect::<Vec<_>>();
+    // Standalone instances are not reopened with the editors: ending them would lose their
+    // windows, and the default Codex is the one that follows the mode switch.
+    let codex_rows = rows
+        .iter()
+        .filter(|row| string_field(row, "kind") == "codex")
+        .map(|row| ProcessLink {
+            pid: process_entry_pid(row),
+            parent_pid: value_u64_field(row, "parentPid").unwrap_or(0),
+            started_at: value_u64_field(row, "startTime").unwrap_or(0),
+            command_line: row.get("commandLine").and_then(Value::as_str).unwrap_or(""),
+        })
+        .collect::<Vec<_>>();
+    let instance_pids = codex_instance_pids(&codex_rows, &codex_app_instances_dir()?);
+    rows.retain(|row| !instance_pids.contains(&process_entry_pid(row)));
     rows.sort_by_key(process_entry_pid);
     let entries = normalize_ide_entries(rows);
     let summary = build_ide_summary(&entries);

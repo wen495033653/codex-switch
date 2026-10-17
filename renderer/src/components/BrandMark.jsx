@@ -125,8 +125,8 @@ export default function BrandMark() {
       const files = Array.isArray(result?.files) ? result.files : [];
       voiceFilesRef.current = files;
       return files;
-    } catch {
-      voiceFilesRef.current = [];
+    } catch (err) {
+      console.error('[list_brand_voice_files] failed to read the brand voice files', err);
       return [];
     }
   }
@@ -163,7 +163,8 @@ export default function BrandMark() {
       audio.src = convertFileSrc(filePath);
       audio.volume = 0.9;
       await audio.play();
-    } catch {
+    } catch (err) {
+      console.error('[brand_voice] failed to play the brand voice', filePath, err);
       voiceFilesRef.current = null;
     }
   }

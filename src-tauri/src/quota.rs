@@ -13,4 +13,6 @@ pub(crate) use refresh_all::{
     RefreshAllRuntime,
 };
 pub(crate) use subscription::refresh_account_subscription;
-pub(crate) use usage_store::{store_account_usage_result, sync_account_usage_in_background};
+pub(crate) use usage_store::{
+    log_usage_rejected, store_account_usage_result, sync_account_usage_in_background,
+};

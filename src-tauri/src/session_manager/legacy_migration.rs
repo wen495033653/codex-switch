@@ -14,6 +14,8 @@ use super::{
     util::{hex_bytes, system_time_to_rfc3339, truncate_text},
 };
 use crate::{
+    app_log::log_event,
+    atomic_file::write_file_atomically,
     codex_sessions::lock_codex_session_io,
     paths::{
         app_data_dir, codex_dir, codex_state_db_path_for_root, legacy_codex_state_db_path_from_home,
@@ -139,6 +141,20 @@ pub(super) fn migrate_legacy_codex_data_with_marker(
         collect_thread_metadata_for_migration(root, &existing_thread_ids);
     let rollout_indexed = insert_missing_state_threads(root, &missing_thread_metadata)?;
     validate_state_database(&current_state_db)?;
+    // The migration still completes: running it again for a few unreadable rollouts would take
+    // another full state DB backup each time. The rollouts left out are recorded here, not only
+    // in the marker file.
+    if !rollout_errors.is_empty() {
+        log_event(
+            "codex_desktop_data_migration_rollout_error",
+            json!({
+                "root": root.to_string_lossy(),
+                "rolloutFiles": rollout_files,
+                "errors": rollout_errors,
+                "handling": "completed_without_these_rollouts"
+            }),
+        );
+    }
 
     let report = json!({
         "ok": true,
@@ -520,16 +536,9 @@ fn write_codex_desktop_migration_marker(path: &Path, report: &Value) -> Result<(
         fs::create_dir_all(parent)
             .map_err(|err| format!("创建 Codex 数据迁移目录失败 {}: {err}", parent.display()))?;
     }
-    let temp_path = path.with_extension("tmp");
     let mut content = serde_json::to_string_pretty(report)
         .map_err(|err| format!("序列化 Codex 数据迁移标记失败: {err}"))?;
     content.push('\n');
-    fs::write(&temp_path, content)
-        .map_err(|err| format!("写入 Codex 数据迁移标记失败 {}: {err}", temp_path.display()))?;
-    if path.exists() {
-        fs::remove_file(path)
-            .map_err(|err| format!("替换 Codex 数据迁移标记失败 {}: {err}", path.display()))?;
-    }
-    fs::rename(&temp_path, path)
-        .map_err(|err| format!("保存 Codex 数据迁移标记失败 {}: {err}", path.display()))
+    write_file_atomically(path, content.as_bytes())
+        .map_err(|err| format!("保存 Codex 数据迁移标记失败: {err}"))
 }

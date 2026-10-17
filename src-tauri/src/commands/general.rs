@@ -1,6 +1,6 @@
 use super::apply_complete_api_mode_profile_if_active;
 use crate::{
-    accounts::store_payload,
+    accounts::{http_error_message, store_payload},
     blocking_task::run_blocking,
     codex_config::ensure_config_file,
     codex_launcher::apply_codex_proxy_env_state_to_settings,
@@ -95,9 +95,11 @@ fn update_settings_impl(app: &AppHandle, patch: &Value) -> Result<Value, String>
     if let Some(enabled) = desired_auto_start {
         validate_system_auto_start(enabled)?;
     }
-    let settings = apply_codex_proxy_env_state_to_settings(update_settings_value(patch)?)?;
+    let mut settings = apply_codex_proxy_env_state_to_settings(update_settings_value(patch)?)?;
     if should_apply_api_mode {
         apply_complete_api_mode_profile_if_active(&settings)?;
+        // The remote-control sync may have turned remote control off (its account is gone).
+        settings = apply_codex_proxy_env_state_to_settings(read_settings_value()?)?;
     }
     if let Some(enabled) = desired_auto_start {
         sync_system_auto_start(app, enabled)?;
@@ -235,7 +237,7 @@ pub(crate) async fn test_api_base_url(
     }
     let test_model = normalize_api_test_model(model);
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<Value, String> {
+    run_blocking("测试 Base URL", move || -> Result<Value, String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(12))
             .build()
@@ -245,13 +247,15 @@ pub(crate) async fn test_api_base_url(
         let models_response = match client.get(&models_url).bearer_auth(&api_key).send() {
             Ok(response) => read_api_test_response(&models_url, response)?,
             Err(err) => {
+                // The cause chain tells DNS, TLS, proxy and timeout failures apart.
+                let error = http_error_message(err);
                 return Ok(json!({
                     "ok": false,
                     "stage": "models",
                     "baseUrl": base_url,
-                    "message": format!("模型列表请求失败: {err}"),
+                    "message": format!("模型列表请求失败: {error}"),
                     "testModel": test_model,
-                    "modelsResponse": api_test_error_response(&models_url, &err.to_string()),
+                    "modelsResponse": api_test_error_response(&models_url, &error),
                     "responsesRequest": Value::Null,
                     "responsesResponse": Value::Null,
                     "tokenUsage": Value::Null
@@ -340,18 +344,19 @@ pub(crate) async fn test_api_base_url(
         {
             Ok(response) => read_api_test_response(&responses_url, response)?,
             Err(err) => {
+                let error = http_error_message(err);
                 return Ok(json!({
                     "ok": false,
                     "stage": "responses",
                     "baseUrl": base_url,
-                    "message": format!("Responses 测试请求失败: {err}"),
+                    "message": format!("Responses 测试请求失败: {error}"),
                     "testModel": selected_model,
                     "modelCount": models.len(),
                     "modelIds": model_ids,
                     "selectedModel": selected_model,
                     "modelsResponse": models_response,
                     "responsesRequest": responses_request_snapshot,
-                    "responsesResponse": api_test_error_response(&responses_url, &err.to_string()),
+                    "responsesResponse": api_test_error_response(&responses_url, &error),
                     "tokenUsage": Value::Null
                 }));
             }
@@ -412,9 +417,6 @@ pub(crate) async fn test_api_base_url(
         }))
     })
     .await
-    .map_err(|err| format!("等待 Base URL 测试失败: {err}"))??;
-
-    Ok(result)
 }
 
 fn normalize_api_test_model(model: Option<String>) -> String {
@@ -522,12 +524,13 @@ pub(crate) async fn open_codex_config_toml() -> Result<Value, String> {
 #[tauri::command]
 pub(crate) async fn list_brand_voice_files(app: AppHandle) -> Result<Value, String> {
     run_blocking("读取语音包", move || {
-        let files = app
+        // The pack ships with the app; a directory that cannot be found or read is a broken
+        // install, not an empty pack.
+        let dir = app
             .path()
             .resolve("voice-pack", BaseDirectory::Resource)
-            .ok()
-            .map(|dir| collect_mp3_files(&dir))
-            .unwrap_or_default();
+            .map_err(|err| format!("定位语音包目录失败: {err}"))?;
+        let files = collect_mp3_files(&dir)?;
 
         Ok(json!({
             "ok": true,
@@ -537,25 +540,21 @@ pub(crate) async fn list_brand_voice_files(app: AppHandle) -> Result<Value, Stri
     .await
 }
 
-fn collect_mp3_files(dir: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    let mut files: Vec<String> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("mp3"))
-        })
-        .map(|path| path.to_string_lossy().to_string())
-        .collect();
-
+fn collect_mp3_files(dir: &Path) -> Result<Vec<String>, String> {
+    let read_error = |err: std::io::Error| format!("读取语音包目录失败 {}: {err}", dir.display());
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).map_err(read_error)? {
+        let path = entry.map_err(read_error)?.path();
+        let is_mp3 = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mp3"));
+        if is_mp3 && path.is_file() {
+            files.push(path.to_string_lossy().to_string());
+        }
+    }
     files.sort();
-    files
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -570,5 +569,40 @@ mod api_test_model_tests {
             normalize_api_test_model(Some(" custom-model ".into())),
             "custom-model"
         );
+    }
+}
+
+#[cfg(test)]
+mod voice_pack_tests {
+    use super::*;
+
+    #[test]
+    fn voice_files_are_listed_and_a_missing_pack_is_an_error() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("codex-switch-voice-{stamp}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("b.mp3"), b"").unwrap();
+        fs::write(dir.join("a.MP3"), b"").unwrap();
+        fs::write(dir.join("notes.txt"), b"").unwrap();
+
+        let files = collect_mp3_files(&dir).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        let missing = collect_mp3_files(&dir).unwrap_err();
+
+        let names = files
+            .iter()
+            .map(|file| {
+                Path::new(file)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a.MP3", "b.mp3"]);
+        assert!(missing.contains("读取语音包目录失败"), "{missing}");
     }
 }

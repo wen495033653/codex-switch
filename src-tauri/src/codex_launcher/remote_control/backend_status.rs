@@ -1,4 +1,4 @@
-use crate::json_util::string_field;
+use crate::{accounts::http_error_message, json_util::string_field};
 use serde_json::{json, Value};
 use std::time::Duration as StdDuration;
 
@@ -49,14 +49,15 @@ pub(super) fn fetch_remote_control_backend_environment_status(
 
     let response = request
         .send()
-        .map_err(|err| format!("读取 ChatGPT 桌面状态失败: {err}"))?;
+        .map_err(|err| format!("读取 ChatGPT 桌面状态失败: {}", http_error_message(err)))?;
     let status = response.status();
     // An unread body would otherwise look like an empty one: "HTTP 500 body: " or a JSON parse
     // error that hides the real read failure.
     let text = response.text().map_err(|err| {
         format!(
-            "读取 ChatGPT 桌面状态响应失败: HTTP {}: {err}",
-            status.as_u16()
+            "读取 ChatGPT 桌面状态响应失败: HTTP {}: {}",
+            status.as_u16(),
+            http_error_message(err)
         )
     })?;
     if !status.is_success() {

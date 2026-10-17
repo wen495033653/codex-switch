@@ -1,6 +1,3 @@
-export const DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES = 30;
-export const DEFAULT_UI_THEME = 'system';
-
 export const ACCOUNT_NAME_DISPLAY_OPTIONS = [
     {
         value: false,

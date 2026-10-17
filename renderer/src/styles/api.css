@@ -597,12 +597,6 @@
   border-color: rgba(147, 197, 253, 0.28);
 }
 
-.api-test-message.success {
-  color: #bbf7d0;
-  background: rgba(34, 197, 94, 0.1);
-  border-color: rgba(134, 239, 172, 0.24);
-}
-
 .api-test-message.error {
   color: #fecaca;
   background: rgba(248, 113, 113, 0.1);

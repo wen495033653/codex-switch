@@ -31,8 +31,7 @@ export default function CodexPage({
     settingsDraft,
     subscriptionModeActive,
     switching,
-    updateCodexProxySettings,
-    updateSettingsDraftAndSave
+    updateCodexProxySettings
 }) {
     const { t } = useI18n();
     const modelInstructionsEnabled = settingsDraft.codex_model_instructions_enabled !== false;
@@ -106,7 +105,6 @@ export default function CodexPage({
                         settingsDraft={settingsDraft}
                         switching={switching}
                         updateCodexProxySettings={updateCodexProxySettings}
-                        updateSettingsDraftAndSave={updateSettingsDraftAndSave}
                     />
                 </div>
             </div>

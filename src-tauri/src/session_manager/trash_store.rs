@@ -1,8 +1,5 @@
 use super::{
-    backup::{
-        sanitize_id_fragment, session_manager_data_dir, status_overwrite_backup_path,
-        unique_backup_id,
-    },
+    backup::{session_manager_data_dir, status_overwrite_backup_path, unique_backup_id},
     codex_home::{
         conversation_path_key, ensure_session_relative_path, extract_uuid_like,
         normalize_relative_path, normalize_status, path_to_slash, reassigned_relative_path,
@@ -18,7 +15,7 @@ use super::{
         delete_state_threads_for_sessions, thread_metadata_from_manifest, upsert_state_threads,
         StateDbBatchBackup,
     },
-    util::{backup_stamp, sha256_bytes, sha256_file, unique_sibling_path},
+    util::{sha256_bytes, sha256_file, unique_sibling_path},
 };
 use crate::app_log::log_event;
 use serde::{Deserialize, Serialize};
@@ -28,7 +25,6 @@ use std::{
     fs,
     io::Write,
     path::{Component, Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 const DELETED_SESSIONS_DIR: &str = "deleted-sessions";
@@ -155,7 +151,7 @@ fn create_deleted_session_record_dir(
     session_id: &str,
 ) -> Result<(String, PathBuf), String> {
     for _ in 0..16 {
-        let delete_id = unique_delete_id(session_id);
+        let delete_id = unique_backup_id(session_id);
         let record_dir = deleted_session_record_dir_at(deleted_root, &delete_id)?;
         match fs::create_dir(&record_dir) {
             Ok(()) => return Ok((delete_id, record_dir)),
@@ -713,13 +709,7 @@ fn prepare_restored_temp_file(
         {
             return Err(mismatch());
         }
-        let content = String::from_utf8(bytes).map_err(|err| {
-            format!(
-                "读取已删除会话备份失败 {}: {err}",
-                candidate.source_file.display()
-            )
-        })?;
-        let output = rewrite_session_id_content(&content, old_id, new_id)?;
+        let output = rewrite_session_id_content(&bytes, old_id, new_id)?;
         fs::write(temp_path, output).map_err(|err| {
             format!(
                 "写入修改 ID 后的会话失败 {} -> {}: {err}",
@@ -796,12 +786,4 @@ fn validate_delete_id(delete_id: &str) -> Result<(), String> {
         return Err("已删除会话 ID 无效".to_string());
     }
     Ok(())
-}
-
-fn unique_delete_id(id: &str) -> String {
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("{}-{}-{suffix}", backup_stamp(), sanitize_id_fragment(id))
 }

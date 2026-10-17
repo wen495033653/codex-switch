@@ -1,6 +1,6 @@
 use super::{
-    io::{read_config_lines, write_config_lines},
-    parse::{find_root_table_index, root_assignment},
+    io::update_config_lines,
+    parse::{find_root_table_index, root_assignment, table_header},
 };
 use serde_json::Value;
 
@@ -12,11 +12,11 @@ const REMOTE_CONTROL_CONFIG_KEYS: &[&str] = &[
     LEGACY_REMOTE_CONNECTIONS_CONFIG_KEY,
 ];
 
-fn remove_table_lines(table_name: &str) -> Result<Vec<String>, String> {
-    let mut lines = read_config_lines()?;
+fn without_table(lines: &[String], table_name: &str) -> Vec<String> {
+    let mut lines = lines.to_vec();
     let header = format!("[{table_name}]");
     let Some((start, end)) = table_bounds(&lines, &header) else {
-        return Ok(lines);
+        return lines;
     };
 
     lines.splice(start..end, std::iter::empty());
@@ -24,21 +24,21 @@ fn remove_table_lines(table_name: &str) -> Result<Vec<String>, String> {
     {
         lines.remove(start);
     }
-    Ok(lines)
+    lines
 }
 
 /// `header` is the full `[table]` line. Returns the header index and the index of the next table
 /// header (or the line count).
 pub(crate) fn table_bounds(lines: &[String], header: &str) -> Option<(usize, usize)> {
-    let start = lines.iter().position(|line| line.trim() == header)?;
-    let mut end = lines.len();
-    for (index, line) in lines.iter().enumerate().skip(start + 1) {
-        let normalized = line.trim();
-        if normalized.starts_with('[') && normalized.ends_with(']') {
-            end = index;
-            break;
-        }
-    }
+    let start = lines
+        .iter()
+        .position(|line| table_header(line) == Some(header))?;
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| table_header(line).is_some())
+        .map_or(lines.len(), |(index, _)| index);
     Some((start, end))
 }
 
@@ -55,8 +55,9 @@ fn format_toml_value(value: &Value) -> String {
     }
 }
 
-pub(crate) fn set_table_config(table_name: &str, values: Vec<(&str, Value)>) -> Result<(), String> {
-    let mut lines = remove_table_lines(table_name)?;
+/// Replaces the table with `values`, placed before the first other table.
+fn with_table(lines: &[String], table_name: &str, values: Vec<(&str, Value)>) -> Vec<String> {
+    let mut lines = without_table(lines, table_name);
     let insert_at = find_root_table_index(&lines).unwrap_or(lines.len());
     let mut table_lines = Vec::new();
     if insert_at > 0
@@ -72,12 +73,15 @@ pub(crate) fn set_table_config(table_name: &str, values: Vec<(&str, Value)>) -> 
     }
     table_lines.push(String::new());
     lines.splice(insert_at..insert_at, table_lines);
-    write_config_lines(&lines)
+    lines
+}
+
+pub(crate) fn set_table_config(table_name: &str, values: Vec<(&str, Value)>) -> Result<(), String> {
+    update_config_lines(|lines| with_table(lines, table_name, values)).map(|_| ())
 }
 
 pub(crate) fn remove_table_config(table_name: &str) -> Result<(), String> {
-    let lines = remove_table_lines(table_name)?;
-    write_config_lines(&lines)
+    update_config_lines(|lines| without_table(lines, table_name)).map(|_| ())
 }
 
 fn remove_table_config_entries(lines: &[String], table_name: &str, keys: &[&str]) -> Vec<String> {
@@ -103,13 +107,7 @@ fn remove_table_config_entries(lines: &[String], table_name: &str, keys: &[&str]
 }
 
 fn remove_table_config_values(table_name: &str, keys: &[&str]) -> Result<bool, String> {
-    let lines = read_config_lines()?;
-    let next_lines = remove_table_config_entries(&lines, table_name, keys);
-    let changed = next_lines != lines;
-    if changed {
-        write_config_lines(&next_lines)?;
-    }
-    Ok(changed)
+    update_config_lines(|lines| remove_table_config_entries(lines, table_name, keys))
 }
 
 fn upsert_root_config_entries(lines: &[String], values: Vec<(String, Value)>) -> Vec<String> {
@@ -160,9 +158,7 @@ fn upsert_root_config_entries(lines: &[String], values: Vec<(String, Value)>) ->
 }
 
 fn set_config_entries(values: Vec<(String, Value)>) -> Result<(), String> {
-    let lines = read_config_lines()?;
-    let next_lines = upsert_root_config_entries(&lines, values);
-    write_config_lines(&next_lines)
+    update_config_lines(|lines| upsert_root_config_entries(lines, values)).map(|_| ())
 }
 
 pub(crate) fn set_config_values(values: Vec<(&str, String)>) -> Result<(), String> {
@@ -177,24 +173,21 @@ pub(crate) fn remove_remote_control_config() -> Result<bool, String> {
     remove_table_config_values(FEATURES_TABLE, REMOTE_CONTROL_CONFIG_KEYS)
 }
 
-pub(crate) fn remove_config_values(keys: &[&str]) -> Result<(), String> {
-    let lines = read_config_lines()?;
-    let root_end = find_root_table_index(&lines).unwrap_or(lines.len());
-    let next_lines: Vec<String> = lines
-        .into_iter()
+fn without_root_values(lines: &[String], keys: &[&str]) -> Vec<String> {
+    let root_end = find_root_table_index(lines).unwrap_or(lines.len());
+    lines
+        .iter()
         .enumerate()
-        .filter_map(|(index, line)| {
-            if index < root_end {
-                if let Some((key, _value)) = root_assignment(&line) {
-                    if keys.iter().any(|target| *target == key) {
-                        return None;
-                    }
-                }
-            }
-            Some(line)
+        .filter(|(index, line)| {
+            *index >= root_end
+                || root_assignment(line).is_none_or(|(key, _value)| !keys.contains(&key.as_str()))
         })
-        .collect();
-    write_config_lines(&next_lines)
+        .map(|(_, line)| line.clone())
+        .collect()
+}
+
+pub(crate) fn remove_config_values(keys: &[&str]) -> Result<(), String> {
+    update_config_lines(|lines| without_root_values(lines, keys)).map(|_| ())
 }
 
 #[cfg(test)]
@@ -203,6 +196,64 @@ mod tests {
 
     fn lines(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn headers_with_a_trailing_comment_still_end_the_root_and_name_their_table() {
+        let input = lines(&[
+            "model = \"gpt-5\"",
+            "[features] # experimental",
+            "web_search_request = true",
+            "[model_providers.api] # relay",
+            "base_url = \"https://old.example/v1\"",
+        ]);
+
+        let rooted = upsert_root_config_entries(
+            &input,
+            vec![("model_provider".to_string(), Value::String("api".into()))],
+        );
+        let position = |target: &str| rooted.iter().position(|line| line == target).unwrap();
+        assert!(position("model_provider = \"api\"") < position("[features] # experimental"));
+
+        let replaced = with_table(
+            &input,
+            "model_providers.api",
+            vec![("base_url", Value::String("https://new.example/v1".into()))],
+        );
+        assert_eq!(
+            replaced
+                .iter()
+                .filter(|line| line.starts_with("[model_providers.api]"))
+                .count(),
+            1
+        );
+        assert!(replaced.contains(&"base_url = \"https://new.example/v1\"".to_string()));
+        assert!(!replaced.contains(&"base_url = \"https://old.example/v1\"".to_string()));
+    }
+
+    #[test]
+    fn writing_the_same_values_again_changes_no_line() {
+        let start = lines(&["model = \"gpt-5\"", "", "[features]", "memories = true"]);
+        let values = || {
+            vec![
+                ("name", Value::String("API".into())),
+                ("base_url", Value::String("https://relay.example/v1".into())),
+            ]
+        };
+        let once = with_table(&start, "model_providers.api", values());
+        let twice = with_table(&once, "model_providers.api", values());
+        assert_eq!(twice, once);
+
+        let rooted = upsert_root_config_entries(
+            &once,
+            vec![("model_provider".to_string(), Value::String("api".into()))],
+        );
+        let rooted_again = upsert_root_config_entries(
+            &rooted,
+            vec![("model_provider".to_string(), Value::String("api".into()))],
+        );
+        assert_eq!(rooted_again, rooted);
+        assert_eq!(without_root_values(&once, &["openai_base_url"]), once);
     }
 
     #[test]

@@ -26,10 +26,14 @@ async function fixture(responses) {
     } },
     '../utils/appState': { CODEX_DESKTOP_UPDATE_URL: 'https://example.test/update', REPOSITORY_URL: 'https://example.test' },
     '../utils/errors': { getErrorMessage: (error, defaultMessage) => error?.message || defaultMessage },
+    '../i18n': {
+      translate: (source, params) => String(source).replace(/\{(\w+)\}/g, (_, key) => String(params[key])),
+      translateRuntimeText: value => value,
+    },
   };
   const source = fs.readFileSync(new URL('../renderer/src/hooks/useSettingsActions.js', import.meta.url), 'utf8');
   const module = new vm.SourceTextModule(source, { context });
-  await module.link(async specifier => {
+  const link = async specifier => {
     if (stubs[specifier]) {
       const exports = stubs[specifier];
       return new vm.SyntheticModule(Object.keys(exports), function () {
@@ -38,9 +42,10 @@ async function fixture(responses) {
     }
     const url = new URL(`../renderer/src/hooks/${specifier}.js`, import.meta.url);
     const dependency = new vm.SourceTextModule(fs.readFileSync(url, 'utf8'), { context });
-    await dependency.link(() => { throw Error('Unexpected nested import'); });
+    await dependency.link(link);
     return dependency;
-  });
+  };
+  await module.link(link);
   await module.evaluate();
   return {
     calls, applied, errors,

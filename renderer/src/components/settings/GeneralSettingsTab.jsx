@@ -1,10 +1,10 @@
 import {
     AUTO_START_OPTIONS,
-    DEFAULT_UI_THEME,
     UI_LANGUAGE_OPTIONS,
     UI_THEME_OPTIONS
 } from './options';
 import { DEFAULT_UI_LANGUAGE, useI18n } from '../../i18n';
+import { DEFAULT_SETTINGS } from '../../utils/appState';
 
 export default function GeneralSettingsTab({
     dataDir,
@@ -60,7 +60,7 @@ export default function GeneralSettingsTab({
 
                 <div className="settings-option-list settings-option-list-inline settings-theme-options">
                     {UI_THEME_OPTIONS.map(option => {
-                        const active = (settingsDraft.ui_theme || DEFAULT_UI_THEME) === option.value;
+                        const active = (settingsDraft.ui_theme || DEFAULT_SETTINGS.ui_theme) === option.value;
                         return (
                             <button
                                 key={option.value}

@@ -41,6 +41,7 @@ export function useRefreshTokenModal({
   };
 
   const closeRefreshTokenModal = () => {
+    if (refreshTokenModal.loading) return;
     setRefreshTokenModal(emptyRefreshTokenModal);
   };
 
@@ -56,14 +57,19 @@ export function useRefreshTokenModal({
   };
 
   const handleRefreshAccountToken = async () => {
-    if (!refreshTokenModal.accountId || refreshTokenModal.loading) return;
+    const accountId = refreshTokenModal.accountId;
+    if (!accountId || refreshTokenModal.loading) return;
+    // A result only belongs in the dialog of the account it was requested for.
+    const updateRequestedAccountModal = update => setRefreshTokenModal(prev => (
+      prev.accountId === accountId ? update(prev) : prev
+    ));
 
     setRefreshTokenModal(prev => ({ ...prev, loading: true }));
     try {
-      const res = await window.api.refreshAccountToken(refreshTokenModal.accountId);
+      const res = await window.api.refreshAccountToken(accountId);
       if (!res || res.ok !== true) {
         if (res && res.store) setStore(res.store);
-        setRefreshTokenModal(prev => ({
+        updateRequestedAccountModal(prev => ({
           ...prev,
           loading: false,
           error: res && res.message ? res.message : '刷新 Refresh Token 失败'
@@ -72,7 +78,7 @@ export function useRefreshTokenModal({
       }
 
       setStore(requireStore(res));
-      setRefreshTokenModal(prev => ({
+      updateRequestedAccountModal(prev => ({
         ...prev,
         refreshToken: typeof res.refresh_token === 'string' && res.refresh_token ? res.refresh_token : prev.refreshToken,
         loading: false,
@@ -80,7 +86,7 @@ export function useRefreshTokenModal({
       }));
       toast(res.message || 'Refresh Token 已刷新');
     } catch (err) {
-      setRefreshTokenModal(prev => ({
+      updateRequestedAccountModal(prev => ({
         ...prev,
         loading: false,
         error: getErrorMessage(err, '刷新 Refresh Token 失败')

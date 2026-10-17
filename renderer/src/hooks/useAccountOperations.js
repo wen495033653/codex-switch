@@ -19,7 +19,7 @@ export function useAccountOperations({
   toast,
   toastError
 }) {
-  const [refreshingAccountId, setRefreshingAccountId] = useState('');
+  const [refreshingAccountIds, setRefreshingAccountIds] = useState(() => new Set());
   const [deleteAccountModal, setDeleteAccountModal] = useState(EMPTY_DELETE_ACCOUNT_MODAL);
 
   const deleteAccountDisplayName = useMemo(() => (
@@ -29,8 +29,8 @@ export function useAccountOperations({
   ), [deleteAccountModal.accountName, maskAccountName]);
 
   const handleRefreshAccount = async (accountId) => {
-    if (!accountId || refreshingAccountId === accountId) return;
-    setRefreshingAccountId(accountId);
+    if (!accountId || refreshingAccountIds.has(accountId)) return;
+    setRefreshingAccountIds(prev => new Set(prev).add(accountId));
     try {
       const res = await window.api.refreshAccount(accountId);
       if (res && res.store) setStore(res.store);
@@ -38,7 +38,11 @@ export function useAccountOperations({
     } catch (err) {
       toastError(err, '刷新配额失败');
     } finally {
-      setRefreshingAccountId(prev => (prev === accountId ? '' : prev));
+      setRefreshingAccountIds(prev => {
+        const next = new Set(prev);
+        next.delete(accountId);
+        return next;
+      });
     }
   };
 
@@ -91,7 +95,7 @@ export function useAccountOperations({
   return {
     deleteAccountDisplayName,
     deleteAccountModal,
-    refreshingAccountId,
+    refreshingAccountIds,
     closeDeleteAccountModal,
     confirmDeleteAccount,
     exportAccountsToBackup,

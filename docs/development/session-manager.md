@@ -81,6 +81,19 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 | `session_manager_import_apply_error` | `root`、`candidates`、`imported`、`skipped`、`lateConflicts`、`indexedFiles`、`errors`、`sqliteError` |
 | `session_manager_session_index_read_error` | `path`、`linesRead`、`entries`、`skippedLines`、`readError` |
 
+## 2026-10-17 审查修复
+
+- **同批重名不会互相覆盖**（提交 `dba96dc`）：两个文件名相同的会话（例如同一 uuid 分别在 `sessions/2026/05/13/` 和 `05/14/`）同批归档时，以前选“覆盖”会把第一个先移入的会话改名为覆盖备份、提交后删除，两行 state DB 指向同一个文件。现在只有计划阶段判定为覆盖（`StatusMove.overwrite`）的目标才会被替换；同批里已被前一项占用的目标按冲突处理，与恢复流程相同：询问时列出、跳过时跳过、覆盖时报错并保留会话原位、修改 ID 时另取空闲名字。测试：`status_overwrite_never_replaces_a_session_moved_earlier_in_the_batch`（旧实现下失败）。
+- **含非 UTF-8 行的会话能列出和恢复**（提交 `2cb6057`）：前 240 行里只要有一行不是 UTF-8（例如最后一行在多字节字符中间被截断），摘要解析就整体失败，回收站里的这种会话每次恢复都会回滚，删除无法撤销；以“修改 ID”方式恢复也会因整文件转字符串失败。现在这样的行和非 JSON 行一样跳过，修改 ID 按字节处理，解析不了的行原样保留。测试：`sessions_with_a_non_utf8_line_list_and_restore_unchanged`（旧实现下失败）。
+- **10 个命令统一用 `run_blocking`**（提交 `3ce279a`）；**删除记录 id 复用 `unique_backup_id`**（提交 `df1577f`）；**迁移标记改用原子写**（提交 `80d2317`，测试 `legacy_migration_writes_its_marker_and_runs_once`）。
+- **zip 的 CRC32 改用 `crc32fast`**：导出、导入的每个条目都要算 CRC，原来逐位循环（每字节 8 轮移位异或）是这两步里最慢的一环；`crc32fast` 1.5.2 本来就经 png、flate2 编进了程序，现在作为直接依赖使用。测试：`crc32_matches_the_standard_check_value`（CRC-32 标准校验值），导出后导入的往返测试照常通过。提速幅度没有实测。
+
+- **单个会话的失败写进错误日志**：删除、归档/取消归档、恢复、彻底删除、导出时，某个会话失败（例如文件被占用、SHA-256 复核不一致）以前只出现在返回给界面的 `report.errors` 里，用户关掉提示后错误日志没有任何依据。现在命令入口发现报告里有单项错误时，分别记 `session_manager_delete_error`、`session_manager_status_error`、`session_manager_restore_error`、`session_manager_purge_error`、`session_manager_export_error`（`root`、`errors` 原文）。导入原来就记 `session_manager_import_apply_error`，不重复。测试：`per_session_failures_in_a_report_are_logged`。
+
+- **旧版数据迁移漏掉的会话写进错误日志**：迁移时个别 rollout 打不开或解析失败，以前只写进 `%APPDATA%/codex-switch/migrations/` 下的标记文件，调用方记的 `codex_desktop_data_migration` 不在任何名单里，不落盘也不显示。迁移仍按完成处理（否则每次重试都要多做一次全库备份），同时记 `codex_desktop_data_migration_rollout_error`（`root`、`rolloutFiles`、`errors`）。验证：迁移相关测试通过；这条日志没有真实触发。
+
+- **预览读文件前拿会话 I/O 锁**：会话同步原地改写 rollout（先截断再写），预览在这期间读到的是被截断的文件，表现为“会话文件已变化”、分段读取失败或首页少了消息。现在预览与其它会话读写一样先拿 `lock_codex_session_io`，同步进行时等它结束（回收站里的副本不会被同步改写，不加锁）。预览调用链里没有其它地方拿这把锁，不会重入。验证：会话管理 51 个测试通过；等待时长没有实测。
+
 ## 关键决策和原因
 
 - **归档的顺序是“可逆的文件移动 → DB 事务 → 不可逆清理”，而不是用 DB 事务包住文件 I/O。** 持有 SQLite 写事务做文件复制（“修改 ID”要整文件重写）会让同时运行的 Codex 长时间拿不到写锁；而把删除原文件、删除覆盖备份推迟到提交之后，DB 失败时每一步都能撤回，得到同样的一致性。

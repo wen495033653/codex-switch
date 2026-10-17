@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { translate, translateRuntimeText } from '../i18n';
 import { CODEX_DESKTOP_UPDATE_URL, REPOSITORY_URL } from '../utils/appState';
 import { getErrorMessage } from '../utils/errors';
 import { proxySaveFeedback } from '../utils/codexSettingsStatus';
@@ -81,10 +82,12 @@ export function useSettingsActions({
     const nextPatch = patch && typeof patch === 'object' ? { ...patch } : {};
     const hasProxyUrl = Object.prototype.hasOwnProperty.call(nextPatch, 'codex_proxy_url');
     if (!hasProxyUrl) return;
+    nextPatch.codex_proxy_url = String(nextPatch.codex_proxy_url || '').trim();
+    // With the proxy on, a save rewrites .env and asks for a restart, so an unedited field saves nothing.
+    if (nextPatch.codex_proxy_url === String(settings.codex_proxy_url || '').trim()) return;
 
     setSavingProxySettings(true);
     try {
-      nextPatch.codex_proxy_url = String(nextPatch.codex_proxy_url || '').trim();
       const saveRes = settingsDraft.codex_proxy_env_enabled === true
         ? await window.api.setCodexProxyEnvEnabled({
           enabled: true,
@@ -193,7 +196,9 @@ export function useSettingsActions({
       applySettings(res);
       setModelInstructionsConfirmation(null);
       const message = res.message || (enabled ? 'gpt破限已启用' : 'gpt破限已关闭');
-      toast(res.backupPath ? `${message}\n本地文件已备份：${res.backupPath}` : message, res.backupPath ? 7000 : undefined);
+      toast(res.backupPath
+        ? translate('{message}\n本地文件已备份：{path}', { message: translateRuntimeText(message), path: res.backupPath })
+        : message, res.backupPath ? 7000 : undefined);
       if (res && res.restartRequired) {
         let processStatus;
         try {

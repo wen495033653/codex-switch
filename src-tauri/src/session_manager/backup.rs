@@ -48,7 +48,7 @@ pub(super) fn status_overwrite_backup_path(target: &Path, id: &str) -> PathBuf {
     ))
 }
 
-pub(super) fn sanitize_id_fragment(id: &str) -> String {
+fn sanitize_id_fragment(id: &str) -> String {
     let value = id
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')

@@ -24,8 +24,11 @@ pub(crate) fn kill_process_tree(pid: u64) -> Result<bool, String> {
         Ok(false)
     } else {
         check_process_kill_permission(pid).and_then(|()| {
+            let system = process_list_snapshot(ProcessesToUpdate::All);
+            let tree_pids = process_tree_pids(&system, pid);
+            ensure_tree_excludes_self(pid, &tree_pids, u64::from(std::process::id()))?;
             termination_attempted = true;
-            kill_process_tree_impl(pid)
+            kill_process_tree_impl(pid, &system, &tree_pids)
         })
     };
     log_event(
@@ -61,11 +64,24 @@ pub(crate) fn root_pids(processes: &[(u64, u64)]) -> Vec<u64> {
 /// Ends the app by its roots only; each root's tree takes its helpers with it. Killing Electron
 /// helpers one by one makes the main process respawn them before the root is reached.
 pub(crate) fn kill_root_process_trees(processes: &[(u64, u64)]) -> Result<(), String> {
+    // A root that exited after the scan needs neither a check nor a kill (opening it would fail
+    // and stop the whole restart); callers still wait for every captured process to be gone.
     kill_roots_after_preflight(
-        &root_pids(processes),
+        &get_alive_pids(&root_pids(processes)),
         check_process_kill_permission,
         kill_process_tree,
     )
+}
+
+/// Codex Switch started from an editor's terminal or a Codex shell runs inside that tree;
+/// `taskkill /T` would end it halfway through closing, syncing and reopening.
+fn ensure_tree_excludes_self(pid: u64, tree_pids: &[u64], own_pid: u64) -> Result<(), String> {
+    if tree_pids.contains(&own_pid) {
+        return Err(format!(
+            "要结束的进程树 PID={pid} 包含 Codex Switch 自身（PID={own_pid}），未结束任何进程；请不要从该程序的终端里启动 Codex Switch"
+        ));
+    }
+    Ok(())
 }
 
 fn check_process_kill_permission(pid: u64) -> Result<(), String> {
@@ -107,12 +123,10 @@ fn kill_roots_after_preflight(
 // evidence: taskkill /T exits 128 ("not found") for tree members that exit on their own while it
 // terminates their relatives (e.g. a `cmd /c` wrapper under Codex's app-server), and a kill can
 // likewise fail for a process that has just exited, although the tree is gone.
-fn kill_process_tree_impl(pid: u64) -> Result<bool, String> {
-    let system = process_list_snapshot(ProcessesToUpdate::All);
-    let tree_pids = process_tree_pids(&system, pid);
-    let termination = terminate_process_tree(&system, pid, &tree_pids);
-    let alive_pids = wait_for_pids_exit(&tree_pids, PROCESS_TREE_EXIT_CONFIRM_MS);
-    process_tree_kill_outcome(pid, &tree_pids, termination, &alive_pids)
+fn kill_process_tree_impl(pid: u64, system: &System, tree_pids: &[u64]) -> Result<bool, String> {
+    let termination = terminate_process_tree(system, pid, tree_pids);
+    let alive_pids = wait_for_pids_exit(tree_pids, PROCESS_TREE_EXIT_CONFIRM_MS);
+    process_tree_kill_outcome(pid, tree_pids, termination, &alive_pids)
 }
 
 fn process_tree_kill_outcome(
@@ -530,6 +544,19 @@ mod tests {
     }
 
     #[test]
+    fn roots_that_already_exited_are_neither_checked_nor_killed() {
+        // Windows PIDs are multiples of 4 below 2^32; this one is not running.
+        assert_eq!(kill_root_process_trees(&[(4_294_967_292, 0)]), Ok(()));
+    }
+
+    #[test]
+    fn a_tree_holding_codex_switch_itself_is_refused() {
+        let error = ensure_tree_excludes_self(100, &[100, 200, 300], 300).unwrap_err();
+        assert!(error.contains("PID=300"), "{error}");
+        assert_eq!(ensure_tree_excludes_self(100, &[100, 200], 300), Ok(()));
+    }
+
+    #[test]
     fn successful_permission_preflight_precedes_all_root_terminations() {
         use std::cell::RefCell;
         let calls = RefCell::new(Vec::new());
@@ -745,7 +772,9 @@ mod tests {
         // The open Child handle keeps this PID from being reused while taskkill looks it up.
         let pid = u64::from(child.id());
 
-        assert!(kill_process_tree_impl(pid).unwrap());
+        let system = process_list_snapshot(ProcessesToUpdate::All);
+        let tree_pids = process_tree_pids(&system, pid);
+        assert!(kill_process_tree_impl(pid, &system, &tree_pids).unwrap());
 
         let entries = crate::app_log::get_dev_log_entries();
         assert!(

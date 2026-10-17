@@ -53,19 +53,13 @@ async fn check_update_impl(
 
     let opts = options.unwrap_or_else(|| json!({}));
     let manual = bool_field(&opts, "manual");
-    emit_update_status(&app, json!({ "status": "checking" }));
 
-    match find_update(&app).await {
-        Ok(Some(update)) => {
+    // The result goes back to the caller only: the startup check logs a failure quietly and a
+    // manual check shows it, so no status event is sent for a check.
+    match find_update(&app).await? {
+        Some(update) => {
             let info = update_info(&update);
             store_pending_update(runtime.inner().as_ref(), update, None);
-            emit_update_status(
-                &app,
-                json!({
-                    "status": "available",
-                    "update": info
-                }),
-            );
 
             let settings = read_settings_value()?;
             let remote_version = string_field(&info, "version");
@@ -85,17 +79,8 @@ async fn check_update_impl(
                 "release_date": string_field(&info, "release_date")
             }))
         }
-        Ok(None) => {
+        None => {
             clear_pending_update(runtime.inner().as_ref());
-            emit_update_status(
-                &app,
-                json!({
-                    "status": "not-available",
-                    "update": {
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                }),
-            );
             Ok(json!({
                 "ok": true,
                 "has_update": false,
@@ -103,16 +88,6 @@ async fn check_update_impl(
                 "remote_version": env!("CARGO_PKG_VERSION"),
                 "message": "当前已是最新版本"
             }))
-        }
-        Err(err) => {
-            emit_update_status(
-                &app,
-                json!({
-                    "status": "error",
-                    "error": err
-                }),
-            );
-            Err(err)
         }
     }
 }
@@ -168,9 +143,9 @@ async fn download_update_impl(
 
     emit_download_started(&app, &info);
 
-    let update_for_download = update.clone();
-    let mut progress = DownloadProgress::new(app.clone(), info.clone());
-    let bytes = update_for_download
+    let mut progress = DownloadProgress::new(app.clone());
+    // A failure is returned to the caller, which shows it; an error event would show it twice.
+    let bytes = update
         .download(
             |chunk_length, content_length| {
                 progress.emit_chunk(chunk_length, content_length);
@@ -178,18 +153,7 @@ async fn download_update_impl(
             || {},
         )
         .await
-        .map_err(|err| {
-            let message = format!("下载更新失败: {err}");
-            emit_update_status(
-                &app,
-                json!({
-                    "status": "error",
-                    "error": message,
-                    "update": info
-                }),
-            );
-            message
-        })?;
+        .map_err(|err| format!("下载更新失败: {err}"))?;
 
     store_pending_update(runtime.inner().as_ref(), update, Some(bytes));
     emit_update_status(
@@ -237,29 +201,36 @@ fn emit_download_started(app: &AppHandle, info: &Value) {
     );
 }
 
+/// Download progress, sent when the whole percent changes: the plugin calls back for every network
+/// chunk, hundreds to thousands of times per download.
 struct DownloadProgress {
     app: AppHandle,
-    info: Value,
     start: Instant,
     transferred: u64,
+    last_percent: Option<u64>,
 }
 
 impl DownloadProgress {
-    pub(super) fn new(app: AppHandle, info: Value) -> Self {
+    fn new(app: AppHandle) -> Self {
         Self {
             app,
-            info,
             start: Instant::now(),
             transferred: 0,
+            last_percent: None,
         }
     }
 
-    pub(super) fn emit_chunk(&mut self, chunk_length: usize, content_length: Option<u64>) {
+    fn emit_chunk(&mut self, chunk_length: usize, content_length: Option<u64>) {
         self.transferred = self.transferred.saturating_add(chunk_length as u64);
         let percent = content_length
             .filter(|total| *total > 0)
             .map(|total| (self.transferred as f64 / total as f64) * 100.0)
             .unwrap_or(0.0);
+        let whole_percent = percent.floor() as u64;
+        if self.last_percent == Some(whole_percent) {
+            return;
+        }
+        self.last_percent = Some(whole_percent);
         let elapsed = self.start.elapsed().as_secs_f64();
         let bytes_per_second = if elapsed > 0.0 {
             (self.transferred as f64 / elapsed).round() as u64
@@ -276,8 +247,7 @@ impl DownloadProgress {
                     "transferred": self.transferred,
                     "total": content_length.unwrap_or(0),
                     "bytes_per_second": bytes_per_second
-                },
-                "update": self.info
+                }
             }),
         );
     }

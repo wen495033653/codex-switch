@@ -1,9 +1,10 @@
 use crate::{
     accounts::{
         access_token_from_account, account_from_exchange_preserve_usage, account_id_from_account,
-        account_with_custom, exchange_refresh_token, find_store_account, mark_account_auth_error,
-        normalize_custom, normalize_tokens, profile_id_from_account, read_store_value,
-        refresh_token_from_account, set_auth_state, sync_auth_file_if_active, update_store_account,
+        account_login_expired, account_with_custom, exchange_refresh_token, find_store_account,
+        mark_account_auth_error, normalize_custom, normalize_tokens, profile_id_from_account,
+        read_store_value, refresh_token_from_account, set_auth_state, sync_auth_file_if_active,
+        update_store_account,
     },
     app_log::{account_label, log_event},
     events::emit_store_updated,
@@ -69,7 +70,8 @@ fn lock_account_rotation(profile_id: &str) -> AccountRotationGuard {
 }
 
 fn should_auto_refresh_account(account: &Value) -> bool {
-    if normalize_tokens(account.get("tokens")).is_err() {
+    // An ended login fails the same way every time until the user logs in again.
+    if normalize_tokens(account.get("tokens")).is_err() || account_login_expired(account) {
         return false;
     }
 
@@ -278,5 +280,32 @@ mod tests {
         });
 
         assert!(should_auto_refresh_account(&account));
+    }
+
+    #[test]
+    fn ended_logins_are_not_refreshed_automatically_but_other_failures_are() {
+        let account_with = |message: &str| {
+            json!({
+                "tokens": {
+                    "id_token": "id",
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "account_id": "acct"
+                },
+                "custom": {
+                    "auth_status": "error",
+                    "auth_status_message": message,
+                    "auth_expires_at": "2026-01-01T00:00:00Z"
+                }
+            })
+        };
+
+        // The message the 6.0.6 log recorded for an account refreshed every 15 minutes for days.
+        assert!(!should_auto_refresh_account(&account_with(
+            "Refresh Token 刷新失败\nHTTP 401\nerror.code: refresh_token_invalidated\nerror.message: Your session has ended. Please log in again."
+        )));
+        assert!(should_auto_refresh_account(&account_with(
+            "Refresh Token 刷新失败\nerror sending request: client error (Connect)"
+        )));
     }
 }

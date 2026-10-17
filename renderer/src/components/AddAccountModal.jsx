@@ -1,11 +1,11 @@
 import Modal from './Modal';
 import { useI18n } from '../i18n';
+import { OAUTH_TIMEOUT_HINT } from '../utils/appState';
 
 export default function AddAccountModal({
     oauth,
     oauthCallbackSubmitting,
     oauthCallbackUrl,
-    oauthTimeoutHint,
     refreshTokenInput,
     refreshTokenLoading,
     showRefreshTokenPanel,
@@ -47,7 +47,7 @@ export default function AddAccountModal({
                                     {t('取消登录')}
                                 </button>
                             </div>
-                            <div className="oauth-hint-text">{translateRuntimeText(oauthTimeoutHint)}</div>
+                            <div className="oauth-hint-text">{translateRuntimeText(OAUTH_TIMEOUT_HINT)}</div>
                             <form
                                 className="oauth-callback-form"
                                 onSubmit={event => {

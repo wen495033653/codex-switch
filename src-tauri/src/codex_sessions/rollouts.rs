@@ -1,5 +1,8 @@
 use super::support::{provider_log_value, write_existing_file};
-use crate::{app_log::log_event, json_util::raw_string_field};
+use crate::{
+    app_log::{log_event, log_event_once},
+    json_util::raw_string_field,
+};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -356,11 +359,32 @@ fn sync_rollout_file_provider(
     path: &Path,
     target_provider: &str,
 ) -> Result<RolloutFileSyncOutcome, String> {
-    let original_modified = fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .map_err(|err| format!("读取 Codex session 修改时间失败 {}: {err}", path.display()))?;
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("读取 Codex session 文件失败 {}: {err}", path.display()))?;
+    // Codex moves a rollout when it archives the thread; one listed a moment ago may be gone.
+    // It is synced at its new path, never recreated here.
+    let gone = || RolloutFileSyncOutcome {
+        changed: false,
+        from_provider: None,
+    };
+    let original_modified = match fs::metadata(path).and_then(|metadata| metadata.modified()) {
+        Ok(modified) => modified,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gone()),
+        Err(err) => {
+            return Err(format!(
+                "读取 Codex session 修改时间失败 {}: {err}",
+                path.display()
+            ))
+        }
+    };
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gone()),
+        Err(err) => {
+            return Err(format!(
+                "读取 Codex session 文件失败 {}: {err}",
+                path.display()
+            ))
+        }
+    };
     let before_meta = rollout_content_session_meta_summary(&content);
     let from_provider = rollout_meta_provider(&before_meta);
     let mut updated_content = String::with_capacity(content.len());
@@ -434,7 +458,17 @@ fn ensure_rollout_unchanged_since_read(
 fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Result<bool, String> {
     let read_error =
         |err: std::io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
-    let metadata = fs::metadata(path).map_err(read_error)?;
+    // A rollout Codex moved after it was listed (archiving the thread) has nothing to sync here;
+    // the next listing checks it at its new path.
+    let opened = fs::metadata(path).and_then(|metadata| Ok((metadata, fs::File::open(path)?)));
+    let (metadata, mut file) = match opened {
+        Ok(opened) => opened,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            forget_cached_rollout(path);
+            return Ok(false);
+        }
+        Err(err) => return Err(read_error(err)),
+    };
     let stamp = FileStamp {
         len: metadata.len(),
         modified: metadata.modified().map_err(read_error)?,
@@ -450,7 +484,6 @@ fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Res
         }
     }
 
-    let mut file = fs::File::open(path).map_err(read_error)?;
     let resumed = match previous {
         Some(previous)
             if resumes_at(&mut file, previous.offset, &previous.resume_check)
@@ -618,23 +651,47 @@ fn forget_missing_rollouts(dirs: &[PathBuf], found: &[RolloutFileCandidate]) {
 
 fn cached_rollout_activity_sort_key(path: &Path, stamp: Option<FileStamp>) -> String {
     let Some(stamp) = stamp else {
-        return rollout_activity_sort_key(path);
+        return rollout_activity_sort_key(path).0;
     };
     if let Some((cached_stamp, sort_key)) = preflight_cache().sort_keys.get(path) {
         if *cached_stamp == stamp {
             return sort_key.clone();
         }
     }
-    let sort_key = rollout_activity_sort_key(path);
-    preflight_cache()
-        .sort_keys
-        .insert(path.to_path_buf(), (stamp, sort_key.clone()));
+    let (sort_key, tail_read) = rollout_activity_sort_key(path);
+    // A key computed without the tail is a stand-in; caching it would keep the file ranked by its
+    // start until it changes again, out of the recent rollouts the sync rewrites.
+    if tail_read {
+        preflight_cache()
+            .sort_keys
+            .insert(path.to_path_buf(), (stamp, sort_key.clone()));
+    }
     sort_key
 }
 
-fn rollout_activity_sort_key(path: &Path) -> String {
-    read_rollout_tail_timestamp(path)
-        .or_else(|| rollout_filename_timestamp(path))
+/// The last activity of a rollout, and whether its tail could be read for it.
+fn rollout_activity_sort_key(path: &Path) -> (String, bool) {
+    let tail = match read_rollout_tail_timestamp(path) {
+        Ok(tail) => tail,
+        Err(err) => {
+            // Listed on every sync preflight: a lasting cause is recorded once per run.
+            log_event_once(
+                "session_sync_rollout_tail_read_error",
+                json!({
+                    "path": path.to_string_lossy(),
+                    "error": err.to_string(),
+                    "handling": "ranked_by_file_name_not_cached"
+                }),
+            );
+            return (rollout_fallback_sort_key(path), false);
+        }
+    };
+    let key = tail.unwrap_or_else(|| rollout_fallback_sort_key(path));
+    (key, true)
+}
+
+fn rollout_fallback_sort_key(path: &Path) -> String {
+    rollout_filename_timestamp(path)
         .or_else(|| rollout_path_date(path))
         .unwrap_or_else(|| {
             path.metadata()
@@ -645,15 +702,15 @@ fn rollout_activity_sort_key(path: &Path) -> String {
         })
 }
 
-fn read_rollout_tail_timestamp(path: &Path) -> Option<String> {
-    let mut file = fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
+fn read_rollout_tail_timestamp(path: &Path) -> std::io::Result<Option<String>> {
+    let mut file = fs::File::open(path)?;
+    let len = file.metadata()?.len();
     let sample_len = len.min(SESSION_SYNC_TAIL_SAMPLE_BYTES);
     if len > sample_len {
-        file.seek(SeekFrom::Start(len - sample_len)).ok()?;
+        file.seek(SeekFrom::Start(len - sample_len))?;
     }
     let mut bytes = Vec::with_capacity(sample_len as usize);
-    file.take(sample_len).read_to_end(&mut bytes).ok()?;
+    file.take(sample_len).read_to_end(&mut bytes)?;
     if len > sample_len {
         if let Some(index) = bytes.iter().position(|byte| *byte == b'\n') {
             bytes.drain(..=index);
@@ -668,7 +725,7 @@ fn read_rollout_tail_timestamp(path: &Path) -> Option<String> {
             }
         }
     }
-    latest
+    Ok(latest)
 }
 
 fn rollout_line_timestamp(line: &str) -> Option<String> {
@@ -826,7 +883,10 @@ fn update_model_provider_fields(value: &mut Value, target_provider: &str) -> boo
 
 #[cfg(test)]
 mod append_guard_tests {
-    use super::ensure_rollout_unchanged_since_read;
+    use super::{
+        ensure_rollout_unchanged_since_read, preview_rollout_files_to_provider_with_diagnostics,
+        rollout_file_provider_would_change, sync_rollout_file_provider,
+    };
     use std::{
         env, fs,
         io::Write,
@@ -856,5 +916,23 @@ mod append_guard_tests {
         let err = ensure_rollout_unchanged_since_read(&path, read_len, read_modified).unwrap_err();
         assert!(err.contains("同步期间被写入"), "{err}");
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_rollout_moved_away_after_listing_is_skipped_not_an_error() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("codex-switch-moved-rollout-{stamp}.jsonl"));
+
+        assert_eq!(rollout_file_provider_would_change(&path, "api"), Ok(false));
+        assert_eq!(
+            preview_rollout_files_to_provider_with_diagnostics(vec![path.clone()], "api", None),
+            Ok(0)
+        );
+        let outcome = sync_rollout_file_provider(&path, "api").unwrap();
+        assert!(!outcome.changed);
+        assert!(!path.exists());
     }
 }

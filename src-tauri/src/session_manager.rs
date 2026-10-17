@@ -19,7 +19,8 @@ pub(crate) use legacy_migration::{
     migrate_legacy_codex_data_for_current_home, migrate_legacy_codex_data_for_root,
 };
 
-use serde_json::Value;
+use crate::{app_log::log_event, blocking_task::run_blocking};
+use serde_json::{json, Value};
 use tauri::AppHandle;
 use {
     catalog::scan_conversations_impl,
@@ -32,20 +33,22 @@ use {
     },
 };
 
-fn blocking_task_error(action: &str, err: impl std::fmt::Display) -> String {
-    let message = err.to_string();
-    if message.contains("panicked") {
-        format!("{action}任务异常，请重试")
-    } else {
-        format!("{action}任务异常: {message}")
+/// The failures of single sessions come back in the report and are shown once; the log keeps
+/// them (import records its own `session_manager_import_apply_error`).
+fn log_item_errors(event: &str, root: Option<&str>, response: &Value) {
+    let errors = response
+        .pointer("/report/errors")
+        .or_else(|| response.get("errors"))
+        .and_then(Value::as_array)
+        .filter(|errors| !errors.is_empty());
+    if let Some(errors) = errors {
+        log_event(event, json!({ "root": root, "errors": errors }));
     }
 }
 
 #[tauri::command]
 pub(crate) async fn session_manager_scan(root: Option<String>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || scan_conversations_impl(root))
-        .await
-        .map_err(|err| blocking_task_error("扫描会话", err))?
+    run_blocking("扫描会话", move || scan_conversations_impl(root)).await
 }
 
 #[tauri::command]
@@ -59,7 +62,7 @@ pub(crate) async fn session_manager_preview(
     request_id: Option<u64>,
 ) -> Result<Value, String> {
     begin_preview_request(request_id);
-    tauri::async_runtime::spawn_blocking(move || {
+    run_blocking("读取预览", move || {
         preview_conversation_impl(
             root,
             relative_path,
@@ -71,7 +74,6 @@ pub(crate) async fn session_manager_preview(
         )
     })
     .await
-    .map_err(|err| blocking_task_error("读取预览", err))?
 }
 
 #[tauri::command]
@@ -84,7 +86,7 @@ pub(crate) async fn session_manager_preview_deleted(
     request_id: Option<u64>,
 ) -> Result<Value, String> {
     begin_preview_request(request_id);
-    tauri::async_runtime::spawn_blocking(move || {
+    run_blocking("读取已删除预览", move || {
         preview_deleted_conversation_impl(
             delete_id,
             before_cursor,
@@ -95,7 +97,6 @@ pub(crate) async fn session_manager_preview_deleted(
         )
     })
     .await
-    .map_err(|err| blocking_task_error("读取已删除预览", err))?
 }
 
 #[tauri::command]
@@ -104,18 +105,17 @@ pub(crate) async fn session_manager_export(
     root: String,
     relative_paths: Vec<String>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let log_root = root.clone();
+    run_blocking("导出会话", move || {
         export_conversations_impl(app, root, relative_paths)
     })
     .await
-    .map_err(|err| blocking_task_error("导出会话", err))?
+    .inspect(|response| log_item_errors("session_manager_export_error", Some(&log_root), response))
 }
 
 #[tauri::command]
 pub(crate) async fn session_manager_import(app: AppHandle, root: String) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || import_conversations_impl(app, root))
-        .await
-        .map_err(|err| blocking_task_error("导入会话", err))?
+    run_blocking("导入会话", move || import_conversations_impl(app, root)).await
 }
 
 #[tauri::command]
@@ -123,16 +123,17 @@ pub(crate) async fn session_manager_delete(
     root: String,
     relative_paths: Vec<String>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || delete_conversations_impl(root, relative_paths))
-        .await
-        .map_err(|err| blocking_task_error("删除会话", err))?
+    let log_root = root.clone();
+    run_blocking("删除会话", move || {
+        delete_conversations_impl(root, relative_paths)
+    })
+    .await
+    .inspect(|response| log_item_errors("session_manager_delete_error", Some(&log_root), response))
 }
 
 #[tauri::command]
 pub(crate) async fn session_manager_list_deleted() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(list_deleted_sessions_impl)
-        .await
-        .map_err(|err| blocking_task_error("读取已删除会话", err))?
+    run_blocking("读取已删除会话", list_deleted_sessions_impl).await
 }
 
 #[tauri::command]
@@ -141,20 +142,23 @@ pub(crate) async fn session_manager_restore_deleted(
     delete_ids: Vec<String>,
     conflict_strategy: Option<String>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let log_root = root.clone();
+    run_blocking("恢复会话", move || {
         restore_deleted_sessions_impl(root, delete_ids, conflict_strategy)
     })
     .await
-    .map_err(|err| blocking_task_error("恢复会话", err))?
+    .inspect(|response| log_item_errors("session_manager_restore_error", Some(&log_root), response))
 }
 
 #[tauri::command]
 pub(crate) async fn session_manager_purge_deleted(
     delete_ids: Vec<String>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || purge_deleted_sessions_impl(delete_ids))
-        .await
-        .map_err(|err| blocking_task_error("彻底删除会话", err))?
+    run_blocking("彻底删除会话", move || {
+        purge_deleted_sessions_impl(delete_ids)
+    })
+    .await
+    .inspect(|response| log_item_errors("session_manager_purge_error", None, response))
 }
 
 #[tauri::command]
@@ -164,9 +168,10 @@ pub(crate) async fn session_manager_set_status(
     status: String,
     conflict_strategy: Option<String>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let log_root = root.clone();
+    run_blocking("切换会话状态", move || {
         set_conversation_status_impl(root, relative_paths, status, conflict_strategy)
     })
     .await
-    .map_err(|err| blocking_task_error("切换会话状态", err))?
+    .inspect(|response| log_item_errors("session_manager_status_error", Some(&log_root), response))
 }

@@ -75,6 +75,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   const [previewEarlierLoading, setPreviewEarlierLoading] = useState(false);
   const [previewTrimmedNewer, setPreviewTrimmedNewer] = useState(false);
   const previewItemRef = useRef(null);
+  // The preview shown now; a refresh that finishes later checks this, not the value it started with.
+  const activePathRef = useRef(activePath);
   const isDeletedView = statusFilter === 'deleted';
 
   const filteredConversations = useMemo(() => {
@@ -190,7 +192,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     if (!item || (item.status !== 'deleted' && !rootPath)) return;
     const requestId = nextPreviewRequestId(previewRequestRef);
     previewItemRef.current = item;
-    setActivePath(item.status === 'deleted' ? deletedActiveKey(item) : item.relative_path);
+    activePathRef.current = item.status === 'deleted' ? deletedActiveKey(item) : item.relative_path;
+    setActivePath(activePathRef.current);
     setPreviewTrimmedNewer(false);
     setPreviewEarlierLoading(false);
     setPreview({
@@ -327,12 +330,14 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
       toastError(err, t('扫描会话失败'), 7000);
     }
     nextDeleted = await loadDeletedSessions();
-    if (activePath) {
-      const activeExists = nextConversations.some(item => item.relative_path === activePath)
-        || nextDeleted.some(item => deletedActiveKey(item) === activePath);
+    const currentActivePath = activePathRef.current;
+    if (currentActivePath) {
+      const activeExists = nextConversations.some(item => item.relative_path === currentActivePath)
+        || nextDeleted.some(item => deletedActiveKey(item) === currentActivePath);
       if (!activeExists) {
         previewRequestRef.current += 1;
         previewItemRef.current = null;
+        activePathRef.current = '';
         setActivePath('');
         setPreview(null);
         setPreviewTrimmedNewer(false);
@@ -347,9 +352,20 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     refreshSessions('');
   }, []);
 
-  useEffect(() => {
+  // The page survives leaving this view, so only an actual filter change goes back to page 1.
+  const changeSearch = value => {
+    setSearch(value);
     setPage(1);
-  }, [search, statusFilter, pageSize]);
+  };
+  const changeStatusFilter = value => {
+    if (value === statusFilter) return;
+    setStatusFilter(value);
+    setPage(1);
+  };
+  const changePageSize = value => {
+    setPageSize(value);
+    setPage(1);
+  };
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -380,6 +396,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   useEffect(() => () => {
     previewRequestRef.current += 1;
     previewItemRef.current = null;
+    activePathRef.current = '';
     setContextMenu(null);
     setActivePath('');
     setPreview(null);
@@ -690,8 +707,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
         refreshSessions={refreshSessions}
         rootPath={rootPath}
         search={search}
-        setSearch={setSearch}
-        setStatusFilter={setStatusFilter}
+        setSearch={changeSearch}
+        setStatusFilter={changeStatusFilter}
         statusFilter={statusFilter}
       />
 
@@ -736,7 +753,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           selectedDeleted={selectedDeleted}
           selectedSize={selectedSize}
           setPage={setPage}
-          setPageSize={setPageSize}
+          setPageSize={changePageSize}
           toggleSelectFiltered={toggleSelectFiltered}
           toggleSelection={toggleSelection}
           totalPages={totalPages}

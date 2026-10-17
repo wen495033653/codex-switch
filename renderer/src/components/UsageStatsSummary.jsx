@@ -1,7 +1,8 @@
 import { useI18n } from '../i18n';
 import { formatCost, formatTokens, getWindow, hasUsage } from '../utils/usageStatsFormat';
 
-function UsageMetric({ label, windowStats, language, t }) {
+function UsageMetric({ label, windowStats }) {
+  const { language, t } = useI18n();
   const cost = formatCost(windowStats, t);
   const isUnpriced = cost === t('未定价');
 
@@ -15,7 +16,7 @@ function UsageMetric({ label, windowStats, language, t }) {
 }
 
 export default function UsageStatsSummary({ stats, onOpenDetails }) {
-  const { language, t } = useI18n();
+  const { t } = useI18n();
   const today = getWindow(stats, 'today');
   const hasTodayUsage = hasUsage(today);
   const canOpenDetails = typeof onOpenDetails === 'function';
@@ -67,7 +68,7 @@ export default function UsageStatsSummary({ stats, onOpenDetails }) {
         <span className="usage-stats-title">Token</span>
       </div>
       <div className="usage-stats-metrics">
-        <UsageMetric label={t('今日')} windowStats={today} language={language} t={t} />
+        <UsageMetric label={t('今日')} windowStats={today} />
       </div>
     </div>
   );

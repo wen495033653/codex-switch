@@ -1,8 +1,8 @@
-import { ACCOUNT_NAME_DISPLAY_OPTIONS, DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES } from './options';
+import { ACCOUNT_NAME_DISPLAY_OPTIONS } from './options';
 import { useI18n } from '../../i18n';
+import { DEFAULT_BACKGROUND_REFRESH_INTERVAL_MINUTES, normalizeBackgroundRefreshInterval } from '../../utils/appState';
 
 export default function AccountSettingsTab({
-    normalizeBackgroundRefreshInterval,
     setSettingsDraft,
     settingsDraft,
     updateSettingsDraftAndSave

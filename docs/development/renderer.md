@@ -10,6 +10,42 @@
 
 检查对比度时，在替身页面里对每段可见文字计算它和实际背景的对比度（逐层合成祖先的半透明背景），列出低于 3:1 的元素，浅色、深色主题各跑一遍所有页面。
 
+对比改动前后时（把文件换回旧版本再采一次），每次换完文件都重启 vite，并先请求一次被换的模块确认拿到的是哪个版本。原因：2026-10-17 换回旧版 CSS 后，开发服务器给出的 `index.css`（`@import` 合并后的整份样式）缺了 `theme/settings.css` 的规则，浅色主题出现假差异，重启后消失。对比计算样式时再插入一段 `transition: none; animation: none`，并排除导航栏品牌动画（Lottie 每帧改 `transform`）和预检时间这类随时间变化的元素；页面在后台标签页里时过渡动画不推进，不排除会读到过渡中途的值。
+
+## 本轮 review 的行为修复（2026-10-17）
+
+渲染检查都用上面的替身后端和虚构数据，修改前先复现、修改后同样步骤再跑一遍。没有在真实应用里运行。
+
+- **Refresh Token 弹窗。** 刷新进行中时点遮罩不再关闭弹窗（"关闭"按钮本来就是禁用的），三处结果只写回发起请求的那个账号的弹窗。原因：旧代码点遮罩就关闭，接着打开另一个账号的弹窗，前一个请求的结果会写进新弹窗。
+  - 离线：`scripts/test-refresh-token-modal.mjs`（加载中关闭被忽略；A 的成功、失败返回、异常三种结果都不写进 B 的弹窗）；两条测试在旧代码上都失败。
+  - 渲染检查：修改前，A 刷新中点遮罩弹窗关闭，打开 B 后 A 的请求返回，B 的名字下显示并复制的是 A 的新 token；修改后，点遮罩弹窗不动，新 token 出现在 A 的弹窗里并被复制，加载结束后点遮罩正常关闭。
+- **Codex 代理地址。** 修剪后的值与已保存的 `codex_proxy_url` 相同时不保存。原因：每次失焦都会保存，代理开启时会改写 `.env` 并弹出"重启后生效"。
+  - 离线：`scripts/test-proxy-settings-save.mjs`（不改值失焦不发请求、不弹重启；改值后按代理开关走 `set_codex_proxy_env_enabled` 或 `update_settings`）。
+  - 渲染检查：修改前不改值失焦调用 `setCodexProxyEnvEnabled` 并弹出重启对话框；修改后无请求、无对话框，改成新值后照常保存并弹出。
+- **会话页刷新时的预览。** 刷新完成后用 ref 里的当前预览项判断是否清空，不再用发起刷新时闭包里的 `activePath`。原因：刷新期间选中另一条会话，旧值对应的会话已不存在（例如刚删掉）时，新选中的预览被清空、请求被作废。
+  - 渲染检查：修改前，刷新中选中 Y、刷新结果里没有之前的 X，Y 的预览被清空，返回的预览也被丢弃；修改后 Y 保持选中并显示内容；当前选中项本身从结果里消失时仍清空（原行为）。
+- **会话页的页码。** 搜索、状态筛选、每页数量的处理函数在值确实变化时回到第 1 页，不再用每次挂载都会执行的 effect。原因：页码保存在 `useSessionManagerState` 里跨页面保留，但回到会话页时总被重置为第 1 页。
+  - 渲染检查：修改前第 2 页离开再回来是 1/3；修改后是 2/3。点已选中的状态标签页码不变；改搜索、改状态、改每页数量都回到第 1 页。
+- **账号配额刷新。** 正在刷新的账号用 Set 记录。原因：A 刷新中再刷新 B，A 的转圈消失、按钮恢复可点，再点 A 会发出第二个请求。
+  - 离线：`scripts/test-account-refresh.mjs`。
+  - 渲染检查：修改前调用顺序是 A、B、A；修改后 A、B 同时转圈，再点 A 不发请求，各自完成后各自恢复。
+- **下载更新进度。** 状态仍是"下载中"且四舍五入后的百分比没变时沿用原对象，App 不再每个分块重渲一次；进度条宽度因此按整数百分比前进。只有离线验证：`scripts/test-update-progress.mjs`（旧代码失败）。替身没有模拟 `update-status` 事件，下载弹窗没有做渲染检查。
+- **失败不再静默（补充）。** 品牌语音列表读取失败、语音播放失败、开发日志窗口隐藏失败都写 `console.error` 并带原始错误（播放失败带文件路径）；读取失败不再缓存空列表，下次点击重新读取。取消 OAuth 失败只经 `toastError` 提示一次，不再向调用方抛出（"取消登录"按钮不捕获，旧代码每次都留下一个 unhandled rejection）。两个只在 `silent: false` 时才弹提示的轮询分支没有调用方，已删除，失败仍按"首次、变化、恢复"写进开发日志。
+  - 离线：`scripts/test-oauth-cancel.mjs`。
+  - 渲染检查：连续两次点击品牌标志都请求语音列表并各记一条错误；播放不存在的语音文件记录文件名和浏览器返回的原始错误；开发日志窗口点"关闭"在隐藏失败时自己的列表里出现该错误；取消 OAuth 失败弹出替身返回的原文，没有 unhandled rejection。
+- **英文界面的消息。** 命令成功返回里会显示的 `message`（提示条、对话框、远程控制和预检状态、ChatGPT Desktop 兼容提示）都有英文：固定文案加进 `EN_TRANSLATIONS`，带数字或名称的加进 `RUNTIME_PATTERNS`；会话删除、恢复、状态切换和导入的规则改成后端现在的格式（带失败明细和警告）。前端拼的消息改用 `translate()` 模板，参数里的后端原文先经 `translateRuntimeText`。消息里夹带的原始错误明细照原样显示。命令失败时抛出的错误文本（`Err`）这次没有逐条补英文。`utils/codexSettingsStatus.js` 因此和 `utils/errors.js` 一样依赖 `i18n`。
+  - 离线：`scripts/test-runtime-messages.mjs`（按后端原文断言英文结果、中文原样；前端模板的英文和中文拼接结果）。
+  - 渲染检查（英文界面）：远程控制自动关闭的四种通知、gpt破限开关带备份路径的提示、代理保存带远程控制错误的提示、`设置已保存`、删除控制账号后的提示和重启对话框都显示英文；中文界面的拼接结果与修改前相同。
+
+TODO(verify)：以上修复没有在真实应用里运行过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时。做法和通过判据：Refresh Token 弹窗刷新中点遮罩不关闭，结果出现在同一账号的弹窗；Codex 页代理地址不改值失焦不弹重启对话框，沙盒 `.env` 修改时间不变；会话页第 2 页切走再回来仍是第 2 页；两个账号同时刷新配额时两张卡片都在转圈；英文界面切换账号、刷新配额、打开独立 Codex 的提示是英文。不通过时分别从 `hooks/useRefreshTokenModal.js`、`hooks/useSettingsActions.js` 的 `updateCodexProxySettings`、`components/SessionManagerPage.jsx`、`hooks/useAccountOperations.js`、`i18n.jsx` 的词条查起。
+
+## 清理（2026-10-17，不改变行为）
+
+- 删除没有读取方的代码：Codex 页这条链上的 `updateSettingsDraftAndSave`（设置页仍在用）、`useCurrentModeSummary` 的 `apiConfigComplete` 和只为它准备的 `apiDraft` 参数、开发日志的 `isOpen/open/close/toggle`、`parseAuthInfo` 的 `workspace/email/usage/usageStatus/usageStatusMessage`（连同组织查找和"工作空间缺失"词条）、`<html>` 上的 `data-theme-preference/data-build/data-language/data-language-preference`（保留 `data-theme` 和 `lang`）、自动关闭回调里没有设置时的分支（唯一调用方只在结果带设置时调用）、API 页的 `api-${index}` 兜底 id（`normalizeApiProfiles` 总会给出 id）、两个 index 文件里没人经由它导入的转出、`resolveLanguage`、`startOauth` 里马上被覆盖的一次 `setOauth`。
+- 常量只保留一处：刷新间隔默认值和默认主题读 `utils/appState.js`；`normalizeBackgroundRefreshInterval` 和 `OAUTH_TIMEOUT_HINT` 由使用它们的组件直接导入，不再经 props 传下去。`UsageMetric` 自己调用 `useI18n()`。
+- 删除没有使用方的 CSS 规则：`.mode-page-notice`、`.settings-field-list`、`.settings-option-list-compact`、`.settings-suboption-panel/-title`、`.settings-switch-button`、`.settings-remote-control-note-title`，以及永远不会出现的 `.api-test-message.success`（消息只在预检中或失败时渲染）。选择器列表里只删失效的那一项。
+- 验证：`grep` 确认 `renderer/src`（含模板字符串拼接）、`renderer/index.html`、`scripts/` 都不再引用这些名字；替身后端下账号页、添加账号弹窗、设置页两个分页的 DOM 与改动前逐字相同（换回旧版本后重启 vite 并确认加载的是旧模块）；`UsageStatsSummary` 中英文 × 四组用量 × 是否可点击共 16 份静态标记逐字相同；两种主题下账号、API（预检成功和失败）、Codex、设置页所有元素的计算样式与改动前相同；`npm test` 通过。
+
 ## 可读性修正（2026-09-26）
 
 用上面的替身在 1024×900（主窗口默认宽度）下，把账号、API、Codex、会话、设置五个页面在浅色、深色主题下都渲染了一遍，按测量结果修改：

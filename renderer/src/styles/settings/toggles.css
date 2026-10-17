@@ -93,31 +93,6 @@
   transform: translateX(20px);
 }
 
-.settings-switch-button {
-  width: 48px;
-  height: 38px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.settings-switch-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.settings-switch-button.active .settings-switch {
-  background: var(--accent);
-}
-
-.settings-switch-button.active .settings-switch-thumb {
-  transform: translateX(20px);
-}
-
 .settings-refresh-section {
   gap: 0;
   padding: 14px;

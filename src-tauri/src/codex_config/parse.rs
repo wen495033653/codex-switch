@@ -1,11 +1,20 @@
 use super::io::read_config_lines;
 use serde_json::{Map, Value};
 
+/// The `[table]` or `[[array]]` header on this line, without a trailing `# comment`.
+pub(crate) fn table_header(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if !line.starts_with('[') {
+        return None;
+    }
+    let close = if line.starts_with("[[") { "]]" } else { "]" };
+    let end = line.find(close)? + close.len();
+    let rest = line[end..].trim_start();
+    (rest.is_empty() || rest.starts_with('#')).then(|| &line[..end])
+}
+
 pub(crate) fn find_root_table_index(lines: &[String]) -> Option<usize> {
-    lines.iter().position(|line| {
-        let normalized = line.trim();
-        normalized.starts_with('[') && normalized.ends_with(']')
-    })
+    lines.iter().position(|line| table_header(line).is_some())
 }
 
 pub(crate) fn root_assignment(line: &str) -> Option<(String, String)> {
@@ -88,14 +97,16 @@ fn root_config_from_lines(lines: &[String]) -> Map<String, Value> {
 
 fn table_config_from_lines(lines: &[String], table_name: &str) -> Map<String, Value> {
     let header = format!("[{table_name}]");
-    let Some(start) = lines.iter().position(|line| line.trim() == header) else {
+    let Some(start) = lines
+        .iter()
+        .position(|line| table_header(line) == Some(header.as_str()))
+    else {
         return Map::new();
     };
 
     let mut config = Map::new();
     for line in lines.iter().skip(start + 1) {
-        let normalized = line.trim();
-        if normalized.starts_with('[') && normalized.ends_with(']') {
+        if table_header(line).is_some() {
             break;
         }
         if let Some((key, value)) = root_assignment(line) {
@@ -108,6 +119,19 @@ fn table_config_from_lines(lines: &[String], table_name: &str) -> Map<String, Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_headers_may_carry_a_trailing_comment() {
+        assert_eq!(table_header("[features]"), Some("[features]"));
+        assert_eq!(
+            table_header("  [features] # experimental"),
+            Some("[features]")
+        );
+        assert_eq!(table_header("[[profiles]]#x"), Some("[[profiles]]"));
+        assert_eq!(table_header("[features] model = 1"), None);
+        assert_eq!(table_header("model = \"[x]\""), None);
+        assert_eq!(table_header("# [features]"), None);
+    }
 
     #[test]
     fn snapshot_reads_root_values_and_one_table() {

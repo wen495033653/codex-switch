@@ -25,17 +25,22 @@ async function fixture(restartError) {
     } },
     '../utils/appState': { CODEX_DESKTOP_UPDATE_URL: 'https://example.test/update', REPOSITORY_URL: 'https://example.test' },
     '../utils/errors': { getErrorMessage: error => error.message },
+    '../i18n': {
+      translate: (source, params) => String(source).replace(/\{(\w+)\}/g, (_, key) => String(params[key])),
+      translateRuntimeText: value => value,
+    },
   };
   const module = new vm.SourceTextModule(fs.readFileSync(new URL('../renderer/src/hooks/useSettingsActions.js', import.meta.url), 'utf8'), { context });
-  await module.link(async specifier => {
+  const link = async specifier => {
     const exports = stubs[specifier];
     if (exports) return new vm.SyntheticModule(Object.keys(exports), function () {
       for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
     }, { context });
     const dependency = new vm.SourceTextModule(fs.readFileSync(new URL(`../renderer/src/hooks/${specifier}.js`, import.meta.url), 'utf8'), { context });
-    await dependency.link(() => { throw Error('Unexpected nested import'); });
+    await dependency.link(link);
     return dependency;
-  });
+  };
+  await module.link(link);
   await module.evaluate();
   return { calls, errors, render() {
     cursor = 0;

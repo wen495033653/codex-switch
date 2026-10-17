@@ -15,7 +15,6 @@ export { useModeSwitching } from './useModeSwitching';
 export { useRefreshTokenModal } from './useRefreshTokenModal';
 export { useRefreshAllFlow } from './useRefreshAllFlow';
 export { useRemoteControlStatus } from './useRemoteControlStatus';
-export { useSessionManagerState } from './useSessionManagerState';
 export { useSettingsActions } from './useSettingsActions';
 export { useToast } from './useToast';
 export { useUpdateFlow } from './useUpdateFlow';

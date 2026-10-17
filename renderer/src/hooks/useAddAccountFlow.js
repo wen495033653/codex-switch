@@ -44,23 +44,19 @@ export function useAddAccountFlow({
     setOauth(prev => ({ ...prev, ...data }));
   };
 
-  const cancelOauth = async ({ silent = false } = {}) => {
+  const cancelOauth = async () => {
     try {
       const res = await window.api.cancelOauth();
       setOauth(createEmptyOauthState());
-      if (!silent && res && res.canceled) {
+      if (res && res.canceled) {
         toast(res.message || '已取消 OAuth 登录');
       }
-      return res;
     } catch (err) {
-      const message = getErrorMessage(err, '取消 OAuth 登录失败');
-      if (!silent) toast(message);
-      throw err;
+      toastError(err, '取消 OAuth 登录失败');
     }
   };
 
   const startOauth = async () => {
-    setOauth(createEmptyOauthState());
     setOauthCallbackUrl('');
     setOauthCallbackSubmitting(false);
     setOauth({ running: true, url: '', success: false, error: '', errorCode: '', message: '' });

@@ -75,6 +75,12 @@ User-Agent: codex_cli_rs/...
 - 离线检查：`accounts::usage::client` 与 `accounts::oauth_tokens` 的单元测试在 127.0.0.1 上起一次性 TCP 服务（client 显式 `no_proxy`，不出本机），覆盖正文读取失败（`Content-Length: 100` 只发 8 字节后断开）、正文可读、连接被拒绝三种情况。
 - TODO(verify)：真实运行中还没见过新格式的错误信息。触发条件：下一次真实运行时配额或订阅刷新失败（例如断网或代理关闭时点“刷新配额”）。查看 stderr 的 `[subscription] ... message=` 行，以及 `accounts.json` 对应账号的 `custom.usage_error.message`。通过判据：信息在 `error sending request` 之后带有具体原因，且不含 `for url` 和账号 ID。不通过时从 `accounts/usage/client.rs::http_error_message` 查起。
 
+## 当前账号额度读哪些会话文件（2026-10-17）
+
+- 当前账号的额度每分钟从 Codex 会话文件里最新的 `token_count` 读取（`codex_session_usage`）。以前只列出最近 7 个日期目录（`sessions/年/月/日`），这几个目录里凑够 24 个文件就不再往前找。Codex 继续使用一个旧会话时，接着写的是这个会话创建当天目录里的文件（本机 2026-10-17 实测：`2026/10/14` 下一个 584MB 的会话文件当天 16:04 仍在写入），会话再早于这 7 个目录就读不到，额度停在旧值，只能等 30 分钟一次的接口刷新（关掉定时刷新则一直不更新）。现在总是列出全部日期目录，按修改时间取最近的 24 个；列目录只读目录项，不打开文件。
+- 会话目录改用全应用共用的 `paths::codex_dir()`（`~/.codex`）。以前这里另有一份 home 解析：优先读环境变量 `CODEX_HOME`，找不到用户目录时退回相对路径 `.codex`，与切换账号写入的 `~/.codex/auth.json` 可能不是同一个目录；现在找不到用户目录时返回错误。
+- 验证（离线）：`a_resumed_thread_in_an_old_date_dir_is_found_among_many_newer_files`（8 个较新的日期目录共 32 个文件，最早目录里最后写入的会话排在第一位；旧实现下这条测试失败）。
+
 ## 5.4.8 到 5.4.9 的变更原因
 
 - 5.4.8 让“刷新配额”先重签 token，并在后台发现 claims 过期时每 24 小时重签一次，目的是刷新订阅信息。

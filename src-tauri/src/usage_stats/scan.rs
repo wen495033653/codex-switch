@@ -195,7 +195,11 @@ fn collect_rollout_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Resu
         let entry =
             entry.map_err(|err| format!("读取 Codex session 目录失败 {}: {err}", dir.display()))?;
         let path = entry.path();
-        if path.is_dir() {
+        // The entry's type comes with the directory listing; Path::is_dir would open each file.
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("读取 Codex session 条目类型失败 {}: {err}", path.display()))?;
+        if file_type.is_dir() {
             collect_rollout_files_recursive(&path, files)?;
         } else if is_rollout_jsonl(&path) {
             files.push(path);

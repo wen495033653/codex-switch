@@ -1,7 +1,7 @@
 mod parser;
 mod scanner;
 
-use crate::app_log::log_event_once;
+use crate::{app_log::log_event_once, paths::codex_dir};
 use parser::FileUsageProgress;
 use serde_json::{json, Value};
 use std::{
@@ -30,7 +30,7 @@ type FileUsageCache = HashMap<PathBuf, CachedFileUsage>;
 static FILE_USAGE_CACHE: OnceLock<Mutex<FileUsageCache>> = OnceLock::new();
 
 pub(crate) fn latest_usage_info() -> Result<Option<Value>, String> {
-    let sessions_dir = scanner::codex_home_dir().join("sessions");
+    let sessions_dir = codex_dir()?.join("sessions");
     if !sessions_dir.exists() {
         return Ok(None);
     }

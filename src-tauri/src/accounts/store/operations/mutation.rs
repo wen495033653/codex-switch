@@ -6,14 +6,16 @@ use super::query::store_account_index;
 use crate::{json_util::raw_string_field, time_util::now_string};
 use serde_json::Value;
 
-fn store_accounts_mut(store: &mut Value) -> Result<&mut Vec<Value>, String> {
+pub(super) fn store_accounts_mut(store: &mut Value) -> Result<&mut Vec<Value>, String> {
     store
         .get_mut("accounts")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| "accounts.json 数据结构无效".to_string())
 }
 
-fn keep_previous_timestamps(account: &mut Value, previous: &Value) {
+/// What a re-added account keeps from the stored one: when it was added and last used, and its
+/// subscription snapshot until the next subscription refresh replaces it.
+fn keep_previous_account_state(account: &mut Value, previous: &Value) {
     let Some(previous_custom) = previous.get("custom") else {
         return;
     };
@@ -24,24 +26,40 @@ fn keep_previous_timestamps(account: &mut Value, previous: &Value) {
             }
         }
     }
+    let subscription_missing = account["custom"]
+        .get("subscription")
+        .is_none_or(Value::is_null);
+    if let Some(subscription) = previous_custom
+        .get("subscription")
+        .filter(|subscription| subscription_missing && !subscription.is_null())
+    {
+        account["custom"]["subscription"] = subscription.clone();
+    }
+}
+
+/// Replaces the stored account with the same profile id, keeping its state, or appends it.
+pub(super) fn put_account(accounts: &mut Vec<Value>, mut account: Value, profile_id: &str) {
+    match accounts
+        .iter()
+        .position(|existing| profile_id_from_account(existing).unwrap_or_default() == profile_id)
+    {
+        Some(index) => {
+            keep_previous_account_state(&mut account, &accounts[index]);
+            accounts[index] = account;
+        }
+        None => accounts.push(account),
+    }
 }
 
 /// Adds a new account or replaces the stored one with the same profile id. Use this only
 /// for accounts built from fresh credentials (OAuth, refresh_token import, auth.json
 /// capture); an update derived from a stored account goes through `update_store_account`.
 pub(crate) fn add_account_to_store(account: Value, mark_active: bool) -> Result<Value, String> {
-    let mut account = normalize_account(&account)?;
+    let account = normalize_account(&account)?;
     let profile_id = profile_id_from_account(&account)?;
     mutate_store(|store| {
         let accounts = store_accounts_mut(store)?;
-        if let Some(index) = accounts.iter().position(|existing| {
-            profile_id_from_account(existing).unwrap_or_default() == profile_id
-        }) {
-            keep_previous_timestamps(&mut account, &accounts[index]);
-            accounts[index] = account;
-        } else {
-            accounts.push(account);
-        }
+        put_account(accounts, account, &profile_id);
         sort_accounts_by_last_used(accounts);
         if mark_active {
             store["active_id"] = Value::String(profile_id);
@@ -195,5 +213,32 @@ mod tests {
             store["accounts"][0]["profile_id"],
             "acct-1:user@example.com"
         );
+    }
+
+    #[test]
+    fn re_added_account_keeps_timestamps_and_subscription_until_refreshed() {
+        let mut stored = stored_account("acct-1", "refresh-old");
+        stored["custom"]["subscription"] = json!({ "active_until": "2026-12-01T00:00:00Z" });
+        let mut accounts = vec![stored];
+        let mut incoming = stored_account("acct-1", "refresh-new");
+        incoming["custom"] = json!({
+            "created_at": "2026-10-17T00:00:00Z",
+            "last_used_at": "2026-10-17T00:00:00Z",
+            "subscription": null
+        });
+
+        put_account(&mut accounts, incoming, "acct-1");
+        put_account(&mut accounts, stored_account("acct-2", "refresh"), "acct-2");
+
+        assert_eq!(accounts.len(), 2);
+        let replaced = &accounts[0];
+        assert_eq!(replaced["tokens"]["refresh_token"], "refresh-new");
+        assert_eq!(replaced["custom"]["created_at"], "2026-01-01T00:00:00Z");
+        assert_eq!(replaced["custom"]["last_used_at"], "2026-01-01T00:00:00Z");
+        assert_eq!(
+            replaced["custom"]["subscription"]["active_until"],
+            "2026-12-01T00:00:00Z"
+        );
+        assert_eq!(accounts[1]["profile_id"], "acct-2");
     }
 }

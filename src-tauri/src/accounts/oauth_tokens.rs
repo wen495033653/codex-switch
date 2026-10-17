@@ -244,7 +244,8 @@ pub(crate) fn build_oauth_auth_url(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounts::auth_error_is_login_expired;
+    use crate::accounts::account_login_expired;
+    use serde_json::json;
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -289,7 +290,9 @@ mod tests {
             "{message}"
         );
         // Same classification as before the body read became explicit.
-        assert!(auth_error_is_login_expired(&message));
+        assert!(account_login_expired(&json!({
+            "custom": { "auth_status": "error", "auth_status_message": message }
+        })));
     }
 
     #[test]

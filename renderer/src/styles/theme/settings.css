@@ -120,10 +120,6 @@ html[data-theme="light"] .settings-remote-control-note {
   border-color: rgba(37, 99, 235, 0.16);
 }
 
-html[data-theme="light"] .settings-remote-control-note-title {
-  color: #1d4ed8;
-}
-
 html[data-theme="light"] .settings-remote-control-status-badge.error {
   color: #b91c1c;
   border-color: rgba(185, 28, 28, 0.22);

@@ -120,7 +120,6 @@ function normalizeDevLogPayload(payload, fallbackId) {
 
 export function useDevDiagnostics({ enabled }) {
   const [entries, setEntries] = useState([]);
-  const [isOpen, setIsOpen] = useState(enabled);
   const nextIdRef = useRef(1);
 
   const addEntry = useCallback((level, source, args) => {
@@ -226,11 +225,7 @@ export function useDevDiagnostics({ enabled }) {
 
   return {
     entries,
-    isOpen,
     clear: () => setEntries([]),
-    close: () => setIsOpen(false),
-    open: () => setIsOpen(true),
-    toggle: () => setIsOpen(prev => !prev),
     ...summary
   };
 }

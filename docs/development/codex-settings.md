@@ -25,7 +25,7 @@ TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条
 - 启动时：本地已有文件就直接使用，不提示、不覆盖；缺失时从安装包初始化。
 - 手动开启且本地已有文件：后端先返回 `confirmationRequired` 和路径，此时不写任何文件和设置。前端弹窗提供“保留本地并启用”（默认焦点）、“覆盖并启用”、“取消”。
 - 保留：继续用本地文件，不读安装包，不建备份。覆盖：先把原文件完整备份为 `gpt-unrestricted.md.backup-<随机标识>` 再写入，并把备份路径告诉用户。取消或点遮罩：不发第二次请求，开关不变。
-- 覆盖失败：显示实际错误并保留弹窗；写入失败时用原始字节尝试还原，错误信息包含备份位置和还原结果。
+- 覆盖失败：显示实际错误并保留弹窗；新内容先写到同目录的临时文件再改名覆盖（`write_file_atomically`，2026-10-17 起），写入失败时本地文件不变，错误信息包含备份位置。以前直接 `fs::write`（先截断再写），失败时文件只剩一半，再用原始字节尝试还原。
 - 界面上该功能的说明文字是“替换instruction.md”，只是文案，实际文件名不变。
 - 还原：把备份文件复制回同目录的 `gpt-unrestricted.md`。备份不会被自动删除。
 - 验证：`cargo test model_instructions::tests`（临时目录真实读写：字节保留、首次初始化、确认前零写入、保留、覆盖与备份一致）；`scripts/test-model-instructions-confirm.mjs`（弹窗前状态不变、取消不发送、两种选择、失败保留弹窗）；Vite SSR 静态渲染检查中英文文案。没有在真实界面点击覆盖，没有动过本机正在使用的文件。
@@ -37,3 +37,33 @@ TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条
 - 独立的插件重启 command 已删除。模型指令、代理、远控改动后的重启提示统一调用 `restart_current_codex_app_normal`。
 - `cdp.rs` 只保留两个用途：远控的 `mobile_no_replace` Hook，以及会话同步需要的 CDP 重启流程。
 - 验证：Rust 测试（旧字段被移除且不触发动作；会话同步仍按需保留 mobile Hook）；`scripts/test-native-plugins.mjs`（保存设置不再探测插件状态；重启提示成功关闭、失败保留并显示错误；源码里没有旧开关和旧 command）。没有实测 API 身份下的插件安装卸载和远控连接。
+
+## 远程控制关闭时不再改动未选模式的配置（2026-10-17）
+
+- 现象（代码审查发现）：`codex_active_mode` 是默认的空值（从没切换过账号或 API）、远程控制关闭、API 页保存过带 Base URL 的配置时，每次启动的 `sync_remote_control_runtime_for_current_settings("app_start")` 都把运行目标判成 API，执行 `set_api_mode`：`auth.json` 被整份换成 API Key，没有存进 Codex Switch 的 ChatGPT 登录随之丢失；Base URL 为空时则删除 `[model_providers.api]`。其它恢复 API 的路径（`restore_api_mode_if_selected`、保存设置）都只在模式为 `api` 时才动手。
+- 现在：远程控制关闭时，只有模式为 `api`，或者残留了远控混合配置（它本来就让 Codex 跑在当前 API 配置上）才恢复 API 配置；模式为空时只清理远控配置和旧版残留，不碰 `auth.json` 和 API provider。
+- 验证：`api_config_is_restored_only_for_a_selected_api_mode_or_a_leftover_mixed_config`（判断函数的三种情况）。同步本身会读写正式的 `auth.json`、`config.toml`，没有单元测试，也没有真实运行。
+
+## 远程控制开启时保存 API 配置（2026-10-17）
+
+- 现象（代码审查发现）：远程控制生效时，在 API 页保存、新增或删除任意配置，`update_settings` 都会对当前配置执行 `set_api_mode`：`auth.json` 被换成纯 API Key、`[model_providers.api]` 被整表重写，远程控制账号的 ChatGPT token 和 provider 的 bearer 一起消失，设置里却仍显示远程控制已开启，要等 watcher 下一次处理打开 Codex 才恢复。“切换 API”路径在 `set_api_mode` 之后会补一次远控同步，保存设置这条路径没有。
+- 现在：远程控制开启时，保存 API 配置改为调用 `sync_remote_control_runtime_for_current_settings("update_settings")`，用当前配置重新应用混合配置；关闭时仍是 `set_api_mode`。同步可能因为远控账号已删除而关闭远程控制，所以之后重新读取设置再返回给界面。
+- 验证：`saving_an_api_profile_keeps_the_remote_control_mixed_config`（判断远控、纯 API、非 API 模式、缺 Key 和从 auth.json 取 Key 五种情况）。实际写入会动正式的 `auth.json`、`config.toml`，没有真实运行。
+
+## config.toml 的读写（2026-10-17）
+
+- 表头识别：`[features] # 说明` 这种带行尾注释的表头是合法 TOML，以前只认 `[`…`]` 结尾的整行，带注释的表头被当成普通行：第一张表的表头带注释时，`model_provider = "api"` 等根键会被插到下一张表前面，按 TOML 语义归进了上一张表，Codex 读不到；目标表头带注释时（如 `[model_providers.api] # 中转`）找不到这张表，又追加一个同名表，文件变成非法 TOML。现在所有表头判断（根区结束、整表替换、读取表内容、多开实例的配置）都用 `codex_config::table_header`：`]`（数组表是 `]]`）之后只能是空白或 `#` 注释。
+- 只在内容变化时写入：`set_table_config`、`remove_table_config`、`set_config_values`、`remove_config_values`、移除远控键都经过 `update_config_lines`，先在内存里改，行没变就不写；写入时保留文件原有的 CRLF。以前每次启动都会对 `~/.codex/config.toml` 无条件重写 2–4 次（改动修改时间、把 CRLF 改成 LF，并与 Codex 自己写这个文件的时机叠加）。读取时文件不存在按空配置处理，不再顺手创建一个空的 `config.toml`；“打开 config.toml”仍会先创建它。
+- 验证（离线）：`table_headers_may_carry_a_trailing_comment`、`headers_with_a_trailing_comment_still_end_the_root_and_name_their_table`、`writing_the_same_values_again_changes_no_line`（整表替换、根键写入、删除不存在的键各执行两次，第二次不产生任何变化）；全部 349 个测试和 Clippy 通过。写盘本身动的是正式的 `config.toml`，没有单元测试。
+
+## 多开与远控的日志（2026-10-17）
+
+- 多开的开始、完成（时间线）、显示窗口及其失败事件以前记 `channel`（含邮箱末 4 位）或完整 `targetId`（订阅账号的 profile id 末尾就是邮箱），失败事件还会同时写进错误日志。按日志约定改为 `target`：订阅账号只记 `account_label` 的前 8 位，API 配置记配置 id。界面收到的返回值不变。
+- 远控因登录过期自动关闭时，把账号标记为失效失败的事件以前叫 `codex_remote_control_account_status_update_failed`，不以 `_error` 结尾也不在任何名单里，既不落盘也不显示；改名为 `codex_remote_control_account_status_update_error`，并记账号前 8 位。
+- 远控“桌面状态查询失败”以前只变成界面上的 `lookup_failed`，不记日志；现在按每种错误每次运行一条记 `codex_remote_control_backend_lookup_error`。查询的网络错误改用 `accounts::http_error_message` 展开原因链（DNS、TLS、超时等），以前只有一句 “error sending request for url (…)”。
+- 验证：只过了编译和 Clippy；这些都是日志字段和事件名的修改，没有真实触发。
+
+## 多开实例的 `.env` 跟随主目录（2026-10-17）
+
+- 打开多开实例时，会把 `~/.codex` 的 `.env` 和 `AGENTS.md` 复制进实例目录。以前主目录里没有这个文件时直接跳过：开代理打开过实例、再关代理（`.env` 只剩代理行时会被删掉），实例里的旧 `.env` 一直保留 `HTTP_PROXY` 等变量，代理软件关掉后只有这个实例连不上网。现在主目录没有该文件时，实例里的副本也删除，删除失败返回错误。
+- 验证（离线）：`instance_copy_follows_a_file_removed_from_the_main_home`（临时目录真实文件：复制、主目录删除后实例副本被删、两边都没有时不报错）。

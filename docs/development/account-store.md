@@ -15,6 +15,11 @@
 - 刷新全部的“是否正在运行”检查和置位在同一把锁内完成，手动与定时不会各起一轮。
 - 导入单个 refresh_token 不再改 `codex_active_mode`。这一行原本和 `set_subscription_mode()` 成对出现，95bd67e 去掉了导入时切换 Codex 模式，设置修改却留了下来：API 模式下导入账号会把设置改成订阅模式（交换失败也一样），导致远程控制被挂起、下次启动不再恢复 API 模式。OAuth 添加账号从来不改模式。
 - 批量导入 refresh_token 时，每个失败条目都保留错误原文，按它在导入文件里的序号写入错误日志（`account_import_token_error`，不记录 token），结果消息列出最常见的失败原因。以前网络错误、限流和线程 panic 都被算成“token 失效”，原因全部丢弃。
+- 定时“刷新全部”改为每 60 秒检查一次是否有账号到期（2026-10-17）。以前循环按开头读到的间隔整段 `sleep`，把间隔从 1440 分钟改成 5 分钟、或重新打开定时刷新，最长要等 24 小时才生效。到期仍按每个账号上次刷新（成功或失败）的时间判断，检查变频繁不会多发请求。循环里读设置、读账号、启动刷新三类失败改用 `log_event_once`，持续失败时不会每分钟记一条。验证：只过了编译和 Clippy（线程循环没有单元测试）。
+- 手动刷新与 OAuth 的失败写进错误日志（2026-10-17）：手动“刷新配额”遇 401/403 时也记 `account_usage_rejected_error`（与后台路径共用 `quota::log_usage_rejected`，“待定”里的 403 HTML 问题在最常用的路径上也能留下证据）；手动刷新的 token 交换失败记 `account_auth_manual_refresh_error`（账号前 8 位、原始错误、标记失败的原因），以前只回到界面。标记账号失败时（账号刚被删除）返回的错误同时带上交换失败的原文，不再只剩“账号不存在”。OAuth 登录失败（取消除外）记 `oauth_flow_error`，自动打开浏览器失败记 `oauth_open_browser_error`。验证：只过了编译和 Clippy。
+- 启动时读不了 `settings.json`（内容损坏、带 BOM、被占用）不再让进程直接退出（2026-10-17）：恢复窗口尺寸和“开机自启时只进托盘”两步失败时记 `app_start_step_error`（`step`、`error`）后继续，用默认窗口启动，界面加载设置时显示同一个错误。以前这两步的错误交给 Tauri 的 setup，release 下 panic 直接结束进程，日志里只有一行 `app_start`。托盘创建等仍然致命的步骤，结束前也先记一条带 `"fatal": true` 的 `app_start_step_error`。验证：见文末隔离真实运行记录。
+- 批量导入 refresh_token 与单个导入一致（2026-10-17）：已存在的账号被替换时保留 `created_at`、`last_used_at` 和订阅快照（批量导入不会重新拉订阅，以前到期日等会被清空，导入的账号还会全部跳到列表最前）；每个导入的账号随后执行 `sync_auth_file_if_active`。以前批量导入换出了新 refresh_token，却不更新 Codex 正在用的 `auth.json`，旧 access_token 过期后 Codex 用已作废的 refresh_token 刷新会失败；此时再点“保存当前账号”还会把作废的 token 写回 store。导入函数里永远为 `false` 的 `overwrite` 参数一并删除。验证（离线）：`re_added_account_keeps_timestamps_and_subscription_until_refreshed`；`auth.json` 同步会读写正式文件，没有单元测试。
+- 登录已结束的账号（最近一次交换失败，错误含 `refresh_token_invalidated`、`invalid_grant`、`session has ended` 等，判定为 `accounts::account_login_expired`，远程控制自动关闭用的也是它）不再被后台反复交换（2026-10-17）：自动认证刷新跳过它；定时“刷新全部”既不把它算作到期，也不把它列为目标。依据：6.0.6 的错误日志里，同一个 refresh_token 已作废的账号连续 6 天每 15 分钟一次 `account_auth_auto_refresh_error`、每 60 分钟一对 `account_usage_rejected_error` 和 `account_auth_retry_refresh_error`，共 336 条。用户点“刷新所有配额”“刷新配额”“刷新 Refresh Token”仍会尝试；重新 OAuth 登录或导入会换掉这份错误状态。验证（离线）：`ended_logins_are_not_refreshed_automatically_but_other_failures_are`（日志里的原始错误文本不再到期，网络错误照常重试）、`automatic_refresh_leaves_out_ended_logins_and_manual_refresh_keeps_them`。
 
 ## OAuth 回调连接（2026-09-23）
 
@@ -53,3 +58,5 @@ TODO(verify): 真实运行下的并发轮换还没有观察过。原因：需要
 ## 回退
 
 revert 对应 commit 后重新构建。存储格式没有变化，新旧版本读写的是同一种 accounts.json。
+
+损坏的 `settings.json` 不再让启动失败：2026-10-17 按 [dev-preview.md](dev-preview.md) 的做法隔离真实运行，通过。沙盒 `settings.json` 写成 `{` 后启动：进程不退出，页面加载并弹出“解析 settings.json 失败: EOF while parsing an object at line 1 column 1”，`get_settings` 返回同一个错误；沙盒 `logs/codex-switch-errors.jsonl` 有一条 `app_start_step_error`，`step` 为 `restore_main_window_state`，`error` 为同一段原文。隔离运行的主窗口是隐藏的，窗口可见这一项没有看过。

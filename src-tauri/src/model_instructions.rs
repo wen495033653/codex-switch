@@ -1,4 +1,7 @@
-use crate::paths::{codex_dir, ensure_parent_dir};
+use crate::{
+    atomic_file::write_file_atomically,
+    paths::{codex_dir, ensure_parent_dir},
+};
 use std::{
     fs,
     io::{self, ErrorKind, Write},
@@ -84,14 +87,14 @@ fn replace_model_instructions_file(source: &Path, target: &Path) -> Result<PathB
                 backup.display()
             )
         })?;
-    if let Err(err) = fs::write(target, replacement) {
-        let restored = fs::write(target, original);
-        return Err(format!(
-            "覆盖模型指令失败 {}: {err}；备份: {}；还原结果: {restored:?}",
-            target.display(),
+    // Written beside the target and renamed over it, so a failed write leaves the local file as
+    // it was; the backup above stays either way.
+    write_file_atomically(target, &replacement).map_err(|err| {
+        format!(
+            "覆盖模型指令失败（本地文件未改动）: {err}；备份: {}",
             backup.display()
-        ));
-    }
+        )
+    })?;
     Ok(backup)
 }
 

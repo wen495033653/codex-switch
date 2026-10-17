@@ -1,8 +1,9 @@
 use super::{
-    ide_snapshot::{codex_desktop_display_name, detect_ide_app},
+    ide_snapshot::{codex_desktop_display_name, codex_instance_pids, detect_ide_app, ProcessLink},
     process_control::root_pids,
 };
 use crate::app_log::{log_event, log_event_once};
+use crate::paths::codex_app_instances_dir;
 use crate::time_util::now_string;
 use serde_json::{json, Value};
 use std::{
@@ -130,6 +131,38 @@ pub(crate) fn refresh_current_codex_app_processes() -> Result<Vec<CodexProcess>,
     let processes = running_codex_processes()?;
     update_current_codex_app_processes(processes.clone(), None);
     Ok(processes)
+}
+
+/// The default Codex's processes, without Codex Switch's standalone instances. Restarting,
+/// taking over and syncing for a mode switch concern the default Codex only; an instance keeps
+/// running with its own home and account.
+pub(crate) fn default_codex_processes(
+    processes: &[CodexProcess],
+    instances_dir: &Path,
+) -> Vec<CodexProcess> {
+    let links = processes
+        .iter()
+        .map(|process| ProcessLink {
+            pid: process.pid,
+            parent_pid: process.parent_pid,
+            started_at: process.started_at,
+            command_line: &process.command_line,
+        })
+        .collect::<Vec<_>>();
+    let instance_pids = codex_instance_pids(&links, instances_dir);
+    processes
+        .iter()
+        .filter(|process| !instance_pids.contains(&process.pid))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn refresh_default_codex_app_processes() -> Result<Vec<CodexProcess>, String> {
+    let processes = refresh_current_codex_app_processes()?;
+    Ok(default_codex_processes(
+        &processes,
+        &codex_app_instances_dir()?,
+    ))
 }
 
 pub(crate) fn expect_codex_app_open_for_executables(executables: &[String]) {
@@ -290,6 +323,15 @@ where
             }
         };
         update_current_codex_app_processes(processes.clone(), None);
+        let processes = match codex_app_instances_dir() {
+            Ok(instances_dir) => default_codex_processes(&processes, &instances_dir),
+            Err(err) => {
+                log_event_once("codex_app_watcher_scan_error", json!({ "error": err }));
+                candidate_signature = None;
+                sleep_interval();
+                continue;
+            }
+        };
 
         if automatic_open_disabled.load(Ordering::SeqCst) {
             sleep_interval();

@@ -1,51 +1,35 @@
-use super::super::{
-    model::{normalize_store_data, profile_id_from_account, sort_accounts_by_last_used},
-    persistence::mutate_store,
+use super::{
+    super::{
+        model::{normalize_account, profile_id_from_account, sort_accounts_by_last_used},
+        persistence::mutate_store,
+    },
+    mutation::{put_account, store_accounts_mut},
 };
-use crate::accounts::STORE_VERSION;
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde_json::Value;
 
+/// Adds the imported accounts the way a single import adds one: an account already stored is
+/// replaced but keeps its timestamps and subscription snapshot. Returns the store and the
+/// profile ids of the imported accounts.
 pub(crate) fn import_store_accounts(
     incoming_accounts: Vec<Value>,
-    overwrite: bool,
-) -> Result<Value, String> {
-    let incoming = normalize_store_data(&json!({
-        "version": STORE_VERSION,
-        "active_id": "",
-        "accounts": incoming_accounts
-    }))?;
+) -> Result<(Value, Vec<String>), String> {
+    let mut incoming = Vec::new();
+    for account in incoming_accounts {
+        let account = normalize_account(&account)?;
+        incoming.push((profile_id_from_account(&account)?, account));
+    }
+    let profile_ids = incoming
+        .iter()
+        .map(|(profile_id, _)| profile_id.clone())
+        .collect();
 
     mutate_store(|store| {
-        if overwrite {
-            *store = incoming;
-            return Ok(());
+        let accounts = store_accounts_mut(store)?;
+        for (profile_id, account) in incoming {
+            put_account(accounts, account, &profile_id);
         }
-
-        let mut merged = HashMap::new();
-        for account in store
-            .get("accounts")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .chain(
-                incoming
-                    .get("accounts")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default(),
-            )
-        {
-            if let Ok(profile_id) = profile_id_from_account(&account) {
-                merged.insert(profile_id, account);
-            }
-        }
-
-        let mut accounts: Vec<Value> = merged.into_values().collect();
-        sort_accounts_by_last_used(&mut accounts);
-        store["accounts"] = Value::Array(accounts);
+        sort_accounts_by_last_used(accounts);
         Ok(())
     })
-    .map(|(store, ())| store)
+    .map(|(store, ())| (store, profile_ids))
 }

@@ -41,21 +41,34 @@ fn parse_session_file_with_limit(
 ) -> Result<SessionSummary, String> {
     let file = fs::File::open(path)
         .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
     let mut summary = SessionSummary::default();
     let mut valid_lines = 0usize;
     let mut event_messages = Vec::new();
     let mut fallback_messages = Vec::new();
+    let mut bytes = Vec::new();
+    let mut line_index = 0usize;
 
-    for (line_index, line) in reader.lines().enumerate() {
+    loop {
         if max_lines.is_some_and(|limit| line_index >= limit) {
             break;
         }
-        let line = line.map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
+        bytes.clear();
+        let read = reader
+            .read_until(b'\n', &mut bytes)
+            .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        line_index += 1;
+        // A line that is not UTF-8 is no JSON either; it is skipped like any unreadable line.
+        let Ok(line) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         valid_lines += 1;
@@ -373,8 +386,8 @@ pub(super) fn copy_session_with_new_id(
     old_id: &str,
     new_id: &str,
 ) -> Result<(), String> {
-    let content = fs::read_to_string(source)
-        .map_err(|err| format!("读取会话文件失败 {}: {err}", source.display()))?;
+    let content =
+        fs::read(source).map_err(|err| format!("读取会话文件失败 {}: {err}", source.display()))?;
     let output = rewrite_session_id_content(&content, old_id, new_id)?;
     fs::write(target, output).map_err(|err| {
         format!(
@@ -386,29 +399,27 @@ pub(super) fn copy_session_with_new_id(
 }
 
 pub(super) fn rewrite_session_id_content(
-    content: &str,
+    content: &[u8],
     old_id: &str,
     new_id: &str,
-) -> Result<String, String> {
-    let mut output = String::with_capacity(content.len());
-    for segment in content.split_inclusive('\n') {
+) -> Result<Vec<u8>, String> {
+    let mut output = Vec::with_capacity(content.len());
+    for segment in content.split_inclusive(|byte| *byte == b'\n') {
         let (line, line_ending) = split_line_ending(segment);
-        if line.trim().is_empty() {
-            output.push_str(segment);
+        // Blank, non-UTF-8 and non-JSON lines hold no id to rewrite and are copied unchanged.
+        let value = std::str::from_utf8(line)
+            .ok()
+            .filter(|line| !line.trim().is_empty())
+            .and_then(|line| serde_json::from_str::<Value>(line).ok());
+        let Some(mut value) = value else {
+            output.extend_from_slice(segment);
             continue;
-        }
-        let mut value: Value = match serde_json::from_str(line) {
-            Ok(value) => value,
-            Err(_) => {
-                output.push_str(segment);
-                continue;
-            }
         };
         replace_exact_string_value(&mut value, old_id, new_id);
-        let updated = serde_json::to_string(&value)
+        let updated = serde_json::to_vec(&value)
             .map_err(|err| format!("序列化修改 ID 后的会话失败: {err}"))?;
-        output.push_str(&updated);
-        output.push_str(line_ending);
+        output.extend_from_slice(&updated);
+        output.extend_from_slice(line_ending);
     }
     Ok(output)
 }
@@ -430,13 +441,13 @@ fn replace_exact_string_value(value: &mut Value, old_value: &str, new_value: &st
     }
 }
 
-fn split_line_ending(segment: &str) -> (&str, &str) {
-    if let Some(line) = segment.strip_suffix("\r\n") {
-        (line, "\r\n")
-    } else if let Some(line) = segment.strip_suffix('\n') {
-        (line, "\n")
+fn split_line_ending(segment: &[u8]) -> (&[u8], &[u8]) {
+    if let Some(line) = segment.strip_suffix(b"\r\n") {
+        (line, b"\r\n")
+    } else if let Some(line) = segment.strip_suffix(b"\n") {
+        (line, b"\n")
     } else {
-        (segment, "")
+        (segment, b"")
     }
 }
 

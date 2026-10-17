@@ -444,7 +444,6 @@ const EN_TRANSLATIONS = {
   '更新操作失败': 'Update operation failed',
   '更新接口未加载，请重启 Codex Switch': 'The update interface is unavailable. Restart Codex Switch.',
   '更新远程控制账号失败': 'Failed to update the remote control account',
-  '工作空间缺失': 'Workspace missing',
   '关闭 Codex 代理失败': 'Failed to disable the Codex proxy',
   '关闭 gpt破限失败': 'Failed to disable GPT unlock',
   '关闭远程控制失败': 'Failed to disable remote control',
@@ -452,8 +451,6 @@ const EN_TRANSLATIONS = {
   '会话同步设置保存失败': 'Failed to save session sync settings',
   '会话文件已变化': 'The session file changed',
   '会话预览请求已取消': 'The session preview request was canceled',
-  '加载 Codex 多开状态失败': 'Failed to load Codex window status',
-  '加载 token 统计失败': 'Failed to load token usage statistics',
   '加载设置失败': 'Failed to load settings',
   '加载账号失败': 'Failed to load accounts',
   '检测 Codex 状态失败': 'Failed to detect Codex status',
@@ -538,21 +535,96 @@ const EN_TRANSLATIONS = {
   'OAuth 链接已复制': 'OAuth link copied',
   'Refresh Token 已复制': 'Refresh Token copied',
   'Refresh Token 已刷新': 'Refresh Token refreshed',
-  'Tauri API 未加载，请使用 npm run dev 或桌面应用运行。': 'The Tauri API is unavailable. Run with npm run dev or use the desktop app.'
+  'Tauri API 未加载，请使用 npm run dev 或桌面应用运行。': 'The Tauri API is unavailable. Run with npm run dev or use the desktop app.',
+  '设置已保存': 'Settings saved',
+  'gpt破限已启用，重启 Codex 后生效。': 'GPT unlock enabled. Restart Codex to apply.',
+  'gpt破限已关闭，重启 Codex 后生效。': 'GPT unlock disabled. Restart Codex to apply.',
+  '远程控制账号已更新，重启 Codex 后生效': 'The remote control account was updated and will take effect after Codex restarts.',
+  '控制账号登录已失效，已关闭远程控制': 'The control account sign-in is no longer valid, so remote control was disabled',
+  '远程控制账号不存在，已关闭远程控制并切换到 API 模式': 'The remote control account no longer exists, so remote control was disabled and Codex switched to API mode',
+  '远程控制账号不存在，已关闭远程控制并切换到 API 模式；重新打开 IDE 前会同步会话': 'The remote control account no longer exists, so remote control was disabled and Codex switched to API mode; sessions are synced before the IDE reopens',
+  '已切换到 API 模式': 'Switched to API mode',
+  '已切换到 API 模式；重新打开 IDE 前会同步会话': 'Switched to API mode; sessions are synced before the IDE reopens',
+  '已切换到订阅模式': 'Switched to subscription mode',
+  '已切换到订阅模式；重新打开 IDE 前会同步会话': 'Switched to subscription mode; sessions are synced before the IDE reopens',
+  '已删除；远程控制账号已重置并切换到 API 模式': 'Deleted. The remote control account was reset and Codex switched to API mode.',
+  '已删除；远程控制账号已重置并切换到 API 模式，重启 Codex 后生效': 'Deleted. The remote control account was reset and Codex switched to API mode; restart Codex to apply.',
+  '已保存当前账号': 'Current account saved',
+  '已保存当前 API 模式配置': 'Current API mode configuration saved',
+  '已识别当前为 API 模式，但 auth.json 中没有可保存的 API Key': 'Codex is in API mode, but auth.json has no API Key to save',
+  '已通过 refresh_token 导入账号，正在同步配额': 'Account imported with the refresh_token; syncing quotas',
+  '账号已添加，正在同步配额': 'Account added; syncing quotas',
+  '回调 URL 已提交，正在完成 OAuth 登录': 'Callback URL submitted; completing OAuth sign-in',
+  '未能自动打开浏览器，请复制链接后手动在浏览器中打开': 'The browser could not be opened automatically. Copy the link and open it in a browser.',
+  '账号信息已刷新': 'Account refreshed',
+  '账号信息已刷新（订阅与配额已更新）': 'Account refreshed (subscription and quotas updated)',
+  '没有可刷新的账号': 'No accounts to refresh',
+  '后台刷新中': 'Refreshing in background',
+  '后台刷新仍在进行中': 'A background refresh is still running',
+  '未检测到正在运行的 Codex': 'No running Codex was detected',
+  '开发模式不支持在线更新，请使用安装版测试': 'Online updates are unavailable in development mode. Test with an installed build.',
+  'Base URL 可用，Responses 测试成功': 'The Base URL is reachable and the Responses test succeeded',
+  '模型列表响应不是有效 JSON': 'The model list response is not valid JSON',
+  '模型列表响应缺少 data 数组': 'The model list response has no data array',
+  '模型列表为空': 'The model list is empty',
+  'Responses 测试响应不是有效 JSON': 'The Responses test response is not valid JSON',
+  '当前系统暂不支持 ChatGPT Desktop 集成': 'ChatGPT Desktop integration is not supported on this system',
+  '当前 Codex Desktop 版本过旧，请更新到集成 Codex 的新版 ChatGPT Desktop': 'This Codex Desktop version is outdated. Update to the new ChatGPT Desktop that includes Codex.',
+  '未找到新版 ChatGPT Desktop，请安装或更新后再使用 Codex 功能': 'The new ChatGPT Desktop was not found. Install or update it to use Codex.',
+  '远程控制已关闭并清空账号；API 运行配置同步失败，请重试': 'Remote control was disabled and its account cleared, but syncing the API runtime configuration failed. Try again.',
+  '远程控制已关闭并切换到 API 模式': 'Remote control was disabled and Codex switched to API mode',
+  '{message}；重启 Codex 后生效': '{message}; restart Codex to apply',
+  '{message}；无法确认 Codex 运行状态，建议重启': '{message}; the Codex process state could not be confirmed, so a restart is recommended',
+  '控制账号已删除，远程控制已关闭；重启 Codex 后生效。': 'The control account was deleted and remote control was disabled. Restart Codex to apply.',
+  '{message}\n本地文件已备份：{path}': '{message}\nLocal file backed up: {path}',
+  '{message} 远程控制代理更新失败：{error}': '{message} Updating the remote control proxy failed: {error}'
 };
+
+// The backend joins reopened IDE names with "、" and falls back to "Codex 或 VS Code".
+const localizeIdeTargets = targets => targets.replace(/ 或 /g, ' or ').replace(/、/g, ', ');
 
 const RUNTIME_PATTERNS = [
   [/^下载中\s+(\d+)%$/, (match, language) => translate('下载中 {progress}%', { progress: match[1] }, language)],
   [/^还有\s+(\d+)\s+个冲突$/, (match, language) => translate('还有 {count} 个冲突', { count: match[1] }, language)],
   [/^已选\s+(\d+)$/, (match, language) => translate('已选 {count}', { count: match[1] }, language)],
   [/^(\d+)\s+会话$/, (match, language) => translate('{count} 会话', { count: match[1] }, language)],
+  [/^后台刷新中（(\d+)\/(\d+)）$/, (match, language) => translate('后台刷新中（{completed}/{total}）', { completed: match[1], total: match[2] }, language)],
+  [/^已刷新 (\d+) 个账号$/, match => `${match[1]} accounts refreshed`],
+  [/^已刷新 (\d+) 个账号，(\d+) 个失败$/, match => `${match[1]} accounts refreshed, ${match[2]} failed`],
+  [/^配额刷新失败\n([\s\S]+)$/, (match, language) => `Quota refresh failed\n${translateRuntimeText(match[1], language)}`],
+  [/^导入成功 (\d+) 个账号(?:，导入失败 (\d+) 个)?(?:，配额刷新失败 (\d+) 个)?(?:\n失败原因：([\s\S]+))?$/, match => [
+    `${match[1]} accounts imported`,
+    match[2] ? `, ${match[2]} failed to import` : '',
+    match[3] ? `, quota refresh failed for ${match[3]}` : '',
+    match[4] ? `\nFailure reasons: ${match[4]}` : ''
+  ].join('')],
+  [/^导出成功（(\d+) 个 refresh_token）$/, match => `Export complete (${match[1]} refresh_tokens)`],
+  [/^已用订阅账号 (.+)打开 Codex$/, match => `Opened Codex with subscription account ${match[1]}`],
+  [/^已用API (.+)打开 Codex$/, match => `Opened Codex with API ${match[1]}`],
+  [/^([\s\S]+?)；会话同步失败：([\s\S]+)$/, (match, language) => `${translateRuntimeText(match[1], language)}; session sync failed: ${match[2]}`],
+  [/^(.+) 已重新打开$/, match => `${localizeIdeTargets(match[1])} reopened`],
+  [/^未能重新打开 (.+)$/, match => `Could not reopen ${localizeIdeTargets(match[1])}`],
+  [/^模型列表请求失败: ([\s\S]+)$/, match => `Model list request failed: ${match[1]}`],
+  [/^模型列表认证失败 HTTP (\d+)$/, match => `Model list authentication failed: HTTP ${match[1]}`],
+  [/^模型列表返回 HTTP (\d+)$/, match => `Model list returned HTTP ${match[1]}`],
+  [/^Responses 测试请求失败: ([\s\S]+)$/, match => `Responses test request failed: ${match[1]}`],
+  [/^Responses 测试返回 HTTP (\d+)$/, match => `Responses test returned HTTP ${match[1]}`],
   [/^导出完成（(\d+) 个会话）$/, match => `Export complete (${match[1]} sessions)`],
-  [/^导入完成：(\d+) 个导入，(\d+) 个跳过，(\d+) 个冲突$/, match => `${match[1]} imported, ${match[2]} skipped, ${match[3]} conflicts`],
+  [/^导入完成：(\d+) 个导入，(\d+) 个跳过，(\d+) 个冲突(?:，(\d+) 个失败)?(?:；Codex state 数据库未更新（会话文件已保留，重新导入同一文件可补写索引）：([\s\S]+))?$/, match => [
+    `${match[1]} imported, ${match[2]} skipped, ${match[3]} conflicts`,
+    match[4] ? `, ${match[4]} failed` : '',
+    match[5] ? `; the Codex state database was not updated (the session files were kept; importing the same file again adds the missing index entries): ${match[5]}` : ''
+  ].join('')],
   [/^已切换 (\d+) 个会话状态$/, match => `${match[1]} session statuses updated`],
+  [/^已切换 (\d+) 个会话状态，(\d+) 个失败：([\s\S]+)$/, match => `${match[1]} session statuses updated, ${match[2]} failed: ${match[3]}`],
+  [/^切换会话状态失败：Codex state 数据库更新失败，已撤销 (\d+) 个文件移动：([\s\S]+)$/, match => `Failed to change the session status: the Codex state database update failed, so ${match[1]} file moves were undone: ${match[2]}`],
+  [/^切换会话状态失败：Codex state 数据库更新失败，(\d+) 个文件未能撤销移动：([\s\S]+)$/, match => `Failed to change the session status: the Codex state database update failed and ${match[1]} file moves could not be undone: ${match[2]}`],
   [/^已删除 (\d+) 个会话$/, (match, language) => translate('已删除 {count} 个会话', { count: match[1] }, language)],
-  [/^已删除 (\d+) 个会话，(\d+) 个失败$/, match => `${match[1]} sessions deleted, ${match[2]} failed`],
+  [/^已删除 (\d+) 个会话，(\d+) 个失败：([\s\S]+)$/, match => `${match[1]} sessions deleted, ${match[2]} failed: ${match[3]}`],
+  [/^已删除 (\d+) 个会话；([\s\S]+)$/, match => `${match[1]} sessions deleted; ${match[2]}`],
   [/^已恢复 (\d+) 个会话$/, match => `${match[1]} sessions restored`],
-  [/^已恢复 (\d+) 个会话，(\d+) 个失败$/, match => `${match[1]} sessions restored, ${match[2]} failed`],
+  [/^已恢复 (\d+) 个会话，(\d+) 个失败：([\s\S]+)$/, match => `${match[1]} sessions restored, ${match[2]} failed: ${match[3]}`],
+  [/^已恢复 (\d+) 个会话；([\s\S]+)$/, match => `${match[1]} sessions restored; ${match[2]}`],
   [/^发现 (\d+) 个恢复冲突$/, match => `${match[1]} restore conflicts found`],
   [/^已彻底删除 (\d+) 个会话$/, match => `${match[1]} sessions permanently deleted`],
   [/^已彻底删除 (\d+) 个会话，(\d+) 个失败$/, match => `${match[1]} sessions permanently deleted, ${match[2]} failed`],
@@ -560,17 +632,13 @@ const RUNTIME_PATTERNS = [
   [/^API Base URL 格式无效：(.+)$/, match => `Invalid API Base URL: ${match[1]}`]
 ];
 
-let runtimeLanguage = resolveLanguage(DEFAULT_UI_LANGUAGE);
+let runtimeLanguage = DEFAULT_UI_LANGUAGE;
 
 export function normalizeLanguagePreference(value) {
   const preference = String(value || '').trim();
   return SUPPORTED_LANGUAGE_PREFERENCES.has(preference)
     ? preference
     : DEFAULT_UI_LANGUAGE;
-}
-
-export function resolveLanguage(preference) {
-  return normalizeLanguagePreference(preference);
 }
 
 export function getStoredLanguagePreference() {
@@ -613,12 +681,10 @@ export function getRuntimeLanguage() {
 
 function applyLanguage(preference, { persist = true } = {}) {
   const normalized = normalizeLanguagePreference(preference);
-  runtimeLanguage = resolveLanguage(normalized);
+  runtimeLanguage = normalized;
 
   if (typeof document !== 'undefined') {
     document.documentElement.lang = runtimeLanguage;
-    document.documentElement.dataset.language = runtimeLanguage;
-    document.documentElement.dataset.languagePreference = normalized;
   }
   if (persist && typeof window !== 'undefined') {
     try {
@@ -640,18 +706,17 @@ const I18nContext = createContext({
 // `persist: false` shows a language without storing it, for the stored preference that the
 // main window uses until its settings have loaded.
 export function I18nProvider({ preference, persist = true, children }) {
-  const normalizedPreference = normalizeLanguagePreference(preference);
-  const language = resolveLanguage(normalizedPreference);
+  const language = normalizeLanguagePreference(preference);
   const value = useMemo(() => ({
     language,
-    preference: normalizedPreference,
+    preference: language,
     t: (source, params) => translate(source, params, language),
     translateRuntimeText: text => translateRuntimeText(text, language)
-  }), [language, normalizedPreference]);
+  }), [language]);
 
   useLayoutEffect(() => {
-    applyLanguage(normalizedPreference, { persist });
-  }, [normalizedPreference, persist]);
+    applyLanguage(language, { persist });
+  }, [language, persist]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
