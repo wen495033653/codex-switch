@@ -197,6 +197,14 @@ pub(crate) fn sync_codex_sessions_to_provider_now_from(
             "targetProvider": target_provider
         }),
     );
+    // Store what the rollouts gained before their provider lines change; the sync goes on if that
+    // fails, with the reason logged.
+    if let Err(err) = crate::usage_stats::store_new_usage_records() {
+        log_event(
+            "session_sync_usage_records_error",
+            json!({ "trigger": trigger, "error": err, "handling": "sync_continues" }),
+        );
+    }
     let _guard = lock_codex_session_io("Codex 会话同步")?;
     let mut updated = 0;
     let mut state_db_updated = 0;

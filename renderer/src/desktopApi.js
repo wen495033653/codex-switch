@@ -52,6 +52,14 @@ const COMMAND_BINDINGS = {
   switchAccount: ['switch_account', id => ({ id })],
   switchApiMode: ['switch_api_mode', profileId => ({ profileId: profileId || null })],
   getUsageStats: ['usage_stats_get'],
+  listUsageBills: ['usage_bills_list', query => ({
+    range: query.range,
+    ownerType: query.ownerType,
+    ownerId: query.ownerId,
+    model: query.model,
+    page: query.page,
+    pageSize: query.pageSize
+  })],
   getCurrentCodexAppProcesses: ['get_current_codex_app_processes'],
   restartCurrentCodexAppNormal: ['restart_current_codex_app_normal'],
   openCodexAppInstance: ['open_codex_app_instance', payload => ({ payload })],

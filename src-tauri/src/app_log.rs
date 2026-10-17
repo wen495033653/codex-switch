@@ -69,6 +69,8 @@ const TIMELINE_EVENTS: &[&str] = &[
     "ide_reopen_discard_without_config_apply",
     "ide_reopen_snapshot_process_gone",
     "account_subscription_updated",
+    "usage_stats_prices_backfilled",
+    "usage_stats_unpriced_rechecked",
 ];
 
 /// Shown in the dev log of debug builds only: these run on the watcher's 60 s reconcile and
@@ -76,6 +78,8 @@ const TIMELINE_EVENTS: &[&str] = &[
 const DEV_ONLY_EVENTS: &[&str] = &[
     "codex_app_open_handler_finish",
     "session_sync_preflight_finish",
+    // Up to one per recent rollout after each session sync rewrite.
+    "usage_stats_rollout_reread",
 ];
 
 /// The dev log's one-line description; events not listed fall back to a generic text.
@@ -119,6 +123,15 @@ const EVENT_MESSAGES: &[(&str, &str)] = &[
         "快照中的编辑器进程已不在，跳过结束",
     ),
     ("account_subscription_updated", "订阅信息已更新"),
+    (
+        "usage_stats_prices_backfilled",
+        "token 记录已补存写入时的单价",
+    ),
+    (
+        "usage_stats_unpriced_rechecked",
+        "未定价的 token 记录已按新价格表检查",
+    ),
+    ("usage_stats_rollout_reread", "token 统计从头重读会话文件"),
     ("session_sync_error", "会话 provider 同步失败"),
     ("session_sync_preflight_error", "会话 provider 预检查失败"),
     (

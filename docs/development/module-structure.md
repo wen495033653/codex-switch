@@ -39,7 +39,7 @@ TODO(verify): `show_codex_app_instance` 在 worker 线程调用 `SetForegroundWi
 箭头左边可以使用右边，反过来不行。顶层模块之间没有循环依赖。
 
 - **session_manager**：`session_manager.rs`（命令入口）→ `trash`（删除、恢复、清除）→ `preview`、`transfer`（导入导出）、`status`（归档）、`legacy_migration` → `catalog`（会话列表）、`trash_store` → `state_db` → `rollout`、`zip` → `codex_home`（目录布局与路径规则）→ `backup` → `model`、`util`。
-- **usage_stats**：`usage_stats.rs`（命令、刷新编排）→ `scan`、`aggregate` → `db` → `records`（读 rollout 里的 `token_usage_record`）、`sources`、`pricing` → `model`。
+- **usage_stats**：`usage_stats.rs`（命令、刷新编排）→ `scan`、`aggregate`、`bills`（逐条账单查询）→ `db` → `records`（读 rollout 里的 `token_usage_record`）、`sources`、`pricing` → `model`。
 - **codex_sessions**：`codex_sessions.rs`（I/O 锁、provider 解析、同步入口）→ `state_threads` → `rollouts`、`global_state` → `support`。`.codex-global-state.json` 只通过 `codex_sessions::rewrite_global_state_file` 改写，`session_manager` 也用它（`session_manager` 依赖 `codex_sessions`，反向不行）。
 - **codex_launcher**：`codex_launcher.rs` 是命令层。其下 `codex_app_open` → `codex_app_watcher`、`remote_control`、`cdp`、`process_control` → `shell`；`codex_app_instances` → `desktop_install`、`instance_config`；`remote_control` → `backend_status`；`proxy_env`、`ide_snapshot` 各自独立。`codex_app_watcher` 不依赖 `codex_app_instances`，桌面兼容状态由命令层取好后传入。
 - **quota → accounts**：单向依赖。`accounts::usage` 属于账号领域，`quota` 是建立在它上面的调度层，这个边界不要动。

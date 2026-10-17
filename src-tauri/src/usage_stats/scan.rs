@@ -1,9 +1,10 @@
 use super::{
     db::{
-        delete_cursor, find_owner_attribution, insert_record, load_cursors, save_cursor, FileStamp,
+        delete_cursor, find_owner_attribution, insert_record, load_cursors, reprice_stored_record,
+        save_cursor, FileStamp,
     },
-    model::{OwnerAttribution, UsageRecord, UsageScanSource, OWNER_TYPE_UNATTRIBUTED},
-    pricing::{estimate_request_cost, ServiceTier},
+    model::{OwnerAttribution, ServiceTier, UsageRecord, UsageScanSource, OWNER_TYPE_UNATTRIBUTED},
+    pricing::estimate_request_cost,
     records::{read_new_records, RolloutCursor},
 };
 use crate::app_log::{log_event, log_event_once};
@@ -23,6 +24,14 @@ pub(super) struct ScanResult {
     records: Vec<UsageRecord>,
     cursors: Vec<(String, FileStamp, RolloutCursor)>,
     stale_cursors: Vec<String>,
+    /// Files read again from the start for a price check.
+    pub(super) reread_files: usize,
+}
+
+/// What `write_scan` stored.
+pub(super) struct ScanWrite {
+    /// Records stored without a price that this refresh priced.
+    pub(super) repriced: usize,
 }
 
 /// An unreadable file is left for the next refresh. The page refreshes every 30 s, so each
@@ -36,15 +45,22 @@ fn log_scan_file_error(stage: &str, path: &str, error: String) {
 
 /// Reads what every rollout file gained since the last refresh. A file never read before is
 /// only opened once it was modified after `counted_after_seconds`: nothing older is counted.
+/// Files modified at or after `reread_since` are read again from the start, so the records they
+/// hold are seen again (with the tier they ran on) for a price check.
 pub(super) fn scan_sources(
     connection: &Connection,
     sources: &[UsageScanSource],
     counted_after_seconds: i64,
+    reread_since: Option<i64>,
 ) -> Result<ScanResult, String> {
     let known = load_cursors(connection)?;
-    let counted_after_nanos = counted_after_seconds
-        .checked_mul(1_000_000_000)
-        .ok_or_else(|| format!("token 统计记录起点超出范围: {counted_after_seconds}"))?;
+    let to_nanos = |seconds: i64| {
+        seconds
+            .checked_mul(1_000_000_000)
+            .ok_or_else(|| format!("token 统计时间超出范围: {seconds}"))
+    };
+    let counted_after_nanos = to_nanos(counted_after_seconds)?;
+    let reread_since_nanos = reread_since.map(to_nanos).transpose()?;
     let mut result = ScanResult::default();
     let mut present = HashSet::new();
     for source in sources {
@@ -58,13 +74,17 @@ pub(super) fn scan_sources(
                     continue;
                 }
             };
+            let reread = reread_since_nanos.is_some_and(|since| stamp.modified_nanos >= since);
             let previous = known.get(&source_path);
             match previous {
-                Some((known_stamp, _)) if *known_stamp == stamp => continue,
+                Some((known_stamp, _)) if !reread && *known_stamp == stamp => continue,
                 None if stamp.modified_nanos <= counted_after_nanos => continue,
                 _ => {}
             }
-            let previous_cursor = previous.map(|(_, cursor)| cursor);
+            if reread {
+                result.reread_files += 1;
+            }
+            let previous_cursor = previous.filter(|_| !reread).map(|(_, cursor)| cursor);
             let read = match read_new_records(&path, previous_cursor) {
                 Ok(read) => read,
                 Err(err) => {
@@ -109,11 +129,8 @@ pub(super) fn scan_sources(
                         owner_id: String::new(),
                     }),
                 };
-                let cost = estimate_request_cost(
-                    &record.model,
-                    &record.usage,
-                    ServiceTier::from_setting(&record.service_tier),
-                );
+                let service_tier = ServiceTier::from_setting(&record.service_tier);
+                let cost = estimate_request_cost(&record.model, &record.usage, service_tier);
                 result.records.push(UsageRecord {
                     response_id: record.response_id,
                     thread_id: record.thread_id,
@@ -121,6 +138,7 @@ pub(super) fn scan_sources(
                     owner,
                     model: record.model,
                     usage: record.usage,
+                    service_tier,
                     cost,
                 });
             }
@@ -136,9 +154,18 @@ pub(super) fn scan_sources(
 
 /// Stores one refresh inside the caller's transaction. A failure leaves the transaction to roll
 /// back, so the cursors still point before these records and the next refresh reads them again.
-pub(super) fn write_scan(transaction: &Transaction<'_>, scan: &ScanResult) -> Result<(), String> {
+pub(super) fn write_scan(
+    transaction: &Transaction<'_>,
+    scan: &ScanResult,
+) -> Result<ScanWrite, String> {
+    let mut repriced = 0;
     for record in &scan.records {
-        insert_record(transaction, record, true)?;
+        // A response seen again (a fork's copy, a rewritten or re-read file) may be one stored
+        // while its model had no price.
+        if !insert_record(transaction, record, true)? && reprice_stored_record(transaction, record)?
+        {
+            repriced += 1;
+        }
     }
     for (source_path, stamp, cursor) in &scan.cursors {
         save_cursor(transaction, source_path, *stamp, cursor)?;
@@ -146,7 +173,7 @@ pub(super) fn write_scan(transaction: &Transaction<'_>, scan: &ScanResult) -> Re
     for source_path in &scan.stale_cursors {
         delete_cursor(transaction, source_path)?;
     }
-    Ok(())
+    Ok(ScanWrite { repriced })
 }
 
 fn file_stamp(path: &Path) -> Result<FileStamp, String> {

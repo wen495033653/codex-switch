@@ -553,6 +553,7 @@ dependencies = [
  "arboard",
  "base64 0.23.1",
  "crc32fast",
+ "memchr",
  "open",
  "rand",
  "reqwest",

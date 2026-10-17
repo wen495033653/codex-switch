@@ -1,0 +1,307 @@
+/* Token bills page. The request drawer reuses the token detail drawer of usage-stats.css. */
+
+.usage-bills-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-bills-toolbar {
+  min-width: 0;
+  min-height: 46px;
+  padding: 6px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 13px;
+  background: var(--surface-panel);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.usage-bills-ranges .nav-item {
+  min-width: 60px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.usage-bills-select {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.usage-bills-select select {
+  width: 220px;
+  max-width: 26vw;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.usage-bills-error {
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 123, 138, 0.34);
+  border-radius: 10px;
+  background: rgba(255, 123, 138, 0.08);
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.usage-bills-summary-block {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.usage-bills-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.usage-bills-metric {
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-panel);
+  display: grid;
+  gap: 6px;
+}
+
+.usage-bills-metric-primary {
+  border-color: var(--accent-border);
+  background: var(--surface-selected);
+}
+
+.usage-bills-metric span,
+.usage-bills-metric small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.usage-bills-metric strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-heading);
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-bills-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.usage-bills-panel {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The header scrolls with the rows so the columns stay aligned beside the scrollbar. */
+.usage-bills-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.usage-bills-header,
+.usage-bills-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 124px minmax(100px, 1.4fr) minmax(96px, 1fr) minmax(92px, 0.9fr) 88px 96px 76px 84px;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.usage-bills-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-raised) 84%, var(--surface-panel));
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.usage-bills-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-bills-row {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.usage-bills-row:hover {
+  background: var(--surface-hover);
+}
+
+.usage-bills-row.active {
+  background: var(--surface-selected);
+}
+
+.usage-bills-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-bills-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-bills-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-bills-row .usage-bills-tier {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.usage-bills-tier em {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.usage-bills-row .usage-bills-tier.unpriced,
+.usage-bills-cost.unpriced {
+  color: var(--warning);
+}
+
+.usage-bills-cost {
+  color: var(--text-heading);
+  font-weight: 700;
+}
+
+.usage-bills-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.usage-bills-footer {
+  min-height: 42px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-raised) 72%, var(--surface-panel));
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.usage-bills-pager {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-bills-pager .btn {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.usage-bills-page-number {
+  min-width: 42px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-bills-pager select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.usage-detail-drawer.usage-bill-drawer {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.usage-bill-mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.usage-bill-note {
+  margin: 8px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.usage-detail-bills-link {
+  width: 100%;
+  height: 36px;
+  justify-content: center;
+}

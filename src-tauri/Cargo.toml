@@ -20,6 +20,7 @@ panic = "abort"
 arboard = "3.6.1"
 base64 = "0.23.1"
 crc32fast = "1.5.2"
+memchr = "2.8.3"
 open = "5.4.4"
 rand = "0.10.2"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "charset", "form", "http2", "json", "rustls-no-provider", "system-proxy"] }

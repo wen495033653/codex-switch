@@ -273,9 +273,10 @@ export default function ApiModePage({
                           <UsageStatsSummary
                             stats={usageStats}
                             onOpenDetails={() => onOpenUsageStatsDetail?.({
+                              ownerType: 'api_profile',
+                              ownerId: profileId,
                               ownerName: profileName,
-                              ownerTypeLabel: t('API 配置'),
-                              stats: usageStats
+                              ownerTypeLabel: t('API 配置')
                             })}
                           />
                         </div>

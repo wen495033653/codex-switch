@@ -13,10 +13,10 @@ use super::{
     },
     pricing::{is_priced_label, PRICING_SOURCE, PRICING_UPDATED_AT},
 };
+use crate::time_util::format_unix_seconds;
 use rusqlite::{params, Connection, Row};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 
 const HOUR_SECONDS: i64 = 60 * 60;
 
@@ -117,7 +117,7 @@ impl Owners {
 }
 
 pub(super) fn aggregate_usage(connection: &Connection, now_seconds: i64) -> Result<Value, String> {
-    let starts = usage_window_starts(now_seconds);
+    let starts = UsageWindowStarts::at(now_seconds);
     let mut owners = Owners::default();
     let mut unattributed_threads = HashSet::new();
     let mut unpriced_threads = HashSet::new();
@@ -259,27 +259,6 @@ fn for_each_item<T: FromUsageRow>(
     Ok(())
 }
 
-pub(super) fn usage_window_starts(now_seconds: i64) -> UsageWindowStarts {
-    UsageWindowStarts {
-        today: today_start_seconds(now_seconds),
-        days_7: now_seconds.saturating_sub(7 * 24 * 60 * 60),
-        days_30: now_seconds.saturating_sub(30 * 24 * 60 * 60),
-    }
-}
-
-fn today_start_seconds(now_seconds: i64) -> i64 {
-    let Ok(now_utc) = OffsetDateTime::from_unix_timestamp(now_seconds) else {
-        return now_seconds;
-    };
-    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-    let local_now = now_utc.to_offset(offset);
-    local_now
-        .date()
-        .midnight()
-        .assume_offset(offset)
-        .unix_timestamp()
-}
-
 fn display_model_id(model: &str) -> String {
     let model = model.trim();
     if model.is_empty() {
@@ -343,10 +322,7 @@ fn format_last_used(seconds: i64) -> String {
     if seconds <= 0 {
         return String::new();
     }
-    OffsetDateTime::from_unix_timestamp(seconds)
-        .ok()
-        .and_then(|time| time.format(&Rfc3339).ok())
-        .unwrap_or_default()
+    format_unix_seconds(seconds).unwrap_or_default()
 }
 
 fn warnings_to_json(unattributed_sessions: usize, unpriced_sessions: usize) -> Vec<String> {

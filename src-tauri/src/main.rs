@@ -211,6 +211,7 @@ fn main() {
             commands::general::open_codex_config_toml,
             commands::general::list_brand_voice_files,
             usage_stats::usage_stats_get,
+            usage_stats::usage_bills_list,
             session_manager::session_manager_scan,
             session_manager::session_manager_preview,
             session_manager::session_manager_preview_deleted,

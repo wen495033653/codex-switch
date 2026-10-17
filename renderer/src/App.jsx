@@ -9,6 +9,7 @@ import {
   normalizeApiProfiles
 } from './utils/appState';
 import { createPollingErrorLog } from './utils/pollingErrorLog';
+import { DEFAULT_BILLS_FILTER, billsFilterForOwner } from './utils/usageBills';
 import {
   useAddAccountFlow,
   useAccountOperations,
@@ -91,6 +92,7 @@ function MainApp() {
   const [dataDir, setDataDir] = useState('');
   const [usageStats, setUsageStats] = useState({ subscriptions: {}, api_profiles: {}, warnings: [] });
   const [usageStatsDetail, setUsageStatsDetail] = useState(null);
+  const [usageBillsFilter, setUsageBillsFilter] = useState(DEFAULT_BILLS_FILTER);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [storedLanguagePreference] = useState(getStoredLanguagePreference);
@@ -506,6 +508,15 @@ function MainApp() {
     toastError
   });
 
+  const usageStatsDetailStats = usageStatsDetail
+    ? (usageStatsDetail.ownerType === 'api_profile' ? usageStats.api_profiles : usageStats.subscriptions)?.[usageStatsDetail.ownerId] || null
+    : null;
+  const openUsageBillsForDetail = (range, statsModel) => {
+    setUsageBillsFilter(billsFilterForOwner(usageStatsDetail.ownerType, usageStatsDetail.ownerId, range, statsModel));
+    setUsageStatsDetail(null);
+    setViewMode('bills');
+  };
+
   const apiProfileBusy = savingApiMode || savingApiProfile;
   // Until settings load, DEFAULT_SETTINGS would show (and store) zh-CN for everyone.
   const languagePreference = settingsLoaded
@@ -526,6 +537,7 @@ function MainApp() {
         onDevDiagnosticsToggle={openDevLogWindow}
         onAccountsClick={() => setViewMode('accounts')}
         onApiClick={() => setViewMode('api')}
+        onBillsClick={() => setViewMode('bills')}
         onCodexClick={() => setViewMode('codex')}
         onSessionsClick={() => setViewMode('sessions')}
         onSettingsClick={() => {
@@ -602,6 +614,14 @@ function MainApp() {
           sessionManagerPageProps={{
             toast,
             toastError
+          }}
+          usageBillsPageProps={{
+            accounts: store.accounts,
+            apiProfiles,
+            filter: usageBillsFilter,
+            maskAccountName,
+            onFilterChange: setUsageBillsFilter,
+            refreshKey: usageStats
           }}
           accountsPageProps={{
             accountGridRef,
@@ -708,7 +728,9 @@ function MainApp() {
         />
         <UsageStatsDetailDrawer
           detail={usageStatsDetail}
+          stats={usageStatsDetailStats}
           onClose={() => setUsageStatsDetail(null)}
+          onOpenBills={openUsageBillsForDetail}
         />
       </div>
     </div>

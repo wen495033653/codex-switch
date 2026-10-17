@@ -156,9 +156,10 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                 <UsageStatsSummary
                     stats={usageStats}
                     onOpenDetails={() => onOpenUsageStatsDetail?.({
+                        ownerType: 'subscription',
+                        ownerId: accountId,
                         ownerName: displayName,
-                        ownerTypeLabel: t('订阅账号'),
-                        stats: usageStats
+                        ownerTypeLabel: t('订阅账号')
                     })}
                 />
             </div>

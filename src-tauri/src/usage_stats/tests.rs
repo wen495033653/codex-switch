@@ -1,5 +1,5 @@
 use super::*;
-use super::{aggregate::usage_window_starts, db::*, model::*, pricing::*, records::*, sources::*};
+use super::{bills::*, db::*, model::*, pricing::*, records::*, sources::*};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::{
@@ -574,7 +574,7 @@ fn windows_are_exact_to_the_second_around_their_starts() {
     );
     let now = "2026-06-15T10:37:21Z";
     let now_seconds = parse_rfc3339_seconds(now).unwrap();
-    let starts = usage_window_starts(now_seconds);
+    let starts = UsageWindowStarts::at(now_seconds);
     // Records one second before, at, and after every window start, plus some in whole hours.
     let mut seconds = Vec::new();
     for window_start in [starts.today, starts.days_7, starts.days_30] {
@@ -972,7 +972,8 @@ fn missing_prices_leave_the_request_unpriced_with_the_reason() {
             cost,
             EstimatedCost {
                 cost_usd: None,
-                price_label: reason
+                price_label: reason,
+                prices: None
             },
             "{model}"
         );
@@ -981,4 +982,545 @@ fn missing_prices_leave_the_request_unpriced_with_the_reason() {
     assert_eq!(ServiceTier::from_setting("fast"), ServiceTier::Fast);
     assert_eq!(ServiceTier::from_setting("default"), ServiceTier::Standard);
     assert_eq!(ServiceTier::from_setting(""), ServiceTier::Standard);
+}
+
+fn bills(
+    db_path: &Path,
+    range: &str,
+    owner: Option<(&str, &str)>,
+    model: Option<&str>,
+    page: u32,
+    page_size: u32,
+    now: &str,
+) -> Value {
+    let connection = open_usage_connection(db_path, now).unwrap();
+    let query = BillsQuery::new(
+        range,
+        owner.map(|(owner_type, _)| owner_type),
+        owner.map(|(_, owner_id)| owner_id),
+        model.map(str::to_string),
+        page,
+        page_size,
+    )
+    .unwrap();
+    list_bills(&connection, &query, parse_rfc3339_seconds(now).unwrap()).unwrap()
+}
+
+fn response_ids(page: &Value) -> Vec<String> {
+    page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["response_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-12,
+        "expected {expected}, got {actual}"
+    );
+}
+
+#[test]
+fn the_bill_lists_each_response_with_what_it_was_charged() {
+    let root = temp_root("bills");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    attribute(&db_path, OWNER_TYPE_API_PROFILE, "api-x", PROVIDER_API, T0);
+    let mut fast = vec![session_meta_line(
+        "2026-06-15T01:00:00Z",
+        "thread-a",
+        "openai",
+    )];
+    fast.push(thread_settings_line(
+        "2026-06-15T01:00:01Z",
+        "gpt-6.1-sol",
+        "openai",
+        json!("priority"),
+    ));
+    fast.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-long",
+        "thread-a",
+        300_000,
+        200_000,
+        1_000,
+    ));
+    fast.push(record_line(
+        "2026-06-15T01:03:00Z",
+        "resp-short",
+        "thread-a",
+        1_000,
+        0,
+        10,
+    ));
+    write_rollout(&codex_home, "fast", &fast);
+    let mut api = vec![session_meta_line(
+        "2026-06-15T01:00:00Z",
+        "thread-api",
+        "api",
+    )];
+    api.push(turn_context_line(
+        "2026-06-15T01:00:01Z",
+        "turn-1",
+        "gpt-5.5",
+    ));
+    api.push(record_line(
+        "2026-06-15T01:02:00Z",
+        "resp-api",
+        "thread-api",
+        100,
+        0,
+        10,
+    ));
+    write_rollout(&codex_home, "api", &api);
+    let mut other = vec![session_meta_line(
+        "2026-06-15T01:00:00Z",
+        "thread-o",
+        "custom",
+    )];
+    other.push(turn_context_line(
+        "2026-06-15T01:00:01Z",
+        "turn-1",
+        "codex-auto-review",
+    ));
+    other.push(record_line(
+        "2026-06-15T01:04:00Z",
+        "resp-other",
+        "thread-o",
+        50,
+        0,
+        5,
+    ));
+    write_rollout(&codex_home, "other", &other);
+    let now = "2026-06-15T02:00:00Z";
+    stats(&db_path, &codex_home, now);
+
+    let all = bills(&db_path, "all", None, None, 1, 50, now);
+    assert_eq!(
+        response_ids(&all),
+        ["resp-other", "resp-short", "resp-api", "resp-long"]
+    );
+    let long_cost = estimate_request_cost(
+        "gpt-6.1-sol",
+        &TokenUsage {
+            input_tokens: 300_000,
+            cached_input_tokens: 200_000,
+            cache_write_input_tokens: 0,
+            output_tokens: 1_000,
+            reasoning_output_tokens: 500,
+            total_tokens: 301_000,
+        },
+        ServiceTier::Fast,
+    );
+    assert_eq!(long_cost.price_label, PRICE_LABEL_FAST_LONG);
+    let long = &all["records"][3];
+    assert_eq!(long["price_label"], PRICE_LABEL_FAST_LONG);
+    assert_eq!(long["fresh_input_tokens"], 100_000);
+    assert_eq!(long["owner_type"], OWNER_TYPE_SUBSCRIPTION);
+    assert_eq!(long["owner_id"], "sub-a");
+    assert_eq!(long["legacy"], false);
+    let charges = long["charges"].as_array().unwrap();
+    let kinds = charges
+        .iter()
+        .map(|charge| charge["kind"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, ["input", "cached_input", "cache_write", "output"]);
+    // gpt-6.1-sol Fast mode, long context: $8 / $0.40 / $10 / $30 per 1M.
+    let prices = charges
+        .iter()
+        .map(|charge| charge["price_per_million"].as_f64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(prices, [8.0, 0.4, 10.0, 30.0]);
+    assert_eq!(charges[0]["tokens"], 100_000);
+    assert_eq!(charges[1]["tokens"], 200_000);
+    let charged = charges
+        .iter()
+        .map(|charge| charge["cost_usd"].as_f64().unwrap())
+        .sum::<f64>();
+    assert_close(charged, long["estimated_cost_usd"].as_f64().unwrap());
+    assert_close(
+        long["estimated_cost_usd"].as_f64().unwrap(),
+        long_cost.cost_usd.unwrap(),
+    );
+    // gpt-5.5 has no cache-write price; a request without cache writes still has every row.
+    let api_charges = all["records"][2]["charges"].as_array().unwrap();
+    assert_eq!(api_charges[2]["price_per_million"], Value::Null);
+    assert_eq!(api_charges[2]["cost_usd"], 0.0);
+    let unpriced = &all["records"][0];
+    assert_eq!(unpriced["owner_type"], "");
+    assert_eq!(unpriced["price_label"], UNPRICED_MISSING_MODEL_PRICE);
+    assert_eq!(unpriced["estimated_cost_usd"], Value::Null);
+    assert_eq!(unpriced["charges"], Value::Null);
+
+    let summary = &all["summary"];
+    assert_eq!(summary["request_count"], 4);
+    assert_eq!(summary["unpriced_count"], 1);
+    assert_eq!(summary["input_tokens"], 301_150);
+    assert_eq!(summary["cached_input_tokens"], 200_000);
+    assert_eq!(summary["fresh_input_tokens"], 101_150);
+    let priced_sum = all["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|record| record["estimated_cost_usd"].as_f64())
+        .sum::<f64>();
+    assert_close(summary["estimated_cost_usd"].as_f64().unwrap(), priced_sum);
+    assert_eq!(
+        all["owners"],
+        json!([
+            { "owner_type": OWNER_TYPE_SUBSCRIPTION, "owner_id": "sub-a", "request_count": 2 },
+            { "owner_type": "", "owner_id": "", "request_count": 1 },
+            { "owner_type": OWNER_TYPE_API_PROFILE, "owner_id": "api-x", "request_count": 1 }
+        ])
+    );
+
+    let account = bills(
+        &db_path,
+        "all",
+        Some((OWNER_TYPE_SUBSCRIPTION, "sub-a")),
+        None,
+        1,
+        50,
+        now,
+    );
+    assert_eq!(response_ids(&account), ["resp-short", "resp-long"]);
+    assert_eq!(
+        account["models"],
+        json!([{ "model": "gpt-6.1-sol", "request_count": 2 }])
+    );
+    // The owner list does not follow the model filter, the model list follows the owner.
+    let api_model = bills(&db_path, "all", None, Some("gpt-5.5"), 1, 50, now);
+    assert_eq!(response_ids(&api_model), ["resp-api"]);
+    assert_eq!(api_model["owners"].as_array().unwrap().len(), 3);
+    let unattributed = bills(
+        &db_path,
+        "all",
+        Some(("unattributed", "")),
+        None,
+        1,
+        50,
+        now,
+    );
+    assert_eq!(response_ids(&unattributed), ["resp-other"]);
+    let second_page = bills(&db_path, "all", None, None, 2, 3, now);
+    assert_eq!(response_ids(&second_page), ["resp-long"]);
+    assert_eq!(second_page["summary"]["request_count"], 4);
+    // 7 days back from 06-22 01:02:30 leaves the two later responses.
+    let window = bills(
+        &db_path,
+        "days_7",
+        None,
+        None,
+        1,
+        50,
+        "2026-06-22T01:02:30Z",
+    );
+    assert_eq!(response_ids(&window), ["resp-other", "resp-short"]);
+
+    assert!(BillsQuery::new("week", None, None, None, 1, 50).is_err());
+    assert!(BillsQuery::new("all", Some(OWNER_TYPE_SUBSCRIPTION), None, None, 1, 50).is_err());
+    assert!(BillsQuery::new("all", Some("someone"), Some("x"), None, 1, 50).is_err());
+    assert!(BillsQuery::new("all", None, None, None, 0, 50).is_err());
+    assert!(BillsQuery::new("all", None, None, None, 1, 0).is_err());
+    assert!(BillsQuery::new("all", None, None, None, 1, 201).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prices_are_backfilled_only_where_they_reproduce_the_stored_cost() {
+    let root = temp_root("backfill");
+    let db_path = root.join("usage.sqlite");
+    fs::create_dir_all(&root).unwrap();
+    let matching = usage(1_000, 200, 0, 100);
+    let matching_cost = estimate_request_cost("gpt-6-sol", &matching, ServiceTier::Standard);
+    {
+        let connection = Connection::open(&db_path).unwrap();
+        // The usage_records table as 6.0.5 and 6.0.6 created it, without price columns.
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO meta VALUES ('records_counted_after', '2026-06-15T00:00:00Z');
+                CREATE TABLE usage_records (
+                    response_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
+                    owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, model TEXT NOT NULL,
+                    timestamp_seconds INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
+                    cached_input_tokens INTEGER NOT NULL, cache_write_input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL, reasoning_output_tokens INTEGER NOT NULL,
+                    total_tokens INTEGER NOT NULL, price_label TEXT NOT NULL,
+                    estimated_cost_usd REAL
+                ) WITHOUT ROWID;
+                "#,
+            )
+            .unwrap();
+        let insert = |response_id: &str, label: &str, cost: Option<f64>| {
+            connection
+                .execute(
+                    "INSERT INTO usage_records VALUES (?1, 't', 'subscription', 'sub-a', \
+                     'gpt-6-sol', 1781485200, 1000, 200, 0, 100, 0, 1100, ?2, ?3)",
+                    rusqlite::params![response_id, label, cost],
+                )
+                .unwrap();
+        };
+        insert(
+            "resp-match",
+            PRICE_LABEL_STANDARD_SHORT,
+            matching_cost.cost_usd,
+        );
+        insert("resp-mismatch", PRICE_LABEL_STANDARD_SHORT, Some(1.0));
+        insert("resp-unpriced", UNPRICED_MISSING_TIER_PRICE, None);
+    }
+
+    let page = bills(&db_path, "all", None, None, 1, 50, "2026-06-15T02:00:00Z");
+    let by_id = |id: &str| {
+        page["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["response_id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let charged = by_id("resp-match")["charges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|charge| charge["price_per_million"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(charged, [json!(2.0), json!(0.2), json!(2.5), json!(10.0)]);
+    let mismatch = by_id("resp-mismatch");
+    assert_eq!(mismatch["charges"], Value::Null);
+    assert_eq!(mismatch["estimated_cost_usd"], 1.0);
+    assert_eq!(by_id("resp-unpriced")["charges"], Value::Null);
+    // A second open finds the columns and backfills nothing again.
+    let again = bills(&db_path, "all", None, None, 1, 50, "2026-06-15T02:00:00Z");
+    assert_eq!(again["records"], page["records"]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
+    // sub-a: two Fast requests the table now prices. sub-b: one on a tier the table has no price
+    // for, and one whose rollout is gone.
+    let root = temp_root("reprice");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let mut lines = vec![session_meta_line(
+        "2026-06-15T01:00:00Z",
+        "thread-a",
+        "openai",
+    )];
+    lines.push(thread_settings_line(
+        "2026-06-15T01:00:01Z",
+        "gpt-6.1-sol",
+        "openai",
+        json!("priority"),
+    ));
+    lines.push(record_line(
+        "2026-06-15T01:01:00Z",
+        "resp-long",
+        "thread-a",
+        300_000,
+        0,
+        100,
+    ));
+    lines.push(record_line(
+        "2026-06-15T01:02:00Z",
+        "resp-short",
+        "thread-a",
+        1_000,
+        0,
+        10,
+    ));
+    let path = write_rollout(&codex_home, "reprice", &lines);
+    let mut flex = vec![session_meta_line(
+        "2026-06-15T01:00:00Z",
+        "thread-f",
+        "openai",
+    )];
+    flex.push(thread_settings_line(
+        "2026-06-15T01:00:01Z",
+        "gpt-6.1-sol",
+        "openai",
+        json!("flex"),
+    ));
+    flex.push(record_line(
+        "2026-06-15T01:05:00Z",
+        "resp-flex",
+        "thread-f",
+        2_000,
+        0,
+        20,
+    ));
+    let flex_path = write_rollout(&codex_home, "flex", &flex);
+
+    // What 6.0.6 stored while the table had no gpt-6.1-sol: every record unpriced, and a cursor
+    // at the end of each rollout, so a plain refresh never reads them again.
+    {
+        let mut connection = open_usage_connection(&db_path, "2026-06-15T02:00:00Z").unwrap();
+        let transaction = connection.transaction().unwrap();
+        let unpriced =
+            |response_id: &str, thread_id: &str, timestamp: &str, owner: &str, usage| UsageRecord {
+                response_id: response_id.to_string(),
+                thread_id: thread_id.to_string(),
+                timestamp_seconds: parse_rfc3339_seconds(timestamp).unwrap(),
+                owner: OwnerAttribution {
+                    owner_type: OWNER_TYPE_SUBSCRIPTION.to_string(),
+                    owner_id: owner.to_string(),
+                },
+                model: "gpt-6.1-sol".to_string(),
+                usage,
+                service_tier: ServiceTier::Standard,
+                cost: EstimatedCost {
+                    cost_usd: None,
+                    price_label: UNPRICED_MISSING_MODEL_PRICE,
+                    prices: None,
+                },
+            };
+        for (rollout, owner) in [(&path, "sub-a"), (&flex_path, "sub-b")] {
+            let read = read_new_records(rollout, None).unwrap();
+            for record in read.records.iter() {
+                let stored = unpriced(
+                    &record.response_id,
+                    &record.thread_id,
+                    "2026-06-15T01:00:00Z",
+                    owner,
+                    record.usage.clone(),
+                );
+                let stored = UsageRecord {
+                    timestamp_seconds: record.timestamp_seconds,
+                    ..stored
+                };
+                insert_record(&transaction, &stored, true).unwrap();
+            }
+            let metadata = fs::metadata(rollout).unwrap();
+            let stamp = FileStamp {
+                modified_nanos: metadata
+                    .modified()
+                    .unwrap()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as i64,
+                size: metadata.len(),
+            };
+            save_cursor(
+                &transaction,
+                &rollout.to_string_lossy(),
+                stamp,
+                &read.cursor,
+            )
+            .unwrap();
+        }
+        let gone = unpriced(
+            "resp-gone",
+            "thread-gone",
+            "2026-06-15T01:00:30Z",
+            "sub-b",
+            usage(500, 0, 0, 5),
+        );
+        insert_record(&transaction, &gone, true).unwrap();
+        transaction.commit().unwrap();
+    }
+
+    let response = stats(&db_path, &codex_home, "2026-06-15T03:00:00Z");
+    let all = window(&response, "subscriptions", "sub-a", "all");
+    let fast_usage = |input: u64, output: u64| TokenUsage {
+        input_tokens: input,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: output,
+        reasoning_output_tokens: output / 2,
+        total_tokens: input + output,
+    };
+    let expected =
+        estimate_request_cost("gpt-6.1-sol", &fast_usage(300_000, 100), ServiceTier::Fast)
+            .cost_usd
+            .unwrap()
+            + estimate_request_cost("gpt-6.1-sol", &fast_usage(1_000, 10), ServiceTier::Fast)
+                .cost_usd
+                .unwrap();
+    assert_eq!(all["priced"], true, "{all}");
+    assert_close(all["estimated_cost_usd"].as_f64().unwrap(), expected);
+    assert_eq!(
+        all["pricing_contexts"],
+        json!({ PRICE_LABEL_FAST_LONG: 1, PRICE_LABEL_FAST_SHORT: 1 })
+    );
+    assert_eq!(all["total_tokens"], 301_110);
+    // Found on a tier without a price: that is its reason now. Not found: its tier is unknown.
+    let other = window(&response, "subscriptions", "sub-b", "all");
+    assert_eq!(other["priced"], false, "{other}");
+    assert_eq!(
+        other["unpriced_reasons"],
+        json!({ UNPRICED_MISSING_SERVICE_TIER: 1, UNPRICED_MISSING_TIER_PRICE: 1 })
+    );
+    let connection = Connection::open(&db_path).unwrap();
+    for table in ["usage_hourly", "usage_totals"] {
+        let unpriced: i64 = connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE price_label = ?1"),
+                [UNPRICED_MISSING_MODEL_PRICE],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unpriced, 0, "{table}");
+    }
+    let checked: String = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'unpriced_records_checked_for'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(checked, PRICING_UPDATED_AT);
+    // A later table reads again from the earliest record a re-read can still price; the one
+    // whose rollout is gone, stored before it, no longer counts.
+    connection
+        .execute(
+            "UPDATE meta SET value = '2026-01-01' WHERE key = 'unpriced_records_checked_for'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        pending_reprice(&connection).unwrap().unwrap().reread_since,
+        parse_rfc3339_seconds("2026-06-15T01:05:00Z")
+    );
+    connection
+        .execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'unpriced_records_checked_for'",
+            [PRICING_UPDATED_AT],
+        )
+        .unwrap();
+    drop(connection);
+    let page = bills(&db_path, "all", None, None, 1, 50, "2026-06-15T03:00:00Z");
+    assert_eq!(
+        response_ids(&page),
+        ["resp-flex", "resp-short", "resp-long", "resp-gone"]
+    );
+    assert_eq!(page["records"][2]["price_label"], PRICE_LABEL_FAST_LONG);
+    assert!(page["records"][2]["charges"].is_array());
+    assert_eq!(
+        page["records"][3]["price_label"],
+        UNPRICED_MISSING_SERVICE_TIER
+    );
+
+    // Checked once: the next refresh reads nothing again and changes nothing.
+    let again = stats(&db_path, &codex_home, "2026-06-15T03:01:00Z");
+    assert_eq!(window(&again, "subscriptions", "sub-a", "all"), all);
+    fs::remove_dir_all(root).unwrap();
 }

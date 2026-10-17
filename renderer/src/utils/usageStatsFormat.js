@@ -1,4 +1,12 @@
-// Shared by the usage summary on the cards and the usage detail drawer.
+// Shared by the usage summary on the cards, the usage detail drawer and the bills page.
+
+export const UNPRICED_REASON_LABELS = {
+  missing_model_price: '缺少模型价格',
+  missing_tier_price: '缺少该档位价格',
+  missing_cached_input_price: '缺少缓存输入价格',
+  missing_cache_write_price: '缺少缓存写入价格',
+  missing_service_tier: '档位未知'
+};
 
 export function getWindow(stats, key) {
   const value = stats && stats[key];
@@ -23,4 +31,8 @@ export function formatCost(windowStats, t) {
   const cost = Number(windowStats.estimated_cost_usd) || 0;
   if (cost > 0 && cost < 0.0001) return '<$0.0001';
   return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
+}
+
+export function formatExactTokens(value, language) {
+  return new Intl.NumberFormat(language).format(Number(value) || 0);
 }

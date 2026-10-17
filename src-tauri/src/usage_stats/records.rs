@@ -117,8 +117,10 @@ fn resumes_at(file: &mut fs::File, previous: &RolloutCursor) -> io::Result<bool>
     Ok(check == previous.resume_check)
 }
 
+// Lines of tool output run to megabytes, so the search is the SIMD one: comparing every window
+// took a minute to read the 2.3 GB of rollouts a re-read covers.
 fn contains(line: &[u8], needle: &[u8]) -> bool {
-    line.windows(needle.len()).any(|window| window == needle)
+    memchr::memmem::find(line, needle).is_some()
 }
 
 fn apply_line(

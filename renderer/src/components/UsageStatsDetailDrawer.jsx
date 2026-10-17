@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n';
-import { formatCost, formatTokens, getWindow, hasUsage } from '../utils/usageStatsFormat';
+import {
+  UNPRICED_REASON_LABELS,
+  formatCost,
+  formatExactTokens,
+  formatTokens,
+  getWindow,
+  hasUsage
+} from '../utils/usageStatsFormat';
 
 const ALL_MODELS_KEY = '__all__';
 
@@ -15,23 +22,12 @@ const LONG_CONTEXT_KEYS = ['standard_long_context', 'fast_long_context'];
 
 const FAST_MODE_KEYS = ['fast_short_context', 'fast_long_context'];
 
-const UNPRICED_REASON_LABELS = {
-  missing_model_price: '缺少模型价格',
-  missing_tier_price: '缺少该档位价格',
-  missing_cached_input_price: '缺少缓存输入价格',
-  missing_cache_write_price: '缺少缓存写入价格'
-};
-
 function getObjectMap(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function getByModel(windowStats) {
   return getObjectMap(windowStats && windowStats.by_model);
-}
-
-function formatExactTokens(value, language) {
-  return new Intl.NumberFormat(language).format(Number(value) || 0);
 }
 
 function formatLastUsed(value, language, t) {
@@ -149,12 +145,12 @@ function ModelFilterRow({ active, label, stats, totalTokens, onClick }) {
   );
 }
 
-export default function UsageStatsDetailDrawer({ detail, onClose }) {
+// `stats` is the owner's entry of the latest refresh, so the drawer follows the refreshes.
+export default function UsageStatsDetailDrawer({ detail, stats, onClose, onOpenBills }) {
   const { language, t } = useI18n();
   const [activeWindow, setActiveWindow] = useState('today');
   const [activeModel, setActiveModel] = useState(ALL_MODELS_KEY);
   const isOpen = Boolean(detail);
-  const stats = detail && detail.stats ? detail.stats : null;
   const activeStats = getWindow(stats, activeWindow);
   const byModel = getByModel(activeStats);
   const hasActiveUsage = hasUsage(activeStats);
@@ -291,6 +287,14 @@ export default function UsageStatsDetailDrawer({ detail, onClose }) {
             <span>{t('只统计功能上线后且能匹配到此卡片的 Codex session。')}</span>
           </div>
         )}
+
+        <button
+          type="button"
+          className="btn btn-secondary usage-detail-bills-link"
+          onClick={() => onOpenBills(activeWindow, activeModel === ALL_MODELS_KEY ? null : activeModel)}
+        >
+          {t('查看逐条账单')}
+        </button>
       </aside>
     </div>
   );

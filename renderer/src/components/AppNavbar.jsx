@@ -7,6 +7,7 @@ function NavIcon({ name }) {
     api: <><path d="M8 9h8M8 15h5" /><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m16 14 2 2 3-3" /></>,
     codex: <><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14" /></>,
     sessions: <><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" /><path d="M8 8h8M8 12h5" /></>,
+    bills: <><path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h3" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.09A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.64 15a1.7 1.7 0 0 0-1.55-1.03H3v-4h.09A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.64a1.7 1.7 0 0 0 1.03-1.55V3h4v.09A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.36 9a1.7 1.7 0 0 0 1.55 1.03H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>
   };
   return (
@@ -27,6 +28,7 @@ export default function AppNavbar({
   onDevDiagnosticsToggle,
   onAccountsClick,
   onApiClick,
+  onBillsClick,
   onCodexClick,
   onSessionsClick,
   onSettingsClick,
@@ -49,6 +51,7 @@ export default function AppNavbar({
     { key: 'api', label: 'API', onClick: onApiClick },
     { key: 'codex', label: 'Codex', onClick: onCodexClick },
     { key: 'sessions', label: t('会话'), onClick: onSessionsClick },
+    { key: 'bills', label: t('账单'), onClick: onBillsClick },
     { key: 'settings', label: t('设置'), onClick: onSettingsClick }
   ];
   const localizedModeLabel = translateRuntimeText(currentModeLabel);

@@ -4,6 +4,7 @@ import CodexPage from './CodexPage';
 import { useSessionManagerState } from '../hooks/useSessionManagerState';
 import SessionManagerPage from './SessionManagerPage';
 import SettingsPage from './SettingsPage';
+import UsageBillsPage from './UsageBillsPage';
 
 export default function AppMainView({
   accountsPageProps,
@@ -11,6 +12,7 @@ export default function AppMainView({
   codexPageProps,
   sessionManagerPageProps,
   settingsPageProps,
+  usageBillsPageProps,
   viewMode
 }) {
   const sessionManagerState = useSessionManagerState();
@@ -25,6 +27,10 @@ export default function AppMainView({
 
   if (viewMode === 'codex') {
     return <CodexPage {...codexPageProps} />;
+  }
+
+  if (viewMode === 'bills') {
+    return <UsageBillsPage {...usageBillsPageProps} />;
   }
 
   if (viewMode === 'sessions') {

@@ -1,16 +1,21 @@
 use super::{
     model::{
-        OwnerAttribution, TokenUsage, UsageRecord, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION,
-        PROVIDER_API, PROVIDER_SUBSCRIPTION,
+        EstimatedCost, OwnerAttribution, ServiceTier, TokenPrices, TokenUsage, UsageRecord,
+        OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API, PROVIDER_SUBSCRIPTION,
     },
-    pricing::estimate_summed_cost,
+    pricing::{
+        cost_parts, estimate_request_cost, estimate_summed_cost, has_model_price, prices_for_label,
+        PRICING_UPDATED_AT, UNPRICED_MISSING_MODEL_PRICE, UNPRICED_MISSING_SERVICE_TIER,
+    },
     records::RolloutCursor,
 };
 use crate::{
+    app_log::log_event,
     paths::{app_data_dir, ensure_parent_dir},
     time_util::parse_rfc3339_seconds,
 };
 use rusqlite::{params, Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior};
+use serde_json::json;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -20,6 +25,13 @@ use std::{
 /// creation time; for one migrated from the per-session statistics it is the last moment those
 /// statistics covered, so every response is counted by exactly one of the two.
 pub(super) const META_RECORDS_COUNTED_AFTER: &str = "records_counted_after";
+
+/// The price table (its `PRICING_UPDATED_AT`) the records stored without a price were last
+/// checked against. Each new table is checked once; see `pending_reprice`.
+const META_UNPRICED_CHECKED_FOR: &str = "unpriced_records_checked_for";
+
+/// Records migrated from the per-session statistics, not single API responses.
+const LEGACY_RESPONSE_ID_PREFIX: &str = "legacy:";
 
 const HOUR_SECONDS: i64 = 60 * 60;
 
@@ -31,6 +43,10 @@ pub(super) fn sql_i64_to_u64(value: i64) -> u64 {
 
 fn u64_to_sql(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+pub(super) fn is_legacy_response_id(response_id: &str) -> bool {
+    response_id.starts_with(LEGACY_RESPONSE_ID_PREFIX)
 }
 
 pub(super) fn usage_db_path() -> Result<PathBuf, String> {
@@ -89,7 +105,11 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
                 reasoning_output_tokens INTEGER NOT NULL,
                 total_tokens INTEGER NOT NULL,
                 price_label TEXT NOT NULL,
-                estimated_cost_usd REAL
+                estimated_cost_usd REAL,
+                input_price REAL,
+                cached_input_price REAL,
+                cache_write_price REAL,
+                output_price REAL
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS usage_records_time_idx
                 ON usage_records(timestamp_seconds);
@@ -141,6 +161,7 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
             "#,
         )
         .map_err(|err| db_error("初始化 token 统计库失败", err))?;
+    add_price_columns(&transaction)?;
 
     if optional_meta_value(&transaction, META_RECORDS_COUNTED_AFTER)?.is_none() {
         let counted_after = if table_exists(&transaction, "session_usage")? {
@@ -188,10 +209,210 @@ fn set_meta_value(connection: &Connection, key: &str, value: &str) -> Result<(),
         .map_err(|err| db_error("写入 token 统计元数据失败", err))
 }
 
+pub(super) fn records_counted_after(connection: &Connection) -> Result<String, String> {
+    optional_meta_value(connection, META_RECORDS_COUNTED_AFTER)?
+        .ok_or_else(|| "token 统计缺少记录起点".to_string())
+}
+
 pub(super) fn records_counted_after_seconds(connection: &Connection) -> Result<i64, String> {
-    let value = optional_meta_value(connection, META_RECORDS_COUNTED_AFTER)?
-        .ok_or_else(|| "token 统计缺少记录起点".to_string())?;
+    let value = records_counted_after(connection)?;
     parse_rfc3339_seconds(&value).ok_or_else(|| format!("token 统计记录起点无效: {value:?}"))
+}
+
+/// Whether this database was migrated from the per-session statistics of earlier versions, whose
+/// all-time totals have no records behind them.
+pub(super) fn has_session_statistics(connection: &Connection) -> Result<bool, String> {
+    table_exists(connection, "session_usage")
+}
+
+/// Records stored before the prices were kept get them from their model and price label. All of
+/// them were priced with the table as it still is (it did not change between 6.0.5, which
+/// introduced per-response records, and these columns), and a record only gets prices that
+/// reproduce its stored cost exactly, so none shows prices it was not charged at.
+fn add_price_columns(transaction: &Transaction<'_>) -> Result<(), String> {
+    let has_price_columns = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_records') WHERE name = 'input_price')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| db_error("读取 token 记录表结构失败", err))?;
+    if has_price_columns == 1 {
+        return Ok(());
+    }
+    transaction
+        .execute_batch(
+            r#"
+            ALTER TABLE usage_records ADD COLUMN input_price REAL;
+            ALTER TABLE usage_records ADD COLUMN cached_input_price REAL;
+            ALTER TABLE usage_records ADD COLUMN cache_write_price REAL;
+            ALTER TABLE usage_records ADD COLUMN output_price REAL;
+            "#,
+        )
+        .map_err(|err| db_error("添加 token 记录单价列失败", err))?;
+
+    let priced = {
+        let mut statement = transaction
+            .prepare(
+                r#"
+                SELECT response_id, model, price_label, input_tokens, cached_input_tokens,
+                       cache_write_input_tokens, output_tokens, estimated_cost_usd
+                FROM usage_records WHERE estimated_cost_usd IS NOT NULL
+                "#,
+            )
+            .map_err(|err| db_error("读取需要回填单价的 token 记录失败", err))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    TokenUsage {
+                        input_tokens: row.get::<_, i64>(3).map(sql_i64_to_u64)?,
+                        cached_input_tokens: row.get::<_, i64>(4).map(sql_i64_to_u64)?,
+                        cache_write_input_tokens: row.get::<_, i64>(5).map(sql_i64_to_u64)?,
+                        output_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
+                        reasoning_output_tokens: 0,
+                        total_tokens: 0,
+                    },
+                    row.get::<_, f64>(7)?,
+                ))
+            })
+            .map_err(|err| db_error("读取需要回填单价的 token 记录失败", err))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| db_error("读取需要回填单价的 token 记录失败", err))?
+    };
+
+    let mut filled = 0usize;
+    let mut unmatched = Vec::new();
+    for (response_id, model, label, usage, stored_cost) in priced {
+        let prices = prices_for_label(&model, &label).filter(|prices| {
+            cost_parts(&usage, prices).is_ok_and(|parts| parts.total() == stored_cost)
+        });
+        match prices {
+            Some(prices) => {
+                set_record_prices(transaction, &response_id, Some(&prices))?;
+                filled += 1;
+            }
+            None => unmatched.push(json!({
+                "responseId": response_id,
+                "model": model,
+                "priceLabel": label,
+                "storedCostUsd": stored_cost
+            })),
+        }
+    }
+    log_event(
+        "usage_stats_prices_backfilled",
+        json!({ "filled": filled, "unmatched": unmatched.len() }),
+    );
+    if !unmatched.is_empty() {
+        log_event(
+            "usage_stats_price_backfill_error",
+            json!({
+                "unmatched": unmatched.len(),
+                "examples": unmatched.iter().take(5).collect::<Vec<_>>(),
+                "handling": "prices_left_empty_total_kept"
+            }),
+        );
+    }
+    Ok(())
+}
+
+fn set_record_prices(
+    transaction: &Transaction<'_>,
+    response_id: &str,
+    prices: Option<&TokenPrices>,
+) -> Result<(), String> {
+    transaction
+        .prepare_cached(
+            r#"
+            UPDATE usage_records
+            SET input_price = ?2, cached_input_price = ?3, cache_write_price = ?4,
+                output_price = ?5
+            WHERE response_id = ?1
+            "#,
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
+                response_id,
+                prices.map(|prices| prices.input),
+                prices.and_then(|prices| prices.cached_input),
+                prices.and_then(|prices| prices.cache_write),
+                prices.map(|prices| prices.output)
+            ])
+        })
+        .map(|_| ())
+        .map_err(|err| db_error("写入 token 记录单价失败", err))
+}
+
+/// A check of the records stored without a price against the current price table.
+pub(super) struct RepriceCheck {
+    /// Rollouts modified at or after this second are read again from the start: they hold the
+    /// unpriced records whose model the table now prices, and only the rollout tells the tier
+    /// each ran on. `None` when no record needs it.
+    pub(super) reread_since: Option<i64>,
+}
+
+/// `None` once the records stored without a price were checked against this price table.
+pub(super) fn pending_reprice(connection: &Connection) -> Result<Option<RepriceCheck>, String> {
+    if optional_meta_value(connection, META_UNPRICED_CHECKED_FOR)?.as_deref()
+        == Some(PRICING_UPDATED_AT)
+    {
+        return Ok(None);
+    }
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT model, MIN(timestamp_seconds) FROM usage_records
+            WHERE estimated_cost_usd IS NULL AND response_id NOT LIKE 'legacy:%'
+              AND price_label <> ?1
+            GROUP BY model
+            "#,
+        )
+        .map_err(|err| db_error("读取未定价 token 记录失败", err))?;
+    let earliest = statement
+        .query_map([UNPRICED_MISSING_SERVICE_TIER], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|err| db_error("读取未定价 token 记录失败", err))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| db_error("读取未定价 token 记录失败", err))?
+        .into_iter()
+        .filter(|(model, _)| has_model_price(model))
+        .map(|(_, earliest)| earliest)
+        .min();
+    Ok(Some(RepriceCheck {
+        reread_since: earliest,
+    }))
+}
+
+pub(super) fn mark_unpriced_checked(transaction: &Transaction<'_>) -> Result<(), String> {
+    set_meta_value(transaction, META_UNPRICED_CHECKED_FOR, PRICING_UPDATED_AT)
+}
+
+pub(super) fn count_unpriced_with_model_price(connection: &Connection) -> Result<usize, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT model, COUNT(*) FROM usage_records
+            WHERE estimated_cost_usd IS NULL AND response_id NOT LIKE 'legacy:%'
+            GROUP BY model
+            "#,
+        )
+        .map_err(|err| db_error("读取未定价 token 记录失败", err))?;
+    let counts = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|err| db_error("读取未定价 token 记录失败", err))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| db_error("读取未定价 token 记录失败", err))?;
+    Ok(counts
+        .into_iter()
+        .filter(|(model, _)| has_model_price(model))
+        .map(|(_, count)| usize::try_from(count).unwrap_or(0))
+        .sum())
 }
 
 /// Carries the per-session statistics of earlier versions into the per-response tables, once.
@@ -235,6 +456,7 @@ fn migrate_session_statistics(transaction: &Transaction<'_>, now: &str) -> Resul
                 owner: session.owner.clone(),
                 model: session.model.clone(),
                 usage: session.usage.clone(),
+                service_tier: ServiceTier::Standard,
                 cost,
             },
         )?;
@@ -285,12 +507,13 @@ fn migrate_session_statistics(transaction: &Transaction<'_>, now: &str) -> Resul
             insert_record(
                 transaction,
                 &UsageRecord {
-                    response_id: format!("legacy:{source_path}:{event_index}"),
+                    response_id: format!("{LEGACY_RESPONSE_ID_PREFIX}{source_path}:{event_index}"),
                     thread_id: session.session_id.clone(),
                     timestamp_seconds,
                     owner: session.owner.clone(),
                     model: session.model.clone(),
                     usage,
+                    service_tier: ServiceTier::Standard,
                     cost,
                 },
                 false,
@@ -437,9 +660,11 @@ pub(super) fn insert_record(
             INSERT OR IGNORE INTO usage_records(
                 response_id, thread_id, owner_type, owner_id, model, timestamp_seconds,
                 input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens,
-                reasoning_output_tokens, total_tokens, price_label, estimated_cost_usd
+                reasoning_output_tokens, total_tokens, price_label, estimated_cost_usd,
+                input_price, cached_input_price, cache_write_price, output_price
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                   ?18)
             "#,
         )
         .and_then(|mut statement| {
@@ -457,7 +682,11 @@ pub(super) fn insert_record(
                 u64_to_sql(record.usage.reasoning_output_tokens),
                 u64_to_sql(record.usage.total_tokens),
                 record.cost.price_label,
-                record.cost.cost_usd
+                record.cost.cost_usd,
+                record.cost.prices.map(|prices| prices.input),
+                record.cost.prices.and_then(|prices| prices.cached_input),
+                record.cost.prices.and_then(|prices| prices.cache_write),
+                record.cost.prices.map(|prices| prices.output)
             ])
         })
         .map_err(|err| db_error("写入 token 用量记录失败", err))?;
@@ -532,6 +761,227 @@ fn add_to_rollup(
         .and_then(|mut statement| statement.execute(values.as_slice()))
         .map(|_| ())
         .map_err(|err| db_error("写入 token 统计汇总失败", err))
+}
+
+const STORED_RECORD_COLUMNS: &str = "response_id, owner_type, owner_id, model, thread_id, \
+     timestamp_seconds, input_tokens, cached_input_tokens, cache_write_input_tokens, \
+     output_tokens, reasoning_output_tokens, total_tokens, price_label, estimated_cost_usd";
+
+/// A stored record (`STORED_RECORD_COLUMNS`) with its price label and cost. The service tier is
+/// not stored; the caller supplies the one it knows.
+fn stored_record(
+    row: &rusqlite::Row<'_>,
+    service_tier: ServiceTier,
+) -> rusqlite::Result<(UsageRecord, String, Option<f64>)> {
+    Ok((
+        UsageRecord {
+            response_id: row.get(0)?,
+            owner: OwnerAttribution {
+                owner_type: row.get(1)?,
+                owner_id: row.get(2)?,
+            },
+            model: row.get(3)?,
+            thread_id: row.get(4)?,
+            timestamp_seconds: row.get(5)?,
+            usage: TokenUsage {
+                input_tokens: row.get::<_, i64>(6).map(sql_i64_to_u64)?,
+                cached_input_tokens: row.get::<_, i64>(7).map(sql_i64_to_u64)?,
+                cache_write_input_tokens: row.get::<_, i64>(8).map(sql_i64_to_u64)?,
+                output_tokens: row.get::<_, i64>(9).map(sql_i64_to_u64)?,
+                reasoning_output_tokens: row.get::<_, i64>(10).map(sql_i64_to_u64)?,
+                total_tokens: row.get::<_, i64>(11).map(sql_i64_to_u64)?,
+            },
+            service_tier,
+            cost: EstimatedCost {
+                cost_usd: None,
+                price_label: "",
+                prices: None,
+            },
+        },
+        row.get(12)?,
+        row.get(13)?,
+    ))
+}
+
+/// A response read again whose stored record has no price is priced now with the tier it ran
+/// on, from the stored model and tokens, when the price table covers it; otherwise it gets the
+/// reason the table gives now. Records migrated from the per-session statistics are left alone.
+/// Returns whether the record was priced.
+pub(super) fn reprice_stored_record(
+    transaction: &Transaction<'_>,
+    record: &UsageRecord,
+) -> Result<bool, String> {
+    if is_legacy_response_id(&record.response_id) {
+        return Ok(false);
+    }
+    let stored = transaction
+        .prepare_cached(&format!(
+            "SELECT {STORED_RECORD_COLUMNS} FROM usage_records WHERE response_id = ?1"
+        ))
+        .and_then(|mut statement| {
+            statement
+                .query_row([&record.response_id], |row| {
+                    stored_record(row, record.service_tier)
+                })
+                .optional()
+        })
+        .map_err(|err| db_error("读取需要改价的 token 记录失败", err))?;
+    let Some((mut stored, stored_label, stored_cost)) = stored else {
+        return Err(format!(
+            "token 记录 {} 写入时被跳过却不存在",
+            record.response_id
+        ));
+    };
+    if stored_cost.is_some() {
+        return Ok(false);
+    }
+    let cost = estimate_request_cost(&stored.model, &stored.usage, record.service_tier);
+    if cost.price_label == stored_label {
+        return Ok(false);
+    }
+    stored.cost = cost;
+    relabel_unpriced_record(transaction, &stored, &stored_label)?;
+    Ok(stored.cost.cost_usd.is_some())
+}
+
+/// After the rollouts were read again for a new price table, the records still waiting for a
+/// price the table now has were in none of them (their rollouts are gone, or could not be
+/// read; the scan logged those). They are marked as having an unknown tier, so the reason shown
+/// is true and a later table does not read everything again for them. Returns how many.
+pub(super) fn mark_service_tier_unknown(transaction: &Transaction<'_>) -> Result<usize, String> {
+    let candidates = {
+        let mut statement = transaction
+            .prepare(&format!(
+                "SELECT {STORED_RECORD_COLUMNS} FROM usage_records \
+                 WHERE estimated_cost_usd IS NULL AND price_label = ?1 \
+                 AND response_id NOT LIKE 'legacy:%'"
+            ))
+            .map_err(|err| db_error("读取未定价 token 记录失败", err))?;
+        let rows = statement
+            .query_map([UNPRICED_MISSING_MODEL_PRICE], |row| {
+                stored_record(row, ServiceTier::Other)
+            })
+            .map_err(|err| db_error("读取未定价 token 记录失败", err))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| db_error("读取未定价 token 记录失败", err))?;
+        rows.into_iter()
+            .filter(|(record, _, _)| has_model_price(&record.model))
+            .collect::<Vec<_>>()
+    };
+    for (record, label, _) in &candidates {
+        let record = UsageRecord {
+            cost: EstimatedCost {
+                cost_usd: None,
+                price_label: UNPRICED_MISSING_SERVICE_TIER,
+                prices: None,
+            },
+            ..record.clone()
+        };
+        relabel_unpriced_record(transaction, &record, label)?;
+    }
+    Ok(candidates.len())
+}
+
+/// Moves an unpriced record to the price label and cost it has now; its share of the hourly and
+/// all-time rollups moves along.
+fn relabel_unpriced_record(
+    transaction: &Transaction<'_>,
+    record: &UsageRecord,
+    stored_label: &str,
+) -> Result<(), String> {
+    let hour = hour_start(record.timestamp_seconds);
+    remove_from_rollup(
+        transaction,
+        "usage_hourly",
+        Some(hour),
+        record,
+        stored_label,
+    )?;
+    remove_from_rollup(transaction, "usage_totals", None, record, stored_label)?;
+    transaction
+        .prepare_cached(
+            "UPDATE usage_records SET price_label = ?2, estimated_cost_usd = ?3 WHERE response_id = ?1",
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
+                record.response_id,
+                record.cost.price_label,
+                record.cost.cost_usd
+            ])
+        })
+        .map_err(|err| db_error("写入 token 记录改价失败", err))?;
+    set_record_prices(
+        transaction,
+        &record.response_id,
+        record.cost.prices.as_ref(),
+    )?;
+    add_to_hourly(transaction, record)?;
+    add_to_totals(transaction, record)
+}
+
+/// Takes one unpriced record out of a rollup row (its cost there is 0) and drops the row once
+/// it holds no record.
+fn remove_from_rollup(
+    transaction: &Transaction<'_>,
+    table: &str,
+    hour: Option<i64>,
+    record: &UsageRecord,
+    price_label: &str,
+) -> Result<(), String> {
+    let hour_key = if hour.is_some() {
+        "hour_start = ? AND "
+    } else {
+        ""
+    };
+    let key = format!(
+        "{hour_key}owner_type = ? AND owner_id = ? AND model = ? AND thread_id = ? AND price_label = ?"
+    );
+    let mut key_values: Vec<&dyn ToSql> = Vec::with_capacity(6);
+    if let Some(hour) = hour.as_ref() {
+        key_values.push(hour);
+    }
+    key_values.extend([
+        &record.owner.owner_type as &dyn ToSql,
+        &record.owner.owner_id,
+        &record.model,
+        &record.thread_id,
+        &price_label,
+    ]);
+    let usage = &record.usage;
+    let tokens = [
+        u64_to_sql(usage.input_tokens),
+        u64_to_sql(usage.cached_input_tokens),
+        u64_to_sql(usage.cache_write_input_tokens),
+        u64_to_sql(usage.output_tokens),
+        u64_to_sql(usage.reasoning_output_tokens),
+        u64_to_sql(usage.total_tokens),
+    ];
+    let mut values: Vec<&dyn ToSql> = tokens.iter().map(|value| value as &dyn ToSql).collect();
+    values.extend(key_values.iter().copied());
+    let changed = transaction
+        .prepare_cached(&format!(
+            "UPDATE {table} SET input_tokens = input_tokens - ?, \
+             cached_input_tokens = cached_input_tokens - ?, \
+             cache_write_input_tokens = cache_write_input_tokens - ?, \
+             output_tokens = output_tokens - ?, \
+             reasoning_output_tokens = reasoning_output_tokens - ?, \
+             total_tokens = total_tokens - ?, record_count = record_count - 1 WHERE {key}"
+        ))
+        .and_then(|mut statement| statement.execute(values.as_slice()))
+        .map_err(|err| db_error("移出 token 统计汇总失败", err))?;
+    if changed != 1 {
+        return Err(format!(
+            "token 统计汇总 {table} 里没有记录 {} 所在的行（{price_label}）",
+            record.response_id
+        ));
+    }
+    transaction
+        .prepare_cached(&format!(
+            "DELETE FROM {table} WHERE {key} AND record_count <= 0"
+        ))
+        .and_then(|mut statement| statement.execute(key_values.as_slice()))
+        .map(|_| ())
+        .map_err(|err| db_error("清理 token 统计汇总失败", err))
 }
 
 /// The file stamp a cursor was stored with, to skip unchanged files without opening them.

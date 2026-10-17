@@ -1,4 +1,5 @@
 mod aggregate;
+mod bills;
 mod db;
 mod model;
 mod pricing;
@@ -10,7 +11,7 @@ mod tests;
 
 use crate::{
     accounts::get_codex_state_value,
-    app_log::log_event_once,
+    app_log::{log_event, log_event_once},
     blocking_task::run_blocking,
     json_util::{raw_string_field, string_field},
     paths::codex_dir,
@@ -21,14 +22,17 @@ use serde_json::{json, Value};
 use std::{path::Path, sync::Mutex};
 use {
     aggregate::aggregate_usage,
+    bills::{list_bills, BillsQuery},
     db::{
-        db_error, open_usage_connection, record_attribution_at, records_counted_after_seconds,
-        usage_db_path,
+        count_unpriced_with_model_price, db_error, mark_service_tier_unknown,
+        mark_unpriced_checked, open_usage_connection, pending_reprice, record_attribution_at,
+        records_counted_after_seconds, usage_db_path,
     },
     model::{
         UsageScanSource, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API,
         PROVIDER_SUBSCRIPTION,
     },
+    pricing::PRICING_UPDATED_AT,
     scan::{scan_sources, write_scan},
     sources::default_usage_scan_sources,
 };
@@ -46,6 +50,55 @@ pub(crate) async fn usage_stats_get() -> Result<Value, String> {
             .inspect_err(|err| log_event_once("usage_stats_refresh_error", json!({ "error": err })))
     })
     .await
+}
+
+/// One page of the bill: the stored responses of a window, optionally of one owner and one
+/// model, newest first. It reads what the refreshes stored; it does not scan the rollouts.
+#[tauri::command]
+pub(crate) async fn usage_bills_list(
+    range: String,
+    owner_type: Option<String>,
+    owner_id: Option<String>,
+    model: Option<String>,
+    page: u32,
+    page_size: u32,
+) -> Result<Value, String> {
+    // The bills page asks again after every statistics refresh (every 30 s while it shows).
+    run_blocking("读取 token 账单", move || {
+        usage_bills_list_impl(&range, owner_type, owner_id, model, page, page_size)
+            .inspect_err(|err| log_event_once("usage_bills_list_error", json!({ "error": err })))
+    })
+    .await
+}
+
+fn usage_bills_list_impl(
+    range: &str,
+    owner_type: Option<String>,
+    owner_id: Option<String>,
+    model: Option<String>,
+    page: u32,
+    page_size: u32,
+) -> Result<Value, String> {
+    let query = BillsQuery::new(
+        range,
+        owner_type.as_deref(),
+        owner_id.as_deref(),
+        model,
+        page,
+        page_size,
+    )?;
+    let now = now_string();
+    let now_seconds =
+        parse_rfc3339_seconds(&now).ok_or_else(|| "token 统计当前时间无效".to_string())?;
+    let connection = open_usage_connection(&usage_db_path()?, &now)?;
+    list_bills(&connection, &query, now_seconds)
+}
+
+/// Stores what the rollouts gained since the last refresh. The session sync calls it before it
+/// rewrites provider lines: a record whose provider is only in its rollout's `session_meta`
+/// would otherwise be read after the rewrite and attributed to the mode being switched to.
+pub(crate) fn store_new_usage_records() -> Result<(), String> {
+    usage_stats_get_impl().map(|_| ())
 }
 
 pub(crate) fn record_attribution(
@@ -100,19 +153,45 @@ fn usage_stats_get_for_scan_sources(
         parse_rfc3339_seconds(now).ok_or_else(|| "token 统计当前时间无效".to_string())?;
     let mut connection = open_usage_connection(db_path, now)?;
     let counted_after_seconds = records_counted_after_seconds(&connection)?;
+    // After a price table change, the records stored without a price are checked once: the
+    // rollouts holding the ones the table now prices are read again for the tier they ran on,
+    // and the ones none of them holds are marked as having an unknown tier.
+    let reprice = pending_reprice(&connection)?;
+    let reread_since = reprice.as_ref().and_then(|check| check.reread_since);
     // Files are read before any write, so the database stays unlocked while they are read;
     // `record_attribution` writes through its own connection meanwhile.
-    let scan = scan_sources(&connection, sources, counted_after_seconds)?;
+    let scan = scan_sources(&connection, sources, counted_after_seconds, reread_since)?;
     // One transaction for every write of this refresh, committed only after the summary was
     // built. Any failure rolls all of it back and returns the error; the cursors then still
     // point before the new records, so the next refresh reads them again.
     let transaction = connection
         .transaction()
         .map_err(|err| db_error("开启 token 统计写入事务失败", err))?;
-    write_scan(&transaction, &scan)?;
+    let written = write_scan(&transaction, &scan)?;
+    let recheck = match reprice {
+        Some(_) => {
+            let tier_unknown = mark_service_tier_unknown(&transaction)?;
+            mark_unpriced_checked(&transaction)?;
+            Some((tier_unknown, count_unpriced_with_model_price(&transaction)?))
+        }
+        None => None,
+    };
     let response = aggregate_usage(&transaction, now_seconds)?;
     transaction
         .commit()
         .map_err(|err| db_error("提交 token 统计写入失败", err))?;
+    if let Some((tier_unknown, still_unpriced)) = recheck {
+        log_event(
+            "usage_stats_unpriced_rechecked",
+            json!({
+                "pricingUpdatedAt": PRICING_UPDATED_AT,
+                "rereadSince": reread_since,
+                "rereadFiles": scan.reread_files,
+                "repriced": written.repriced,
+                "markedTierUnknown": tier_unknown,
+                "stillUnpricedWithModelPrice": still_unpriced
+            }),
+        );
+    }
     Ok(response)
 }
