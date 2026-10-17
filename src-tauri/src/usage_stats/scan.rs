@@ -130,7 +130,12 @@ pub(super) fn scan_sources(
                     }),
                 };
                 let service_tier = ServiceTier::from_setting(&record.service_tier);
-                let cost = estimate_request_cost(&record.model, &record.usage, service_tier);
+                let cost = estimate_request_cost(
+                    &record.model,
+                    &record.usage,
+                    service_tier,
+                    &owner.owner_type,
+                );
                 result.records.push(UsageRecord {
                     response_id: record.response_id,
                     thread_id: record.thread_id,

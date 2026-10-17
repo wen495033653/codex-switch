@@ -899,23 +899,75 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
     let short = usage(LONG_CONTEXT_THRESHOLD_TOKENS, 72_000, 0, 1_000);
     // 200K × $4 + 72K × $0.40 + 1K × $20
     assert_cost(
-        &estimate_request_cost("gpt-5.6-sol", &short, ServiceTier::Standard),
+        &estimate_request_cost(
+            "gpt-5.6-sol",
+            &short,
+            ServiceTier::Standard,
+            OWNER_TYPE_API_PROFILE,
+        ),
         0.8 + 0.0288 + 0.02,
         PRICE_LABEL_STANDARD_SHORT,
     );
     let long = usage(LONG_CONTEXT_THRESHOLD_TOKENS + 1, 0, 0, 0);
     assert_cost(
-        &estimate_request_cost("gpt-5.6-sol", &long, ServiceTier::Standard),
+        &estimate_request_cost(
+            "gpt-5.6-sol",
+            &long,
+            ServiceTier::Standard,
+            OWNER_TYPE_API_PROFILE,
+        ),
+        272_001.0 * 8.0 / 1e6,
+        PRICE_LABEL_STANDARD_LONG,
+    );
+    // A subscription has only the standard and Fast rates, whatever the length; a response no
+    // owner matched is priced as an API request.
+    assert_cost(
+        &estimate_request_cost(
+            "gpt-5.6-sol",
+            &long,
+            ServiceTier::Standard,
+            OWNER_TYPE_SUBSCRIPTION,
+        ),
+        272_001.0 * 4.0 / 1e6,
+        PRICE_LABEL_STANDARD_SHORT,
+    );
+    assert_cost(
+        &estimate_request_cost(
+            "gpt-6-astra",
+            &usage(1_000_000, 0, 0, 0),
+            ServiceTier::Fast,
+            OWNER_TYPE_SUBSCRIPTION,
+        ),
+        20.0,
+        PRICE_LABEL_FAST_SHORT,
+    );
+    assert_cost(
+        &estimate_request_cost(
+            "gpt-5.6-sol",
+            &long,
+            ServiceTier::Standard,
+            OWNER_TYPE_UNATTRIBUTED,
+        ),
         272_001.0 * 8.0 / 1e6,
         PRICE_LABEL_STANDARD_LONG,
     );
     assert_cost(
-        &estimate_request_cost("gpt-6-astra", &usage(1_000_000, 0, 0, 0), ServiceTier::Fast),
+        &estimate_request_cost(
+            "gpt-6-astra",
+            &usage(1_000_000, 0, 0, 0),
+            ServiceTier::Fast,
+            OWNER_TYPE_API_PROFILE,
+        ),
         40.0,
         PRICE_LABEL_FAST_LONG,
     );
     assert_cost(
-        &estimate_request_cost("gpt-6-astra", &usage(100, 0, 0, 10), ServiceTier::Fast),
+        &estimate_request_cost(
+            "gpt-6-astra",
+            &usage(100, 0, 0, 10),
+            ServiceTier::Fast,
+            OWNER_TYPE_API_PROFILE,
+        ),
         (100.0 * 20.0 + 10.0 * 100.0) / 1e6,
         PRICE_LABEL_FAST_SHORT,
     );
@@ -925,13 +977,19 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             "gpt-6-sol",
             &usage(1_000, 200, 300, 0),
             ServiceTier::Standard,
+            OWNER_TYPE_API_PROFILE,
         ),
         (500.0 * 2.0 + 200.0 * 0.2 + 300.0 * 2.5) / 1e6,
         PRICE_LABEL_STANDARD_SHORT,
     );
     // gpt-5.4-mini has one price whatever the length.
     assert_cost(
-        &estimate_request_cost("gpt-5.4-mini", &long, ServiceTier::Standard),
+        &estimate_request_cost(
+            "gpt-5.4-mini",
+            &long,
+            ServiceTier::Standard,
+            OWNER_TYPE_API_PROFILE,
+        ),
         272_001.0 * 0.75 / 1e6,
         PRICE_LABEL_STANDARD_SHORT,
     );
@@ -967,7 +1025,7 @@ fn missing_prices_leave_the_request_unpriced_with_the_reason() {
         ),
     ];
     for (model, usage, tier, reason) in cases {
-        let cost = estimate_request_cost(model, &usage, tier);
+        let cost = estimate_request_cost(model, &usage, tier, OWNER_TYPE_API_PROFILE);
         assert_eq!(
             cost,
             EstimatedCost {
@@ -1120,10 +1178,11 @@ fn the_bill_lists_each_response_with_what_it_was_charged() {
             total_tokens: 301_000,
         },
         ServiceTier::Fast,
+        OWNER_TYPE_SUBSCRIPTION,
     );
-    assert_eq!(long_cost.price_label, PRICE_LABEL_FAST_LONG);
+    assert_eq!(long_cost.price_label, PRICE_LABEL_FAST_SHORT);
     let long = &all["records"][3];
-    assert_eq!(long["price_label"], PRICE_LABEL_FAST_LONG);
+    assert_eq!(long["price_label"], PRICE_LABEL_FAST_SHORT);
     assert_eq!(long["fresh_input_tokens"], 100_000);
     assert_eq!(long["owner_type"], OWNER_TYPE_SUBSCRIPTION);
     assert_eq!(long["owner_id"], "sub-a");
@@ -1134,12 +1193,13 @@ fn the_bill_lists_each_response_with_what_it_was_charged() {
         .map(|charge| charge["kind"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(kinds, ["input", "cached_input", "cache_write", "output"]);
-    // gpt-6.1-sol Fast mode, long context: $8 / $0.40 / $10 / $30 per 1M.
+    // 300K input on a subscription is still Fast mode at the short-context rate:
+    // gpt-6.1-sol $4 / $0.20 / $5 / $20 per 1M.
     let prices = charges
         .iter()
         .map(|charge| charge["price_per_million"].as_f64().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(prices, [8.0, 0.4, 10.0, 30.0]);
+    assert_eq!(prices, [4.0, 0.2, 5.0, 20.0]);
     assert_eq!(charges[0]["tokens"], 100_000);
     assert_eq!(charges[1]["tokens"], 200_000);
     let charged = charges
@@ -1241,7 +1301,12 @@ fn prices_are_backfilled_only_where_they_reproduce_the_stored_cost() {
     let db_path = root.join("usage.sqlite");
     fs::create_dir_all(&root).unwrap();
     let matching = usage(1_000, 200, 0, 100);
-    let matching_cost = estimate_request_cost("gpt-6-sol", &matching, ServiceTier::Standard);
+    let matching_cost = estimate_request_cost(
+        "gpt-6-sol",
+        &matching,
+        ServiceTier::Standard,
+        OWNER_TYPE_SUBSCRIPTION,
+    );
     {
         let connection = Connection::open(&db_path).unwrap();
         // The usage_records table as 6.0.5 and 6.0.6 created it, without price columns.
@@ -1448,18 +1513,22 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
         reasoning_output_tokens: output / 2,
         total_tokens: input + output,
     };
-    let expected =
-        estimate_request_cost("gpt-6.1-sol", &fast_usage(300_000, 100), ServiceTier::Fast)
-            .cost_usd
-            .unwrap()
-            + estimate_request_cost("gpt-6.1-sol", &fast_usage(1_000, 10), ServiceTier::Fast)
-                .cost_usd
-                .unwrap();
+    let fast_cost = |usage: &TokenUsage| {
+        estimate_request_cost(
+            "gpt-6.1-sol",
+            usage,
+            ServiceTier::Fast,
+            OWNER_TYPE_SUBSCRIPTION,
+        )
+        .cost_usd
+        .unwrap()
+    };
+    let expected = fast_cost(&fast_usage(300_000, 100)) + fast_cost(&fast_usage(1_000, 10));
     assert_eq!(all["priced"], true, "{all}");
     assert_close(all["estimated_cost_usd"].as_f64().unwrap(), expected);
     assert_eq!(
         all["pricing_contexts"],
-        json!({ PRICE_LABEL_FAST_LONG: 1, PRICE_LABEL_FAST_SHORT: 1 })
+        json!({ PRICE_LABEL_FAST_SHORT: 2 })
     );
     assert_eq!(all["total_tokens"], 301_110);
     // Found on a tier without a price: that is its reason now. Not found: its tier is unknown.
@@ -1512,7 +1581,7 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
         response_ids(&page),
         ["resp-flex", "resp-short", "resp-long", "resp-gone"]
     );
-    assert_eq!(page["records"][2]["price_label"], PRICE_LABEL_FAST_LONG);
+    assert_eq!(page["records"][2]["price_label"], PRICE_LABEL_FAST_SHORT);
     assert!(page["records"][2]["charges"].is_array());
     assert_eq!(
         page["records"][3]["price_label"],

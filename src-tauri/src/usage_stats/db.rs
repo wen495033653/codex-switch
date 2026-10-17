@@ -835,7 +835,12 @@ pub(super) fn reprice_stored_record(
     if stored_cost.is_some() {
         return Ok(false);
     }
-    let cost = estimate_request_cost(&stored.model, &stored.usage, record.service_tier);
+    let cost = estimate_request_cost(
+        &stored.model,
+        &stored.usage,
+        record.service_tier,
+        &stored.owner.owner_type,
+    );
     if cost.price_label == stored_label {
         return Ok(false);
     }

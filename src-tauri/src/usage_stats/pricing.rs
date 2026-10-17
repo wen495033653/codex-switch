@@ -1,4 +1,4 @@
-use super::model::{EstimatedCost, ServiceTier, TokenPrices, TokenUsage};
+use super::model::{EstimatedCost, ServiceTier, TokenPrices, TokenUsage, OWNER_TYPE_SUBSCRIPTION};
 
 pub(super) const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
 
@@ -196,19 +196,19 @@ pub(super) fn is_priced_label(label: &str) -> bool {
     PRICED_LABELS.contains(&label)
 }
 
-/// Prices one API response: the tier it ran on, and long context when this request's input is
-/// above the threshold.
+/// Prices one API response: the tier it ran on and, outside a subscription, long context when
+/// this request's input is above the threshold. Codex on a ChatGPT subscription has only the
+/// standard and Fast rates, so its requests are never priced as long context; responses no
+/// owner matched are priced as API requests.
 pub(super) fn estimate_request_cost(
     model: &str,
     usage: &TokenUsage,
     tier: ServiceTier,
+    owner_type: &str,
 ) -> EstimatedCost {
-    price_tokens(
-        model,
-        usage,
-        tier,
-        usage.input_tokens > LONG_CONTEXT_THRESHOLD_TOKENS,
-    )
+    let long_context =
+        owner_type != OWNER_TYPE_SUBSCRIPTION && usage.input_tokens > LONG_CONTEXT_THRESHOLD_TOKENS;
+    price_tokens(model, usage, tier, long_context)
 }
 
 /// Prices usage summed over several requests whose sizes are unknown (the statistics kept
