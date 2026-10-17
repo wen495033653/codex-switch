@@ -97,7 +97,7 @@ export default function BillDetailDrawer({ ownerName, record, onClose }) {
             <p className="usage-bill-note">
               {record.duration_ms === null
                 ? t('会话记录里没有这次请求的输出项（例如上下文压缩），或会话文件已删除，算不出耗时。')
-                : t('总耗时是会话记录里请求发出到响应完成的时间。首 Token 是 Codex 日志里第一个输出项到达的时间，Codex 每个会话只保留最近约 1,000 行日志，较早的请求没有。输出速率 = 输出 token ÷（总耗时 − 首 Token）。')}
+                : t('总耗时是会话记录里请求发出到响应完成的时间。首 Token 是 Codex 日志里第一个输出项到达的时间。输出速率 = 输出 token ÷（总耗时 − 首 Token）。')}
             </p>
           </Section>
 

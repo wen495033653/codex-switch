@@ -173,7 +173,7 @@ const EN_TRANSLATIONS = {
   '首 Token（近似）': 'First token (approx.)',
   '输出速率': 'Output rate',
   '会话记录里没有这次请求的输出项（例如上下文压缩），或会话文件已删除，算不出耗时。': 'The session log has no output item for this request (a compaction, for example), or the session file was deleted, so its timing is unknown.',
-  '总耗时是会话记录里请求发出到响应完成的时间。首 Token 是 Codex 日志里第一个输出项到达的时间，Codex 每个会话只保留最近约 1,000 行日志，较早的请求没有。输出速率 = 输出 token ÷（总耗时 − 首 Token）。': 'Total duration runs from the request being sent to the response completing, as the session log records them. First token is when the first output item arrived according to Codex\'s log; Codex keeps only about the last 1,000 log lines of each session, so earlier requests have none. Output rate = output tokens ÷ (total duration − first token).',
+  '总耗时是会话记录里请求发出到响应完成的时间。首 Token 是 Codex 日志里第一个输出项到达的时间。输出速率 = 输出 token ÷（总耗时 − 首 Token）。': 'Total duration runs from the request being sent to the response completing, as the session log records them. First token is when the first output item arrived according to Codex\'s log. Output rate = output tokens ÷ (total duration − first token).',
   '新增 API': 'Add API',
   'API 配置列表': 'API configuration list',
   '开始时间 {time}': 'Started {time}',
