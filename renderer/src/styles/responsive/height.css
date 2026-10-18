@@ -1,6 +1,8 @@
+/* Each card height fits the tallest card content at that breakpoint's gaps (two quota rows and
+   today's token usage); a shorter card cuts the Token title off. */
 @media (max-height: 860px) {
   :root {
-    --account-card-height: 264px;
+    --account-card-height: 272px;
   }
 
   .navbar {
@@ -35,7 +37,7 @@
 
 @media (max-height: 720px) {
   :root {
-    --account-card-height: 252px;
+    --account-card-height: 268px;
   }
 
   .navbar {
