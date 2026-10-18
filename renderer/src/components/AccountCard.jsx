@@ -1,6 +1,8 @@
 import QuotaItem from './QuotaItem';
 import SubscriptionBadges from './SubscriptionBadges';
 import UsageStatsSummary from './UsageStatsSummary';
+import CardMoreMenu from './CardMoreMenu';
+import { IntelligenceRunningTag } from './IntelligencePanel';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, isAuthSessionInvalid, maskAccountDisplayName } from '../utils/auth';
 import { useI18n } from '../i18n';
@@ -56,7 +58,7 @@ function getAuthBadge(info, t, translateRuntimeText) {
     return null;
 }
 
-export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail, onTestIntelligence }) {
+export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail, onTestIntelligence, intelligenceProgress }) {
     const { t, translateRuntimeText } = useI18n();
     const info = parseAuthInfo(acc);
     const authBadge = getAuthBadge(info, t, translateRuntimeText);
@@ -106,6 +108,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                             {t('窗口运行中')}
                         </span>
                     )}
+                    {intelligenceProgress && <IntelligenceRunningTag progress={intelligenceProgress} />}
                 </div>
                 <div className="account-badges account-card-badges">
                     {planLabel && !isPersonalPlan && (
@@ -183,21 +186,6 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                     {!info.isApiMode && (
                         <button
                             type="button"
-                            className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
-                            title={openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此账号打开独立 Codex'))}
-                            aria-label={openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此账号打开独立 Codex'))}
-                            onClick={() => onOpenCodexAppInstance(accountId)}
-                            disabled={!accountId || openingAnyCodexApp}
-                        >
-                            <svg className={openingThisCodexApp ? 'icon-spin' : ''} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7.5h8.5A2.5 2.5 0 0 1 19 10v6.5A2.5 2.5 0 0 1 16.5 19H8a2.5 2.5 0 0 1-2.5-2.5V10A2.5 2.5 0 0 1 8 7.5Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.5 15.5H5A2.5 2.5 0 0 1 2.5 13V6.5A2.5 2.5 0 0 1 5 4h8.5A2.5 2.5 0 0 1 16 6.5V7" />
-                            </svg>
-                        </button>
-                    )}
-                    {!info.isApiMode && (
-                        <button
-                            type="button"
                             className="icon-btn"
                             title={t('查看 Refresh Token')}
                             aria-label={t('查看 Refresh Token')}
@@ -236,17 +224,17 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
                         </button>
                     )}
                     {!info.isApiMode && (
-                        <button
-                            type="button"
-                            className="icon-btn danger"
-                            title={t('删除')}
-                            aria-label={t('删除')}
-                            onClick={() => onDelete(acc)}
-                        >
-                            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12m-9 0V5.75A1.75 1.75 0 0 1 10.75 4h2.5A1.75 1.75 0 0 1 15 5.75V7m-7.75 0 .75 12.25A1.75 1.75 0 0 0 9.75 21h4.5A1.75 1.75 0 0 0 16 19.25L16.75 7M10 11v6m4-6v6" />
-                            </svg>
-                        </button>
+                        <CardMoreMenu
+                            items={[
+                                {
+                                    key: 'codex',
+                                    label: openingThisCodexApp ? t('正在打开 Codex') : t('打开独立 Codex'),
+                                    disabled: !accountId || openingAnyCodexApp,
+                                    onSelect: () => onOpenCodexAppInstance(accountId)
+                                },
+                                { key: 'delete', label: t('删除'), danger: true, onSelect: () => onDelete(acc) }
+                            ]}
+                        />
                     )}
                 </div>
             </div>

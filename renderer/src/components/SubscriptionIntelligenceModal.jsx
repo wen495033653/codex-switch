@@ -1,33 +1,64 @@
 import { useI18n } from '../i18n';
 import IntelligencePanel, { IntelligenceStartButton } from './IntelligencePanel';
 import Modal from './Modal';
+import ModelPicker from './ModelPicker';
+
+function modelListStatus(modelList, t, translateRuntimeText) {
+  if (modelList.loading) return { state: 'loading', text: t('正在获取模型列表'), title: '' };
+  if (modelList.error) {
+    return { state: 'error', text: t('模型列表获取失败'), title: translateRuntimeText(modelList.error) };
+  }
+  return {
+    state: 'success',
+    text: t('{count} 个可用模型（Codex {version}）', {
+      count: modelList.models.length,
+      version: modelList.clientVersion
+    }),
+    title: ''
+  };
+}
 
 export default function SubscriptionIntelligenceModal({
   accountName,
   model,
-  modelDraft,
+  modelList,
+  modelMenuOpen,
   onClose,
-  onModelDraftChange,
+  onModelSelect,
   onStart,
   onToggleTest,
   run,
   running,
-  selectedTestIds
+  selectedTestIds,
+  setModelMenuOpen
 }) {
-  const { t } = useI18n();
+  const { t, translateRuntimeText } = useI18n();
+  const status = modelListStatus(modelList, t, translateRuntimeText);
+  const options = modelList.models.includes(model) ? modelList.models : [model, ...modelList.models];
   return (
     <Modal title={t('{name} · 降智测试', { name: accountName })} width="760px" onClose={onClose}>
-      <label className="iq-model-field">
-        <span>{t('测试模型')}</span>
-        <input
-          value={modelDraft}
-          placeholder={model}
-          spellCheck={false}
-          disabled={running}
-          onChange={event => onModelDraftChange(event.target.value)}
-        />
-        <small>{t('用这个账号的 Codex 额度发题，和 Codex 走同一个接口')}</small>
-      </label>
+      <div className="api-check-controls">
+        <div className="api-check-model-field">
+          <span>{t('测试模型')}</span>
+          <ModelPicker
+            disabled={running}
+            onClose={() => setModelMenuOpen(false)}
+            onSelect={selected => {
+              onModelSelect(selected);
+              setModelMenuOpen(false);
+            }}
+            open={modelMenuOpen}
+            options={options}
+            setOpen={setModelMenuOpen}
+            value={model}
+          />
+          <div className="api-check-model-meta">
+            <div className={`api-check-model-status ${status.state}`} title={status.title || undefined}>
+              {status.text}
+            </div>
+          </div>
+        </div>
+      </div>
       <IntelligencePanel
         model={model}
         onToggleTest={onToggleTest}

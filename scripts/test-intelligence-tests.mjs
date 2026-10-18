@@ -6,6 +6,7 @@ import {
   finalAnswerNumber,
   gradeIntelligenceResponse,
   intelligenceSummary,
+  runningIntelligenceProgress,
   svgImageSource
 } from '../renderer/src/utils/intelligenceTests.js';
 
@@ -68,4 +69,11 @@ test('the summary covers the questions of the run, graded ones for the pass coun
 
   const pelicanOnly = { pelican: { loading: false, grade: { status: 'visual' } } };
   assert.deepEqual(intelligenceSummary(pelicanOnly), { tested: 1, finished: 1, graded: 0, passed: 0, done: true });
+
+  assert.equal(runningIntelligenceProgress(null), null);
+  assert.equal(runningIntelligenceProgress({ results: pelicanOnly }), null);
+  assert.deepEqual(
+    runningIntelligenceProgress({ results: { candy: { loading: true }, pelican: pelicanOnly.pelican } }),
+    { tested: 2, finished: 1, graded: 0, passed: 0, done: false }
+  );
 });

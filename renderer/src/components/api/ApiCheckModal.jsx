@@ -1,5 +1,6 @@
 import { useI18n } from '../../i18n';
 import Modal from '../Modal';
+import ModelPicker from '../ModelPicker';
 import IntelligencePanel, { IntelligenceStartButton } from '../IntelligencePanel';
 import ApiTestDetailContent, { ApiTestResponseBlock } from './ApiTestDetail';
 
@@ -41,51 +42,21 @@ export default function ApiCheckModal({
       <div className="api-check-controls">
         <div className="api-check-model-field">
           <span>{t('测试模型')}</span>
-          <div
-            className="api-check-model-picker"
-            onBlur={event => {
-              if (!event.currentTarget.contains(event.relatedTarget)) {
-                setModelDropdownOpen(false);
-                commitTestModelDraft(checkModalProfileId);
-              }
+          <ModelPicker
+            disabled={Boolean(detailTest && detailTest.loading)}
+            onClose={() => {
+              setModelDropdownOpen(false);
+              commitTestModelDraft(checkModalProfileId);
             }}
-          >
-            <button
-              type="button"
-              className="api-check-model-trigger"
-              disabled={Boolean(detailTest && detailTest.loading)}
-              onClick={() => setModelDropdownOpen(open => !open)}
-              aria-haspopup="listbox"
-              aria-expanded={modelDropdownOpen}
-            >
-              <span title={effectiveDetailModel}>{effectiveDetailModel}</span>
-              <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" />
-              </svg>
-            </button>
-            {modelDropdownOpen && !(detailTest && detailTest.loading) && (
-              <div className="api-check-model-menu" role="listbox">
-                {detailModelOptions.map(model => {
-                  const selected = model === effectiveDetailModel;
-                  return (
-                    <button
-                      key={model}
-                      type="button"
-                      className={`api-check-model-option ${selected ? 'selected' : ''}`}
-                      role="option"
-                      aria-selected={selected}
-                      onClick={() => {
-                        selectTestModelDraft(checkModalProfileId, model);
-                        setModelDropdownOpen(false);
-                      }}
-                    >
-                      {model}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+            onSelect={model => {
+              selectTestModelDraft(checkModalProfileId, model);
+              setModelDropdownOpen(false);
+            }}
+            open={modelDropdownOpen}
+            options={detailModelOptions}
+            setOpen={setModelDropdownOpen}
+            value={effectiveDetailModel}
+          />
           <div className="api-check-model-meta">
             <div className={`api-check-model-status ${modelsStatus.state}`}>
               {modelsStatus.text}

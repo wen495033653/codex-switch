@@ -1,5 +1,12 @@
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useI18n } from '../i18n';
-import { INTELLIGENCE_TESTS, intelligenceSummary, svgImageSource } from '../utils/intelligenceTests';
+import {
+  INTELLIGENCE_TESTS,
+  INTELLIGENCE_TESTS_DATE,
+  intelligenceSummary,
+  svgImageSource
+} from '../utils/intelligenceTests';
 import { formatExactTokens } from '../utils/usageStatsFormat';
 import { formatSeconds } from '../utils/usageBills';
 
@@ -11,6 +18,37 @@ const STATUS_LABELS = {
   empty: '未作答',
   error: '出错'
 };
+
+// Click to see it full size; click anywhere or press Esc to close.
+function SvgPreview({ svg }) {
+  const { t } = useI18n();
+  const [zoomed, setZoomed] = useState(false);
+  const source = svgImageSource(svg);
+  const alt = t('鹈鹕变形测试生成的图');
+
+  useEffect(() => {
+    if (!zoomed) return undefined;
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setZoomed(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [zoomed]);
+
+  return (
+    <>
+      <button type="button" className="iq-svg-button" title={t('点击放大')} onClick={() => setZoomed(true)}>
+        <img className="iq-svg" src={source} alt={alt} />
+      </button>
+      {zoomed && createPortal(
+        <div className="iq-svg-zoom" role="dialog" aria-modal="true" aria-label={alt} onClick={() => setZoomed(false)}>
+          <img src={source} alt={alt} />
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
 
 function IntelligenceResult({ result }) {
   const { language, t, translateRuntimeText } = useI18n();
@@ -30,9 +68,7 @@ function IntelligenceResult({ result }) {
 
   return (
     <>
-      {grade.status === 'visual' && (
-        <img className="iq-svg" src={svgImageSource(grade.svg)} alt={t('鹈鹕变形测试生成的图')} />
-      )}
+      {grade.status === 'visual' && <SvgPreview svg={grade.svg} />}
       {(grade.status === 'pass' || grade.status === 'fail') && grade.answer && (
         <div className="iq-line">
           <em>{t('回答')}</em>
@@ -71,6 +107,10 @@ function IntelligenceRow({ checked, disabled, onToggle, result, test }) {
       </div>
       <div className="iq-row-body">
         <div className="iq-row-summary">{t(test.summary)}</div>
+        <details className="iq-prompt">
+          <summary>{t('题目原文')}</summary>
+          <pre>{test.prompt}</pre>
+        </details>
         {test.expected && (
           <div className="iq-line">
             <em>{t('标准答案')}</em>
@@ -101,7 +141,10 @@ export default function IntelligencePanel({ model, onToggleTest, run, running, s
     <div className="iq-panel">
       <div className="iq-summary">
         <span>{summaryText(run, t)}</span>
-        {run && run.model !== model && <span className="iq-model-note">{t('结果来自 {model}', { model: run.model })}</span>}
+        <span className="iq-summary-side">
+          {run && run.model !== model && <span className="iq-model-note">{t('结果来自 {model}', { model: run.model })}</span>}
+          <span className="iq-bank-date">{t('题库更新于 {date}', { date: INTELLIGENCE_TESTS_DATE })}</span>
+        </span>
       </div>
       {INTELLIGENCE_TESTS.map(test => (
         <IntelligenceRow
@@ -134,5 +177,17 @@ export function IntelligenceStartButton({ disabled, onStart, run, running, selec
     >
       {label}
     </button>
+  );
+}
+
+// Shown on the card while its test runs, so a closed dialog still tells that answers are coming.
+export function IntelligenceRunningTag({ progress }) {
+  const { t } = useI18n();
+  const counts = { finished: progress.finished, tested: progress.tested };
+  return (
+    <span className="iq-running-tag" title={t('降智测试进行中，已完成 {finished}/{tested} 题', counts)}>
+      <span className="iq-running-spinner" aria-hidden="true" />
+      <span>{t('降智测试 {finished}/{tested}', counts)}</span>
+    </span>
   );
 }

@@ -117,6 +117,41 @@ export function getApiTestResponseStatusLabel(response, t) {
   return status ? `HTTP ${status}${statusText}` : (response.error ? t('请求失败') : t('无状态'));
 }
 
+function parseJsonObject(text) {
+  if (typeof text !== 'string' || !text) return null;
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// What the Responses check got back, for the summary above the raw request and response.
+export function getApiResponsesSummary(test) {
+  const response = test && (test.responsesResponse || test.chatResponse);
+  if (!response || !Number.isFinite(response.status)) return null;
+  const payload = response.json && typeof response.json === 'object'
+    ? response.json
+    : parseJsonObject(response.body);
+  const outputText = payload && Array.isArray(payload.output)
+    ? payload.output
+      .flatMap(item => (item && Array.isArray(item.content) ? item.content : []))
+      .filter(part => part && part.type === 'output_text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join('\n')
+      .trim()
+    : '';
+  const totalTokens = test.tokenUsage && Number.isFinite(test.tokenUsage.totalTokens)
+    ? test.tokenUsage.totalTokens
+    : null;
+  return {
+    model: payload && typeof payload.model === 'string' ? payload.model : '',
+    outputText,
+    totalTokens
+  };
+}
+
 export function getApiModelsDetailLabel(test, t) {
   const response = test && test.modelsResponse ? test.modelsResponse : null;
   if (!response) return '/models';

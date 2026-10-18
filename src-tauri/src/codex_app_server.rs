@@ -309,6 +309,43 @@ fn validate_thread_path(root: &Path, path: &Path, id: &str) -> Result<(), String
     Ok(())
 }
 
+/// The `major.minor.patch` of the Codex CLI that Codex Desktop ships, e.g. `0.163.0` for
+/// `codex-cli 0.163.0-alpha.10.2`.
+pub(crate) fn codex_desktop_cli_version() -> Result<String, String> {
+    let cli_path = cached_codex_desktop_cli()?;
+    let mut command = Command::new(&cli_path);
+    command.arg("--version");
+    hide_command_window(&mut command);
+    let output = command.output().map_err(|err| {
+        format!(
+            "运行 Codex Desktop CLI --version 失败 {}: {err}",
+            cli_path.display()
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        return Err(format!(
+            "Codex Desktop CLI --version 退出码 {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    parse_codex_cli_version(&stdout)
+        .ok_or_else(|| format!("无法解析 Codex Desktop CLI 版本: {}", stdout.trim()))
+}
+
+fn parse_codex_cli_version(text: &str) -> Option<String> {
+    let token = text
+        .split_whitespace()
+        .find(|part| part.starts_with(|c: char| c.is_ascii_digit()))?;
+    let core = token.split(['-', '+']).next()?;
+    let parts = core.split('.').collect::<Vec<_>>();
+    let numeric = parts
+        .iter()
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    (parts.len() == 3 && numeric).then(|| core.to_string())
+}
+
 fn cached_codex_desktop_cli() -> Result<PathBuf, String> {
     let source = codex_desktop_cli_source_path()?;
     let cache_dir = app_data_dir()?.join(APP_SERVER_CACHE_DIR);
@@ -888,6 +925,20 @@ mod tests {
         let error = parse_thread_list_page(&root, false, result).unwrap_err();
 
         assert!(error.contains("不属于当前 CODEX_HOME"));
+    }
+
+    #[test]
+    fn reads_the_cli_version_without_its_prerelease() {
+        assert_eq!(
+            parse_codex_cli_version("codex-cli 0.163.0-alpha.10.2\n").as_deref(),
+            Some("0.163.0")
+        );
+        assert_eq!(
+            parse_codex_cli_version("codex-cli 1.2.3").as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(parse_codex_cli_version("codex-cli"), None);
+        assert_eq!(parse_codex_cli_version("codex-cli 1.2"), None);
     }
 
     #[test]

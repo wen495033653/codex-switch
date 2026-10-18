@@ -2,10 +2,10 @@ import { useState } from 'react';
 import AccountCard from './AccountCard';
 import Pagination from './Pagination';
 import SubscriptionIntelligenceModal from './SubscriptionIntelligenceModal';
-import { useIntelligenceTests } from '../hooks';
-import { DEFAULT_API_TEST_MODEL, normalizeApiTestModelInput } from '../utils/apiPrecheck';
+import { useSubscriptionModels } from '../hooks';
+import { DEFAULT_API_TEST_MODEL } from '../utils/apiPrecheck';
 import { getAccountId } from '../utils/auth';
-import { intelligenceSummary } from '../utils/intelligenceTests';
+import { runningIntelligenceProgress } from '../utils/intelligenceTests';
 import { useI18n } from '../i18n';
 
 const ACCOUNT_FILTERS = ['ALL', 'FREE', 'PLUS', 'TEAM', 'PRO'];
@@ -16,6 +16,7 @@ export default function AccountsPage({
     currentAccountId,
     currentItems,
     filter,
+    intelligence,
     maskAccountName,
     onAddAccount,
     onDeleteAccount,
@@ -44,16 +45,17 @@ export default function AccountsPage({
 }) {
     const { t } = useI18n();
     const [intelligenceTarget, setIntelligenceTarget] = useState(null);
-    const [intelligenceModelDraft, setIntelligenceModelDraft] = useState(DEFAULT_API_TEST_MODEL);
+    const [intelligenceModel, setIntelligenceModel] = useState(DEFAULT_API_TEST_MODEL);
+    const [modelMenuOpen, setModelMenuOpen] = useState(false);
+    const modelList = useSubscriptionModels(intelligenceTarget ? intelligenceTarget.accountId : '');
     const {
         intelligenceRuns,
         runSubscriptionIntelligenceTests,
         selectedTestIds,
         toggleTestSelected
-    } = useIntelligenceTests();
-    const intelligenceModel = normalizeApiTestModelInput(intelligenceModelDraft);
+    } = intelligence;
     const intelligenceRun = intelligenceTarget ? intelligenceRuns[intelligenceTarget.accountId] || null : null;
-    const intelligenceRunning = Boolean(intelligenceRun && !intelligenceSummary(intelligenceRun.results).done);
+    const intelligenceRunning = Boolean(runningIntelligenceProgress(intelligenceRun));
 
     return (
         <>
@@ -144,6 +146,7 @@ export default function AccountsPage({
                                 onViewRefreshToken={onViewRefreshToken}
                                 onOpenUsageStatsDetail={onOpenUsageStatsDetail}
                                 onTestIntelligence={setIntelligenceTarget}
+                                intelligenceProgress={runningIntelligenceProgress(intelligenceRuns[accountId])}
                             />
                         );
                     })}
@@ -167,14 +170,19 @@ export default function AccountsPage({
                 <SubscriptionIntelligenceModal
                     accountName={intelligenceTarget.name}
                     model={intelligenceModel}
-                    modelDraft={intelligenceModelDraft}
-                    onClose={() => setIntelligenceTarget(null)}
-                    onModelDraftChange={setIntelligenceModelDraft}
+                    modelList={modelList}
+                    modelMenuOpen={modelMenuOpen}
+                    onClose={() => {
+                        setIntelligenceTarget(null);
+                        setModelMenuOpen(false);
+                    }}
+                    onModelSelect={setIntelligenceModel}
                     onStart={() => runSubscriptionIntelligenceTests(intelligenceTarget.accountId, intelligenceModel)}
                     onToggleTest={toggleTestSelected}
                     run={intelligenceRun}
                     running={intelligenceRunning}
                     selectedTestIds={selectedTestIds}
+                    setModelMenuOpen={setModelMenuOpen}
                 />
             )}
         </>

@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import AccountsPage from './AccountsPage';
 import ApiModePage from './ApiModePage';
 import CodexPage from './CodexPage';
+import { useIntelligenceTests } from '../hooks';
 import { useSessionManagerState } from '../hooks/useSessionManagerState';
 import SessionManagerPage from './SessionManagerPage';
 import SettingsPage from './SettingsPage';
@@ -16,13 +18,24 @@ export default function AppMainView({
   viewMode
 }) {
   const sessionManagerState = useSessionManagerState();
+  // Here so a running 降智 test and the precheck dialog's tab outlive a page switch.
+  const apiIntelligence = useIntelligenceTests();
+  const subscriptionIntelligence = useIntelligenceTests();
+  const [apiCheckTab, setApiCheckTab] = useState('precheck');
 
   if (viewMode === 'settings') {
     return <SettingsPage {...settingsPageProps} />;
   }
 
   if (viewMode === 'api') {
-    return <ApiModePage {...apiModePageProps} />;
+    return (
+      <ApiModePage
+        {...apiModePageProps}
+        checkTab={apiCheckTab}
+        intelligence={apiIntelligence}
+        onCheckTabChange={setApiCheckTab}
+      />
+    );
   }
 
   if (viewMode === 'codex') {
@@ -37,5 +50,5 @@ export default function AppMainView({
     return <SessionManagerPage {...sessionManagerPageProps} sessionState={sessionManagerState} />;
   }
 
-  return <AccountsPage {...accountsPageProps} />;
+  return <AccountsPage {...accountsPageProps} intelligence={subscriptionIntelligence} />;
 }

@@ -1,5 +1,6 @@
 import { useI18n } from '../../i18n';
-import { getApiCheckTimeText, getApiLastAvailableTimeText, getApiTestState, getApiTestStateLabel, formatApiTestJson, getApiTestResponseBody, getApiTestResponseStatusLabel } from '../../utils/apiTestView';
+import { getApiCheckTimeText, getApiLastAvailableTimeText, getApiResponsesSummary, getApiTestState, getApiTestStateLabel, formatApiTestJson, getApiTestResponseBody, getApiTestResponseStatusLabel } from '../../utils/apiTestView';
+import { formatExactTokens } from '../../utils/usageStatsFormat';
 
 export function ApiTestResponseBlock({ response, title }) {
   const { t } = useI18n();
@@ -50,12 +51,47 @@ function ApiTestResponsesBlock({ request, response }) {
   );
 }
 
+function ApiResponsesSummary({ response, summary, testModel }) {
+  const { language, t } = useI18n();
+  const modelDiffers = Boolean(summary.model && summary.model !== testModel);
+  const items = [
+    { key: 'status', label: t('HTTP 状态'), value: getApiTestResponseStatusLabel(response, t) },
+    {
+      key: 'model',
+      label: t('返回模型'),
+      value: summary.model || '—',
+      warning: modelDiffers,
+      title: modelDiffers ? t('返回的模型名和测试模型不同') : summary.model
+    },
+    { key: 'answer', label: t('回答'), value: summary.outputText || '—', title: summary.outputText },
+    {
+      key: 'tokens',
+      label: 'Token',
+      value: summary.totalTokens === null ? '—' : formatExactTokens(summary.totalTokens, language)
+    }
+  ];
+
+  return (
+    <div className="api-test-summary">
+      {items.map(item => (
+        <div key={item.key} className={`api-test-summary-item ${item.warning ? 'warning' : ''}`} title={item.title || undefined}>
+          <em>{item.label}</em>
+          <span>{item.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ApiTestDetailContent({ test }) {
   const { language, t, translateRuntimeText } = useI18n();
   const state = getApiTestState(test);
   const timeText = getApiCheckTimeText(test, t, language);
   const lastAvailableTimeText = getApiLastAvailableTimeText(test, t, language);
   const shouldShowMessage = test.loading || !test.ok;
+  const request = test.responsesRequest || test.chatRequest;
+  const response = test.responsesResponse || test.chatResponse;
+  const summary = getApiResponsesSummary(test);
 
   return (
     <div className="api-test-detail-content">
@@ -77,10 +113,14 @@ export default function ApiTestDetailContent({ test }) {
         </div>
       )}
 
-      <ApiTestResponsesBlock
-        request={test.responsesRequest || test.chatRequest}
-        response={test.responsesResponse || test.chatResponse}
-      />
+      {summary && <ApiResponsesSummary response={response} summary={summary} testModel={test.testModel} />}
+
+      {(request || response) && (
+        <details className="api-test-raw" open={!test.ok}>
+          <summary>{t('原始请求与响应')}</summary>
+          <ApiTestResponsesBlock request={request} response={response} />
+        </details>
+      )}
     </div>
   );
 }

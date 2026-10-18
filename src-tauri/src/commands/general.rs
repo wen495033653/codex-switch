@@ -1,11 +1,12 @@
 use super::apply_complete_api_mode_profile_if_active;
 use crate::{
     accounts::{
-        access_token_from_account, account_id_from_account, find_store_account, http_error_message,
-        post_codex_prompt, store_payload,
+        access_token_from_account, account_id_from_account, find_store_account, get_codex_models,
+        http_error_message, post_codex_prompt, store_payload, INTERACTIVE_REQUEST_TIMEOUT_MS,
     },
     app_log::{account_label, log_event_once, truncate_for_log},
     blocking_task::run_blocking,
+    codex_app_server::codex_desktop_cli_version,
     codex_config::ensure_config_file,
     codex_launcher::apply_codex_proxy_env_state_to_settings,
     desktop::{sync_system_auto_start, validate_system_auto_start},
@@ -468,6 +469,62 @@ pub(crate) async fn test_subscription_prompt(
         subscription_prompt_test(profile_id.trim(), &model, &input, max_output_tokens)
     })
     .await
+}
+
+/// The models a subscription account can test: what Codex Desktop's own CLI version gets listed
+/// for that login, without the hidden ones.
+#[tauri::command]
+pub(crate) async fn list_subscription_models(profile_id: String) -> Result<Value, String> {
+    run_blocking("读取订阅模型列表", move || {
+        subscription_models(profile_id.trim())
+    })
+    .await
+}
+
+fn subscription_models(profile_id: &str) -> Result<Value, String> {
+    let account = find_store_account(profile_id)?;
+    let account_id = account_id_from_account(&account)?;
+    let access_token = access_token_from_account(&account);
+    if access_token.is_empty() {
+        return Err("账号缺少 access_token".to_string());
+    }
+    let listed = codex_desktop_cli_version().and_then(|client_version| {
+        get_codex_models(
+            &access_token,
+            &account_id,
+            &client_version,
+            INTERACTIVE_REQUEST_TIMEOUT_MS,
+        )
+        .map(|models| (client_version, models))
+    });
+    let (client_version, models) = listed.map_err(|error| {
+        log_event_once(
+            "subscription_models_error",
+            json!({
+                "account": account_label(profile_id),
+                "error": error,
+                "handling": "shown_in_dialog"
+            }),
+        );
+        error
+    })?;
+    let mut visible = models
+        .iter()
+        .filter(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
+        .filter_map(|model| {
+            let slug = model.get("slug").and_then(Value::as_str)?;
+            let priority = model
+                .get("priority")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MAX);
+            Some((priority, slug.to_string()))
+        })
+        .collect::<Vec<_>>();
+    visible.sort();
+    Ok(json!({
+        "clientVersion": client_version,
+        "models": visible.into_iter().map(|(_, slug)| slug).collect::<Vec<_>>()
+    }))
 }
 
 fn validate_prompt_test(input: &str, max_output_tokens: u32) -> Result<(), String> {

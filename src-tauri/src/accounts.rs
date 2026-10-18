@@ -47,7 +47,7 @@ pub(crate) use store::{
     sync_auth_file_if_active, update_active_store_account, update_store_account,
 };
 pub(crate) use usage::{
-    build_error_state, error_state_is_auth_rejected, get_subscription, get_usage,
+    build_error_state, error_state_is_auth_rejected, get_codex_models, get_subscription, get_usage,
     http_error_message, normalize_custom, post_codex_prompt, set_auth_state,
     set_subscription_state, set_usage_result, BACKGROUND_REQUEST_TIMEOUT_MS,
     INTERACTIVE_REQUEST_TIMEOUT_MS,

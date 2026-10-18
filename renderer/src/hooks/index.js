@@ -17,5 +17,6 @@ export { useRefreshTokenModal } from './useRefreshTokenModal';
 export { useRefreshAllFlow } from './useRefreshAllFlow';
 export { useRemoteControlStatus } from './useRemoteControlStatus';
 export { useSettingsActions } from './useSettingsActions';
+export { useSubscriptionModels } from './useSubscriptionModels';
 export { useToast } from './useToast';
 export { useUpdateFlow } from './useUpdateFlow';

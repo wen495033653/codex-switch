@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useApiProfilePagination, useIntelligenceTests } from '../hooks';
-import { intelligenceSummary } from '../utils/intelligenceTests';
+import { useApiProfilePagination } from '../hooks';
+import { runningIntelligenceProgress } from '../utils/intelligenceTests';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import {
   DEFAULT_API_TEST_MODEL,
@@ -24,13 +24,18 @@ import {
   getApiModelsDetailLabel,
 } from '../utils/apiTestView';
 import ApiCheckModal from './api/ApiCheckModal';
+import CardMoreMenu from './CardMoreMenu';
+import { IntelligenceRunningTag } from './IntelligencePanel';
 
 export default function ApiModePage({
   activeApiProfileId,
   apiModeActive,
   apiProfiles,
   apiTestResults,
+  checkTab,
+  intelligence,
   onAddApiProfile,
+  onCheckTabChange,
   onDeleteApiProfile,
   onEditApiProfile,
   onOpenUsageStatsDetail,
@@ -51,13 +56,12 @@ export default function ApiModePage({
   const [checkModalProfileId, setCheckModalProfileId] = useState(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelsDetailsOpen, setModelsDetailsOpen] = useState(false);
-  const [checkTab, setCheckTab] = useState('precheck');
   const {
     intelligenceRuns,
     runApiIntelligenceTests,
     selectedTestIds,
     toggleTestSelected
-  } = useIntelligenceTests();
+  } = intelligence;
   const profiles = Array.isArray(apiProfiles) && apiProfiles.length > 0
     ? apiProfiles
     : [];
@@ -93,7 +97,7 @@ export default function ApiModePage({
   const detailTestMatchesModel = Boolean(detailTest && detailTest.testModel === effectiveDetailModel);
   const visibleDetailTest = detailTestMatchesModel ? detailTest : null;
   const intelligenceRun = checkModalProfileId ? intelligenceRuns[checkModalProfileId] || null : null;
-  const intelligenceRunning = Boolean(intelligenceRun && !intelligenceSummary(intelligenceRun.results).done);
+  const intelligenceRunning = Boolean(runningIntelligenceProgress(intelligenceRun));
   const detailPlaceholderText = detailTest && !detailTestMatchesModel
     ? t('更改测试模型后需要重新预检')
     : t('准备预检');
@@ -152,7 +156,6 @@ export default function ApiModePage({
     const signature = getApiTestSignature(profile.base_url || '', profile.api_key || '', testModel);
     const existingTest = baseUrlTestsRef.current[profileId] || null;
     setCheckModalProfileId(profileId);
-    setCheckTab('precheck');
     setModelDropdownOpen(false);
     setModelsDetailsOpen(false);
     updateTestModelDraft(profileId, testModel);
@@ -225,6 +228,7 @@ export default function ApiModePage({
                     ? rawTestForThisProfile
                     : null;
                   const testLoading = Boolean(testForThisProfile && testForThisProfile.loading);
+                  const intelligenceProgress = runningIntelligenceProgress(intelligenceRuns[profileId]);
                   const testResultState = testForThisProfile ? getApiTestState(testForThisProfile) : 'idle';
                   const testTagText = testForThisProfile ? getApiTestStateLabel(testForThisProfile, t) : '';
                   const testTimeText = getApiCheckTimeText(testForThisProfile, t, language);
@@ -267,6 +271,7 @@ export default function ApiModePage({
                               <span>{testTagText}</span>
                             </span>
                           )}
+                          {intelligenceProgress && <IntelligenceRunningTag progress={intelligenceProgress} />}
                         </div>
                       </div>
 
@@ -297,7 +302,7 @@ export default function ApiModePage({
                         <div className="action-btns">
                           <button
                             type="button"
-                            className={`api-profile-card-test-button ${testLoading ? 'is-loading' : ''}`}
+                            className={`card-text-button ${testLoading ? 'is-loading' : ''}`}
                             title={testButtonTitle}
                             aria-label={t('预检 API')}
                             aria-busy={testLoading}
@@ -309,26 +314,10 @@ export default function ApiModePage({
                           </button>
                           <button
                             type="button"
-                            className={`icon-btn ${codexAppInstanceRunning ? 'codex-app-instance-running' : ''}`}
-                            title={configured ? (openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此 API 打开独立 Codex'))) : t('配置未完整')}
-                            aria-label={openingThisCodexApp ? t('正在打开 Codex') : (codexAppInstanceRunning ? t('打开独立 Codex 窗口') : t('用此 API 打开独立 Codex'))}
-                            disabled={!configured || openingAnyCodexApp}
-                            onClick={() => onOpenCodexAppInstance(profileId)}
-                          >
-                            <svg className={openingThisCodexApp ? 'icon-spin' : ''} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7.5h8.5A2.5 2.5 0 0 1 19 10v6.5A2.5 2.5 0 0 1 16.5 19H8a2.5 2.5 0 0 1-2.5-2.5V10A2.5 2.5 0 0 1 8 7.5Z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.5 15.5H5A2.5 2.5 0 0 1 2.5 13V6.5A2.5 2.5 0 0 1 5 4h8.5A2.5 2.5 0 0 1 16 6.5V7" />
-                            </svg>
-                          </button>
-                          <button
-                            type="button"
                             className="icon-btn"
-                            title={t('编辑此配置')}
-                            aria-label={t('编辑此配置')}
-                            onClick={event => {
-                              event.stopPropagation();
-                              onEditApiProfile(profileId);
-                            }}
+                            title={t('编辑')}
+                            aria-label={t('编辑')}
+                            onClick={() => onEditApiProfile(profileId)}
                           >
                             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m16.862 4.487 1.688-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" />
@@ -347,18 +336,25 @@ export default function ApiModePage({
                               ⚡
                             </button>
                           )}
-                          <button
-                            type="button"
-                            className="icon-btn danger"
-                            title={deleteTitle}
-                            aria-label={deleteTitle}
-                            disabled={profiles.length <= 1 || savingApiMode || switching}
-                            onClick={() => onDeleteApiProfile(profileId)}
-                          >
-                            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12m-9 0V5.75A1.75 1.75 0 0 1 10.75 4h2.5A1.75 1.75 0 0 1 15 5.75V7m-7.75 0 .75 12.25A1.75 1.75 0 0 0 9.75 21h4.5A1.75 1.75 0 0 0 16 19.25L16.75 7M10 11v6m4-6v6" />
-                            </svg>
-                          </button>
+                          <CardMoreMenu
+                            items={[
+                              {
+                                key: 'codex',
+                                label: openingThisCodexApp ? t('正在打开 Codex') : t('打开独立 Codex'),
+                                disabled: !configured || openingAnyCodexApp,
+                                title: configured ? '' : t('配置未完整'),
+                                onSelect: () => onOpenCodexAppInstance(profileId)
+                              },
+                              {
+                                key: 'delete',
+                                label: t('删除'),
+                                danger: true,
+                                disabled: profiles.length <= 1 || savingApiMode || switching,
+                                title: deleteTitle,
+                                onSelect: () => onDeleteApiProfile(profileId)
+                              }
+                            ]}
+                          />
                         </div>
                       </div>
                     </div>
@@ -407,7 +403,7 @@ export default function ApiModePage({
           runIntelligenceTests={runApiIntelligenceTests}
           selectedTestIds={selectedTestIds}
           selectTestModelDraft={selectTestModelDraft}
-          setCheckTab={setCheckTab}
+          setCheckTab={onCheckTabChange}
           setModelDropdownOpen={setModelDropdownOpen}
           setModelsDetailsOpen={setModelsDetailsOpen}
           toggleTestSelected={toggleTestSelected}

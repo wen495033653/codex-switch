@@ -43,32 +43,6 @@ html[data-theme="light"] .api-profile-card-value {
   color: var(--text-primary);
 }
 
-html[data-theme="light"] .api-profile-card-test-button {
-  background: rgba(26, 28, 31, 0.04);
-  border-color: var(--border-default);
-  color: var(--text-secondary);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
-}
-
-html[data-theme="light"] .api-profile-card-test-button:hover:not(:disabled) {
-  background: #f3f3f3;
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-
-html[data-theme="light"] .api-profile-card-test-button:active:not(:disabled) {
-  background: #ededed;
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-
-html[data-theme="light"] .api-profile-card-test-button.is-loading {
-  background: #e5f3ff;
-  border-color: #99ceff;
-  color: #0285ff;
-  box-shadow: inset 0 0 0 1px rgba(51, 156, 255, 0.08);
-}
-
 html[data-theme="light"] .api-check-profile,
 html[data-theme="light"] .api-check-model-field,
 html[data-theme="light"] .api-check-placeholder {

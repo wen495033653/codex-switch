@@ -210,6 +210,7 @@ fn main() {
             commands::general::test_api_base_url,
             commands::general::test_api_prompt,
             commands::general::test_subscription_prompt,
+            commands::general::list_subscription_models,
             commands::general::open_external_url,
             commands::general::open_codex_config_toml,
             commands::general::list_brand_voice_files,

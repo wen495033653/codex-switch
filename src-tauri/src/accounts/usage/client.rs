@@ -26,6 +26,7 @@ const USAGE_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
 };
 
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 
 const SUBSCRIPTION_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
     url: "https://chatgpt.com/backend-api/subscriptions",
@@ -236,6 +237,46 @@ pub(crate) fn get_subscription(
         return Err(SUBSCRIPTION_ENDPOINT.failure("订阅响应缺少 active_until"));
     }
     Ok(subscription)
+}
+
+/// The models Codex lists for this login. The backend leaves out every model whose
+/// `minimal_client_version` is above `client_version`: on 2026-10-18 `0.76.0` got an empty list
+/// and `0.163.0` got nine models.
+pub(crate) fn get_codex_models(
+    access_token: &str,
+    account_id: &str,
+    client_version: &str,
+    timeout_ms: u64,
+) -> Result<Vec<Value>, String> {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("client_version", client_version)
+        .finish();
+    let response = blocking_client(timeout_ms, false)
+        .and_then(|client| {
+            client
+                .get(format!("{CODEX_MODELS_URL}?{query}"))
+                .bearer_auth(access_token)
+                .header("Accept", "application/json")
+                .header("User-Agent", CODEX_USER_AGENT)
+                .header("chatgpt-account-id", account_id)
+                .send()
+        })
+        .map_err(|err| format!("模型列表请求失败: {}", http_error_message(err)))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|err| format!("读取模型列表失败: {}", http_error_message(err)))?;
+    if !status.is_success() {
+        let start = body.chars().take(300).collect::<String>();
+        return Err(format!("模型列表返回 HTTP {}: {start}", status.as_u16()));
+    }
+    let payload = serde_json::from_str::<Value>(&body)
+        .map_err(|err| format!("模型列表响应不是有效 JSON: {err}"))?;
+    payload
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| "模型列表响应缺少 models".to_string())
 }
 
 /// Sends one question to the Codex backend the way Codex does for a ChatGPT login. Checked

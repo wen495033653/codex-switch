@@ -98,6 +98,7 @@ const COMMAND_BINDINGS = {
     input: payload.input,
     maxOutputTokens: payload.maxOutputTokens
   })],
+  listSubscriptionModels: ['list_subscription_models', payload => ({ profileId: payload.profileId })],
   testSubscriptionPrompt: ['test_subscription_prompt', payload => ({
     profileId: payload.profileId,
     model: payload.model,
