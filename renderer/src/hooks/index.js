@@ -2,6 +2,7 @@ export { useAddAccountFlow } from './useAddAccountFlow';
 export { useAccountOperations } from './useAccountOperations';
 export { useAccountPagination } from './useAccountPagination';
 export { useAppBootstrap } from './useAppBootstrap';
+export { useApiIntelligenceTests } from './useApiIntelligenceTests';
 export { useApiModeDraft } from './useApiModeDraft';
 export { useAsyncPolling } from './useAsyncPolling';
 export { useApiProfilePagination } from './useApiProfilePagination';

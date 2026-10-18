@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useApiProfilePagination } from '../hooks';
+import { useApiIntelligenceTests, useApiProfilePagination } from '../hooks';
+import { intelligenceSummary } from '../utils/apiIntelligence';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import {
   DEFAULT_API_TEST_MODEL,
@@ -50,6 +51,8 @@ export default function ApiModePage({
   const [checkModalProfileId, setCheckModalProfileId] = useState(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelsDetailsOpen, setModelsDetailsOpen] = useState(false);
+  const [checkTab, setCheckTab] = useState('precheck');
+  const { intelligenceRuns, runIntelligenceTests } = useApiIntelligenceTests();
   const profiles = Array.isArray(apiProfiles) && apiProfiles.length > 0
     ? apiProfiles
     : [];
@@ -84,6 +87,8 @@ export default function ApiModePage({
   const modelsDetailLabel = getApiModelsDetailLabel(detailTest, t);
   const detailTestMatchesModel = Boolean(detailTest && detailTest.testModel === effectiveDetailModel);
   const visibleDetailTest = detailTestMatchesModel ? detailTest : null;
+  const intelligenceRun = checkModalProfileId ? intelligenceRuns[checkModalProfileId] || null : null;
+  const intelligenceRunning = Boolean(intelligenceRun && !intelligenceSummary(intelligenceRun.results).done);
   const detailPlaceholderText = detailTest && !detailTestMatchesModel
     ? t('更改测试模型后需要重新预检')
     : t('准备预检');
@@ -142,6 +147,7 @@ export default function ApiModePage({
     const signature = getApiTestSignature(profile.base_url || '', profile.api_key || '', testModel);
     const existingTest = baseUrlTestsRef.current[profileId] || null;
     setCheckModalProfileId(profileId);
+    setCheckTab('precheck');
     setModelDropdownOpen(false);
     setModelsDetailsOpen(false);
     updateTestModelDraft(profileId, testModel);
@@ -376,6 +382,7 @@ export default function ApiModePage({
       {checkModalProfileId && (
         <ApiCheckModal
           checkModalProfileId={checkModalProfileId}
+          checkTab={checkTab}
           closeCheckModal={closeCheckModal}
           commitTestModelDraft={commitTestModelDraft}
           detailModelOptions={detailModelOptions}
@@ -385,12 +392,16 @@ export default function ApiModePage({
           detailTest={detailTest}
           effectiveDetailModel={effectiveDetailModel}
           handleTestBaseUrl={handleTestBaseUrl}
+          intelligenceRun={intelligenceRun}
+          intelligenceRunning={intelligenceRunning}
           modelDropdownOpen={modelDropdownOpen}
           modelsDetailAvailable={modelsDetailAvailable}
           modelsDetailLabel={modelsDetailLabel}
           modelsDetailsOpen={modelsDetailsOpen}
           modelsStatus={modelsStatus}
+          runIntelligenceTests={runIntelligenceTests}
           selectTestModelDraft={selectTestModelDraft}
+          setCheckTab={setCheckTab}
           setModelDropdownOpen={setModelDropdownOpen}
           setModelsDetailsOpen={setModelsDetailsOpen}
           visibleDetailTest={visibleDetailTest}

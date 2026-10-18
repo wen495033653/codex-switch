@@ -1,9 +1,11 @@
 import { useI18n } from '../../i18n';
 import Modal from '../Modal';
+import ApiIntelligencePanel from './ApiIntelligencePanel';
 import ApiTestDetailContent, { ApiTestResponseBlock } from './ApiTestDetail';
 
 export default function ApiCheckModal({
   checkModalProfileId,
+  checkTab,
   closeCheckModal,
   commitTestModelDraft,
   detailModelOptions,
@@ -13,12 +15,16 @@ export default function ApiCheckModal({
   detailTest,
   effectiveDetailModel,
   handleTestBaseUrl,
+  intelligenceRun,
+  intelligenceRunning,
   modelDropdownOpen,
   modelsDetailAvailable,
   modelsDetailLabel,
   modelsDetailsOpen,
   modelsStatus,
+  runIntelligenceTests,
   selectTestModelDraft,
+  setCheckTab,
   setModelDropdownOpen,
   setModelsDetailsOpen,
   visibleDetailTest,
@@ -102,26 +108,54 @@ export default function ApiCheckModal({
         </div>
       )}
 
-      {visibleDetailTest ? (
+      <div className="nav-tabs api-check-tabs" role="tablist" aria-label={t('检查类型')}>
+        {[['precheck', '连通性预检'], ['intelligence', '降智测试']].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={checkTab === key}
+            className={`nav-item ${checkTab === key ? 'active' : ''}`}
+            onClick={() => setCheckTab(key)}
+          >
+            {t(label)}
+          </button>
+        ))}
+      </div>
+
+      {checkTab === 'intelligence' ? (
+        <ApiIntelligencePanel model={effectiveDetailModel} run={intelligenceRun} />
+      ) : visibleDetailTest ? (
         <ApiTestDetailContent test={visibleDetailTest} />
       ) : (
         <div className="api-check-placeholder">{detailPlaceholderText}</div>
       )}
 
       <div className="api-test-detail-actions">
-        <button
-          type="button"
-          className="btn btn-primary api-test-detail-retest-button"
-          disabled={!detailProfile || Boolean(detailTest && detailTest.loading)}
-          onClick={() => handleTestBaseUrl(
-            detailProfile,
-            checkModalProfileId,
-            detailProfile.name || (detailTest && detailTest.profileName) || checkModalProfileId,
-            effectiveDetailModel
-          )}
-        >
-          {t('重新预检')}
-        </button>
+        {checkTab === 'intelligence' ? (
+          <button
+            type="button"
+            className="btn btn-primary api-test-detail-retest-button"
+            disabled={!detailProfile || intelligenceRunning}
+            onClick={() => runIntelligenceTests(detailProfile, checkModalProfileId, effectiveDetailModel)}
+          >
+            {intelligenceRunning ? t('测试中…') : intelligenceRun ? t('重新测试') : t('开始测试')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-primary api-test-detail-retest-button"
+            disabled={!detailProfile || Boolean(detailTest && detailTest.loading)}
+            onClick={() => handleTestBaseUrl(
+              detailProfile,
+              checkModalProfileId,
+              detailProfile.name || (detailTest && detailTest.profileName) || checkModalProfileId,
+              effectiveDetailModel
+            )}
+          >
+            {t('重新预检')}
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-secondary api-test-detail-close-button"

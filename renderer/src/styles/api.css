@@ -491,7 +491,8 @@
   display: grid;
   gap: 12px;
   align-content: start;
-  max-height: min(680px, calc(100vh - 140px));
+  /* The modal's title, model picker, tabs and buttons take about 340px. */
+  max-height: min(640px, calc(100vh - 360px));
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -822,4 +823,134 @@
   width: 19px;
   height: 19px;
   fill: currentColor;
+}
+
+/* Precheck modal: connectivity check and downgrade test tabs. */
+
+.api-check-tabs {
+  margin-bottom: 12px;
+}
+
+.api-check-tabs .nav-item {
+  min-width: 96px;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+
+.api-iq-panel {
+  min-height: 0;
+  max-height: min(640px, calc(100vh - 360px));
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.api-iq-placeholder {
+  padding: 0 24px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.api-iq-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.api-iq-model-note {
+  color: var(--warning);
+}
+
+.api-iq-row {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  display: grid;
+  gap: 6px;
+}
+
+.api-iq-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.api-iq-row-title {
+  color: var(--text-heading);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.api-iq-status {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.api-iq-status.pass {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.api-iq-status.fail,
+.api-iq-status.empty,
+.api-iq-status.error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.api-iq-status.visual {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+}
+
+.api-iq-line {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.api-iq-line em {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-style: normal;
+}
+
+.api-iq-line span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.api-iq-error {
+  color: var(--danger);
+}
+
+.api-iq-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.api-iq-svg {
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: #ffffff;
 }

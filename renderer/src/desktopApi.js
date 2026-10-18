@@ -91,6 +91,13 @@ const COMMAND_BINDINGS = {
     apiKey: payload && payload.apiKey ? payload.apiKey : '',
     model: payload && payload.model ? payload.model : ''
   })],
+  testApiPrompt: ['test_api_prompt', payload => ({
+    baseUrl: payload.baseUrl,
+    apiKey: payload.apiKey,
+    model: payload.model,
+    input: payload.input,
+    maxOutputTokens: payload.maxOutputTokens
+  })],
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],

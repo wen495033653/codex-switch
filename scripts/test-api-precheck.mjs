@@ -54,7 +54,7 @@ test('the precheck calls the injected backend function and reports progress thro
       return { ok: true, message: 'fixture ok', stage: 'responses' };
     }
   });
-  assert.deepEqual(calls, [{ baseUrl: 'https://api.example.invalid/v1', apiKey: 'fixture-key', model: 'gpt-6-astra' }]);
+  assert.deepEqual(calls, [{ baseUrl: 'https://api.example.invalid/v1', apiKey: 'fixture-key', model: 'gpt-6.1-sol' }]);
   assert.deepEqual(updates, [true, false]);
   assert.equal(result.ok, true);
   assert.equal(result.message, 'fixture ok');

@@ -1,6 +1,7 @@
 use super::apply_complete_api_mode_profile_if_active;
 use crate::{
     accounts::{http_error_message, store_payload},
+    app_log::{log_event_once, truncate_for_log},
     blocking_task::run_blocking,
     codex_config::ensure_config_file,
     codex_launcher::apply_codex_proxy_env_state_to_settings,
@@ -222,7 +223,13 @@ fn open_external_url_impl(url: &str) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
-const DEFAULT_API_TEST_MODEL: &str = "gpt-6-astra";
+const DEFAULT_API_TEST_MODEL: &str = "gpt-6.1-sol";
+
+/// The most output one test question may ask for (the pelican SVG is the largest).
+const API_PROMPT_MAX_OUTPUT_TOKENS: u32 = 64_000;
+
+/// A reasoning model may think for minutes on a test question.
+const API_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 #[tauri::command]
 pub(crate) async fn test_api_base_url(
@@ -419,6 +426,149 @@ pub(crate) async fn test_api_base_url(
     .await
 }
 
+/// Sends one test question to the profile's Responses endpoint with the test model and returns
+/// what came back: the answer text, the token usage and how long it took. The questions and
+/// their grading live in the page (`utils/apiIntelligence.js`).
+#[tauri::command]
+pub(crate) async fn test_api_prompt(
+    base_url: String,
+    api_key: String,
+    model: Option<String>,
+    input: String,
+    max_output_tokens: u32,
+) -> Result<Value, String> {
+    let base_url = crate::api_config::normalize_api_base_url(&base_url)?;
+    let api_key = api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err("API Key 不能为空".to_string());
+    }
+    if input.trim().is_empty() {
+        return Err("测试题不能为空".to_string());
+    }
+    if max_output_tokens == 0 || max_output_tokens > API_PROMPT_MAX_OUTPUT_TOKENS {
+        return Err(format!(
+            "测试题的输出上限必须在 1 到 {API_PROMPT_MAX_OUTPUT_TOKENS} 之间: {max_output_tokens}"
+        ));
+    }
+    let model = normalize_api_test_model(model);
+    run_blocking("发送测试题", move || {
+        api_prompt_test(&base_url, &api_key, &model, &input, max_output_tokens)
+    })
+    .await
+}
+
+fn api_prompt_test(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    input: &str,
+    max_output_tokens: u32,
+) -> Result<Value, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(API_PROMPT_TIMEOUT)
+        .build()
+        .map_err(|err| format!("创建测试请求失败: {err}"))?;
+    let endpoint = api_test_endpoint(base_url, "responses");
+    let body = json!({
+        "model": model,
+        "input": input,
+        "max_output_tokens": max_output_tokens,
+        "stream": false
+    });
+    let started = std::time::Instant::now();
+    let sent = client
+        .post(&endpoint)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send();
+    let duration_ms = |started: std::time::Instant| {
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    };
+    let response = match sent {
+        Ok(response) => read_api_test_response(&endpoint, response)?,
+        Err(err) => {
+            let error = http_error_message(err);
+            log_event_once(
+                "api_prompt_test_error",
+                json!({
+                    "endpoint": endpoint,
+                    "model": model,
+                    "error": error,
+                    "handling": "shown_in_result"
+                }),
+            );
+            return Ok(json!({
+                "ok": false,
+                "model": model,
+                "durationMs": duration_ms(started),
+                "error": format!("测试请求失败: {error}")
+            }));
+        }
+    };
+    let duration_ms = duration_ms(started);
+    let status = u16_field(&response, "status");
+    let payload = response.get("json").filter(|value| !value.is_null());
+    let Some(payload) = payload.filter(|_| (200..300).contains(&status)) else {
+        let body_text = response.get("body").and_then(Value::as_str).unwrap_or("");
+        let error = if (200..300).contains(&status) {
+            "测试响应不是有效 JSON".to_string()
+        } else {
+            format!("测试请求返回 HTTP {status}")
+        };
+        log_event_once(
+            "api_prompt_test_error",
+            json!({
+                "endpoint": endpoint,
+                "model": model,
+                "status": status,
+                "body": truncate_for_log(body_text, 300),
+                "handling": "shown_in_result"
+            }),
+        );
+        return Ok(json!({
+            "ok": false,
+            "model": model,
+            "durationMs": duration_ms,
+            "httpStatus": status,
+            "error": error,
+            "body": truncate_for_log(body_text, 300)
+        }));
+    };
+    let usage = payload.get("usage").unwrap_or(&Value::Null);
+    Ok(json!({
+        "ok": true,
+        "model": model,
+        "durationMs": duration_ms,
+        "httpStatus": status,
+        "responseModel": payload.get("model"),
+        "responseStatus": payload.get("status"),
+        "incompleteReason": payload.pointer("/incomplete_details/reason"),
+        "outputText": response_output_text(payload),
+        "usage": {
+            "inputTokens": api_test_token_number(usage, "input_tokens"),
+            "outputTokens": api_test_token_number(usage, "output_tokens"),
+            "reasoningTokens": usage
+                .get("output_tokens_details")
+                .and_then(|details| api_test_token_number(details, "reasoning_tokens"))
+        }
+    }))
+}
+
+/// The answer text: every `output_text` part of the `message` items in `output`.
+fn response_output_text(payload: &Value) -> String {
+    let parts = payload
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("output_text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    parts.join("\n")
+}
+
 fn normalize_api_test_model(model: Option<String>) -> String {
     let value = model.unwrap_or_default().trim().to_string();
     if value.is_empty() {
@@ -563,12 +713,37 @@ mod api_test_model_tests {
 
     #[test]
     fn defaults_to_gpt6_without_overriding_explicit_models() {
-        assert_eq!(normalize_api_test_model(None), "gpt-6-astra");
-        assert_eq!(normalize_api_test_model(Some("  ".into())), "gpt-6-astra");
+        assert_eq!(normalize_api_test_model(None), "gpt-6.1-sol");
+        assert_eq!(normalize_api_test_model(Some("  ".into())), "gpt-6.1-sol");
         assert_eq!(
             normalize_api_test_model(Some(" custom-model ".into())),
             "custom-model"
         );
+    }
+}
+
+#[cfg(test)]
+mod api_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn the_answer_is_every_output_text_part_of_the_messages() {
+        let payload = json!({
+            "output": [
+                { "type": "reasoning", "summary": [] },
+                {
+                    "type": "message",
+                    "content": [
+                        { "type": "output_text", "text": "答案：29" },
+                        { "type": "refusal", "refusal": "no" }
+                    ]
+                },
+                { "type": "message", "content": [{ "type": "output_text", "text": "second" }] }
+            ]
+        });
+        assert_eq!(response_output_text(&payload), "答案：29\nsecond");
+        assert_eq!(response_output_text(&json!({ "output": [] })), "");
+        assert_eq!(response_output_text(&json!({})), "");
     }
 }
 
