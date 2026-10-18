@@ -1,6 +1,6 @@
-// GPT 降智 checks, sent with the precheck's test model. Answers are graded here; the pelican is
-// judged by eye. The questions are the ones linux.do uses: the candy puzzle, the pelican variant
-// and knowledge questions asked without web search.
+// GPT 降智 checks, sent with the test model through an API profile or a subscription account.
+// Answers are graded here; the pelican is judged by eye. The questions are the ones linux.do
+// uses: the candy puzzle, the pelican variant and knowledge questions asked without web search.
 
 const CANDY_PROMPT = [
   '在一个黑色的袋子里放有三种口味的糖果，每种糖果有两种不同的形状（圆形和五角星形，不同的形状靠手感可以分辨）。现已知不同口味的糖和不同形状的数量统计如下表。参赛者需要在活动前决定摸出的糖果数目，那么，最少取出多少个糖果才能保证手中同时拥有不同形状的苹果味和桃子味的糖？（同时手中有圆形苹果味匹配五角星桃子味糖果，或者有圆形桃子味匹配五角星苹果味糖果都满足要求）',
@@ -42,6 +42,8 @@ export const INTELLIGENCE_TESTS = [
   {
     id: 'candy',
     title: '糖果题',
+    category: '推理',
+    summary: '三种口味、两种形状（手感可分辨）的糖，最少摸几颗能保证凑成指定组合',
     // Shapes can be told apart by touch, so the draw is chosen by shape: 9 round (not all
     // watermelon) and 12 star (at least one peach, two apple). No split of 20 guarantees it.
     expected: '21',
@@ -55,6 +57,8 @@ export const INTELLIGENCE_TESTS = [
   {
     id: 'pelican',
     title: '鹈鹕变形',
+    category: '画图',
+    summary: '鹈鹕骑车在孙悟空开的飞机机翼上，托着骑北极熊打螺丝的秦始皇（SVG）',
     expected: '',
     maxOutputTokens: 32000,
     prompt: PELICAN_PROMPT,
@@ -65,7 +69,9 @@ export const INTELLIGENCE_TESTS = [
   },
   {
     id: 'thibault',
-    title: '知识库：Thibault Sottiaux',
+    title: 'Thibault Sottiaux',
+    category: '知识库',
+    summary: '不联网回答：X 上的 Thibault Sottiaux 是谁',
     expected: 'OpenAI（Codex 负责人）',
     maxOutputTokens: 4000,
     prompt: '不搜索网络回答：X 上的 Thibault Sottiaux 是谁？',
@@ -75,7 +81,9 @@ export const INTELLIGENCE_TESTS = [
   },
   {
     id: 'japan-pm',
-    title: '知识库：日本首相',
+    title: '日本首相',
+    category: '知识库',
+    summary: '不联网回答：当今的日本首相是谁',
     expected: '高市早苗',
     maxOutputTokens: 4000,
     prompt: '不联网搜索，直接告诉我当今的日本首相是谁',
@@ -89,7 +97,11 @@ export const INTELLIGENCE_TESTS = [
 // pelican, `empty` when the model gave no answer, `error` when the request failed.
 export function gradeIntelligenceResponse(test, response) {
   if (!response || response.ok !== true) {
-    return { status: 'error', answer: (response && response.error) || '' };
+    return {
+      status: 'error',
+      answer: (response && response.error) || '',
+      detail: (response && response.body) || ''
+    };
   }
   const text = String(response.outputText || '').trim();
   if (!text) {
@@ -101,10 +113,17 @@ export function gradeIntelligenceResponse(test, response) {
   return test.grade(text);
 }
 
+// Over the questions of one run, which are the ones that were ticked.
 export function intelligenceSummary(results) {
-  const graded = INTELLIGENCE_TESTS.filter(test => test.expected);
-  const passed = graded.filter(test => results && results[test.id] && results[test.id].grade
-    && results[test.id].grade.status === 'pass').length;
-  const done = INTELLIGENCE_TESTS.every(test => results && results[test.id] && !results[test.id].loading);
-  return { passed, total: graded.length, done };
+  const tested = INTELLIGENCE_TESTS.filter(test => results && results[test.id]);
+  const finished = tested.filter(test => !results[test.id].loading);
+  const graded = finished.filter(test => test.expected);
+  const passed = graded.filter(test => results[test.id].grade.status === 'pass').length;
+  return {
+    tested: tested.length,
+    finished: finished.length,
+    graded: graded.length,
+    passed,
+    done: finished.length === tested.length
+  };
 }

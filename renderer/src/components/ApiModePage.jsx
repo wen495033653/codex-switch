@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useApiIntelligenceTests, useApiProfilePagination } from '../hooks';
-import { intelligenceSummary } from '../utils/apiIntelligence';
+import { useApiProfilePagination, useIntelligenceTests } from '../hooks';
+import { intelligenceSummary } from '../utils/intelligenceTests';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import {
   DEFAULT_API_TEST_MODEL,
@@ -52,7 +52,12 @@ export default function ApiModePage({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelsDetailsOpen, setModelsDetailsOpen] = useState(false);
   const [checkTab, setCheckTab] = useState('precheck');
-  const { intelligenceRuns, runIntelligenceTests } = useApiIntelligenceTests();
+  const {
+    intelligenceRuns,
+    runApiIntelligenceTests,
+    selectedTestIds,
+    toggleTestSelected
+  } = useIntelligenceTests();
   const profiles = Array.isArray(apiProfiles) && apiProfiles.length > 0
     ? apiProfiles
     : [];
@@ -399,11 +404,13 @@ export default function ApiModePage({
           modelsDetailLabel={modelsDetailLabel}
           modelsDetailsOpen={modelsDetailsOpen}
           modelsStatus={modelsStatus}
-          runIntelligenceTests={runIntelligenceTests}
+          runIntelligenceTests={runApiIntelligenceTests}
+          selectedTestIds={selectedTestIds}
           selectTestModelDraft={selectTestModelDraft}
           setCheckTab={setCheckTab}
           setModelDropdownOpen={setModelDropdownOpen}
           setModelsDetailsOpen={setModelsDetailsOpen}
+          toggleTestSelected={toggleTestSelected}
           visibleDetailTest={visibleDetailTest}
         />
       )}

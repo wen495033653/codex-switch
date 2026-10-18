@@ -48,6 +48,7 @@ pub(crate) use store::{
 };
 pub(crate) use usage::{
     build_error_state, error_state_is_auth_rejected, get_subscription, get_usage,
-    http_error_message, normalize_custom, set_auth_state, set_subscription_state, set_usage_result,
-    BACKGROUND_REQUEST_TIMEOUT_MS, INTERACTIVE_REQUEST_TIMEOUT_MS,
+    http_error_message, normalize_custom, post_codex_prompt, set_auth_state,
+    set_subscription_state, set_usage_result, BACKGROUND_REQUEST_TIMEOUT_MS,
+    INTERACTIVE_REQUEST_TIMEOUT_MS,
 };

@@ -1,6 +1,11 @@
+import { useState } from 'react';
 import AccountCard from './AccountCard';
 import Pagination from './Pagination';
+import SubscriptionIntelligenceModal from './SubscriptionIntelligenceModal';
+import { useIntelligenceTests } from '../hooks';
+import { DEFAULT_API_TEST_MODEL, normalizeApiTestModelInput } from '../utils/apiPrecheck';
 import { getAccountId } from '../utils/auth';
+import { intelligenceSummary } from '../utils/intelligenceTests';
 import { useI18n } from '../i18n';
 
 const ACCOUNT_FILTERS = ['ALL', 'FREE', 'PLUS', 'TEAM', 'PRO'];
@@ -38,6 +43,17 @@ export default function AccountsPage({
     usageStatsBySubscription
 }) {
     const { t } = useI18n();
+    const [intelligenceTarget, setIntelligenceTarget] = useState(null);
+    const [intelligenceModelDraft, setIntelligenceModelDraft] = useState(DEFAULT_API_TEST_MODEL);
+    const {
+        intelligenceRuns,
+        runSubscriptionIntelligenceTests,
+        selectedTestIds,
+        toggleTestSelected
+    } = useIntelligenceTests();
+    const intelligenceModel = normalizeApiTestModelInput(intelligenceModelDraft);
+    const intelligenceRun = intelligenceTarget ? intelligenceRuns[intelligenceTarget.accountId] || null : null;
+    const intelligenceRunning = Boolean(intelligenceRun && !intelligenceSummary(intelligenceRun.results).done);
 
     return (
         <>
@@ -127,6 +143,7 @@ export default function AccountsPage({
                                 onDelete={onDeleteAccount}
                                 onViewRefreshToken={onViewRefreshToken}
                                 onOpenUsageStatsDetail={onOpenUsageStatsDetail}
+                                onTestIntelligence={setIntelligenceTarget}
                             />
                         );
                     })}
@@ -145,6 +162,21 @@ export default function AccountsPage({
                     totalPages={totalPages}
                 />
             </div>
+
+            {intelligenceTarget && (
+                <SubscriptionIntelligenceModal
+                    accountName={intelligenceTarget.name}
+                    model={intelligenceModel}
+                    modelDraft={intelligenceModelDraft}
+                    onClose={() => setIntelligenceTarget(null)}
+                    onModelDraftChange={setIntelligenceModelDraft}
+                    onStart={() => runSubscriptionIntelligenceTests(intelligenceTarget.accountId, intelligenceModel)}
+                    onToggleTest={toggleTestSelected}
+                    run={intelligenceRun}
+                    running={intelligenceRunning}
+                    selectedTestIds={selectedTestIds}
+                />
+            )}
         </>
     );
 }

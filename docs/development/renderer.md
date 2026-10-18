@@ -14,13 +14,21 @@
 
 ## 降智测试（2026-10-18）
 
-- **位置。** API 卡片的「预检」弹窗分成「连通性预检」「降智测试」两页，顶部的测试模型共用（默认 `gpt-6.1-sol`，前端 `utils/apiPrecheck.js` 和后端 `commands/general.rs` 同一个值）。降智测试要几十秒到几分钟、会花 token，所以不放在卡片上一键运行：先由「预检」确认连得通，再切到降智页点「开始测试」。底部按钮跟着当前页变。
-- **题目**（L 站讨论 GPT 降智常用的三类，`utils/apiIntelligence.js`）：糖果题；鹈鹕变形（鹈鹕骑车在孙悟空开的飞机机翼上、托着骑北极熊打螺丝的秦始皇，生成 SVG 由人目测）；不联网的知识题两道：X 上的 Thibault Sottiaux 是谁（回答里出现 OpenAI 或 Codex 算通过），当今日本首相（出现「高市」算通过）。L 站反映「日本首相」偶有不稳定，结果以总体为参考。
+- **入口。** API 卡片的「预检」弹窗分成「连通性预检」「降智测试」两页，顶部的测试模型共用；订阅账号卡片操作栏的第一个按钮（烧瓶图标，和 API 卡片的「预检」同一位置）打开同样的题目清单，测试模型是输入框，留空时用默认值。两处默认都是 `gpt-6.1-sol`（前端 `utils/apiPrecheck.js` 和后端 `commands/general.rs` 同一个值）。降智测试要几十秒到几分钟、会花 token 或订阅额度，所以不在卡片上一键运行。
+- **题目清单**（`components/IntelligencePanel.jsx`）。四道题各占一行：勾选框、题名、题型（推理 / 画图 / 知识库）、自动判分或需目测、题目要点和标准答案；测完后状态和回答显示在同一行。勾选只决定下一轮发哪些题，默认全选，在页面内记住；按钮写明题数，一题都没勾时禁用。原因：最初是一段居中的长句说明，开始前看不出会测哪些题，用户反馈可读性差。
+- **题目**（L 站讨论 GPT 降智常用的三类，`utils/intelligenceTests.js`）：糖果题；鹈鹕变形（鹈鹕骑车在孙悟空开的飞机机翼上、托着骑北极熊打螺丝的秦始皇，生成 SVG 由人目测）；不联网的知识题两道：X 上的 Thibault Sottiaux 是谁（回答里出现 OpenAI 或 Codex 算通过），当今日本首相（出现「高市」算通过）。L 站反映「日本首相」偶有不稳定，结果以总体为参考。
 - **糖果题的标准答案是 21。** 题里写明形状靠手感可以分辨，所以可以按形状分别摸：9 个圆形不可能全是西瓜味（圆形西瓜只有 8 个），12 个五角星里至少有 1 个桃子、2 个苹果，任何情况下都凑成一组；20 颗的任何分法都保证不了。29 是忽略手感条件时的答案（不凑成组合最多能摸到 28 颗），正是这道题的陷阱。最初版本把 29 当成标准答案，会把正确回答判为未通过；2026-10-18 用真实订阅账号测试时，gpt-6.1-sol 在默认（medium）和 high 推理下都答 21 并给出上面的推导，复核后改正。
-- **发送。** 四道题同时发出，每道一次 `test_api_prompt`（`POST /responses`，不带 reasoning 参数，超时 300 秒，输出上限分别 16K / 32K / 4K / 4K），哪道先回来先显示；重新测试会作废上一轮还没回来的结果。结果只留在本次会话，不保存。请求失败返回 `ok: false` 和原因，同时记 `api_prompt_test_error`（endpoint、模型、HTTP 状态和响应开头）。
+- **发送。** 勾选的题同时发出，每道一次请求，超时 300 秒，输出上限分别 16K / 32K / 4K / 4K，不带 reasoning 参数（用后端默认；订阅接口回报为 medium）。API 配置走 `test_api_prompt`（`POST {base_url}/responses`，`stream: false`）。订阅账号走 `test_subscription_prompt`：从 accounts.json 取这个账号的 access_token，按 Codex 用 ChatGPT 登录时的方式发到 `https://chatgpt.com/backend-api/codex/responses`（`accounts/usage/client.rs` 的 `post_codex_prompt`），读完 SSE 后取结束事件（`response.completed` / `response.incomplete` / `response.failed`）里的 `response`，返回和 API 相同的结构。只用 access_token，不交换 refresh_token；token 被拒时直接显示错误，过期前的更换由后台刷新器负责。
+- **订阅接口的要求**（2026-10-18 用真实账号逐项试出）：`input` 必须是列表（字符串返回 `Input must be a list`），`store` 必须是 false，`stream` 必须是 true；不需要 `instructions`；`max_output_tokens` 生效，超出时结束事件是 `response.incomplete`，`incomplete_details.reason` 为 `max_output_tokens`；不支持的模型返回 HTTP 400 `{"detail":"The '…' model is not supported when using Codex with a ChatGPT account."}`。
+- **结果与失败。** 哪道先回来先显示；重新测试会作废上一轮还没回来的结果。结果只在离开页面前保留，不保存。请求失败返回 `ok: false`、原因和响应开头（300 字符），行里显示原因，下面显示响应原文；同时记 `api_prompt_test_error`（endpoint、模型、HTTP 状态、响应开头）或 `subscription_prompt_test_error`（账号前 8 位、模型、HTTP 状态、响应开头）。
 - **SVG 显示。** 用 `<img src="data:image/svg+xml,…">`：图片上下文里 SVG 不执行脚本、不加载外部资源。
 
-验证：`scripts/test-api-intelligence.mjs` 5 个测试（最终答案的提取、四道题的判分、鹈鹕只展示不判分、请求失败与未作答的区分、汇总只算三道自动判分题）；`cargo test` 覆盖 Responses 输出文字的提取和默认模型。渲染检查（替身后端）：默认模型为 gpt-6.1-sol，四道题以各自的输出上限并行发出，先回来的先显示，测试中按钮禁用；答错、HTTP 502 分别显示「未通过」「出错」；SVG 正常显示，其中的 `<script>` 没有执行；1024×900、900×700 下弹窗不超出窗口，结果区内部滚动；中英文、深浅色正常。没有对真实 API 发过测试题（会消耗 token），真实中转的回答格式和耗时未验证。
+验证：
+
+- 离线：`scripts/test-intelligence-tests.mjs` 5 个测试（最终答案的提取、四道题的判分、鹈鹕只展示不判分、请求失败带响应原文与未作答的区分、汇总只算这一轮的题）；`cargo test` 覆盖 Responses 输出文字的提取、默认模型、SSE 结束事件的三种情况和缺少结束事件、`error` 事件。
+- 真实运行（2026-10-18，用一个真实订阅账号，临时测试直接调用 `subscription_prompt_test`，验证后删除）：「只回复 OK」返回 `OK`，4.1 秒，输出 5 token；不存在的模型返回 `ok: false`、HTTP 400 和上面的 detail；糖果题 26.6 秒、输出 1050 token（推理 694），答 21。另用同一账号直接请求接口试出上面的参数要求，high 推理的糖果题也答 21。
+- 渲染检查（替身后端，虚构账号）：两个入口都显示四行清单，默认全选，按钮显示「开始测试（4 题）」；订阅入口按被点的账号发 4 次 `testSubscriptionPrompt`（profileId、模型、各自的输出上限正确），API 入口发 4 次 `testApiPrompt`；测试中按钮、勾选框和模型输入框禁用，摘要显示「测试中…（2/4）」这样的进度；取消两题后只发两题，没勾选时按钮禁用；HTTP 400 显示「出错」、原因和响应原文；模型留空时用 gpt-6.1-sol；SVG 里的 `<script>` 没有执行。两个弹窗在 1024×900、900×700 下都不超出窗口，清单内部滚动、不横向溢出；英文和浅色主题正常；没有 console 警告或错误。
+- 未验证：API 中转上的真实回答格式和耗时（会消耗 token）；订阅账号 access_token 被拒（401）时的界面（没有制造过期 token）。
 
 ## 逐条账单页（2026-10-17）
 

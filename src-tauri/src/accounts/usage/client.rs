@@ -25,6 +25,8 @@ const USAGE_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
     failure_code: "usage_sync_failed",
 };
 
+const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+
 const SUBSCRIPTION_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
     url: "https://chatgpt.com/backend-api/subscriptions",
     path: "/backend-api/subscriptions",
@@ -234,6 +236,38 @@ pub(crate) fn get_subscription(
         return Err(SUBSCRIPTION_ENDPOINT.failure("订阅响应缺少 active_until"));
     }
     Ok(subscription)
+}
+
+/// Sends one question to the Codex backend the way Codex does for a ChatGPT login. Checked
+/// against a live account on 2026-10-18: the backend rejects a string `input`, `store: true`
+/// and `stream: false`, and honours `max_output_tokens`; the answer comes back as
+/// server-sent events.
+pub(crate) fn post_codex_prompt(
+    access_token: &str,
+    account_id: &str,
+    model: &str,
+    input: &str,
+    max_output_tokens: u32,
+    timeout_ms: u64,
+) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    blocking_client(timeout_ms, false)?
+        .post(CODEX_RESPONSES_URL)
+        .bearer_auth(access_token)
+        .header("Accept", "text/event-stream")
+        .header("User-Agent", CODEX_USER_AGENT)
+        .header("chatgpt-account-id", account_id)
+        .json(&serde_json::json!({
+            "model": model,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": input }]
+            }],
+            "max_output_tokens": max_output_tokens,
+            "store": false,
+            "stream": true
+        }))
+        .send()
 }
 
 #[cfg(test)]

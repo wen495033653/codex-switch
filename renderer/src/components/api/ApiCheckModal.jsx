@@ -1,6 +1,6 @@
 import { useI18n } from '../../i18n';
 import Modal from '../Modal';
-import ApiIntelligencePanel from './ApiIntelligencePanel';
+import IntelligencePanel, { IntelligenceStartButton } from '../IntelligencePanel';
 import ApiTestDetailContent, { ApiTestResponseBlock } from './ApiTestDetail';
 
 export default function ApiCheckModal({
@@ -23,10 +23,12 @@ export default function ApiCheckModal({
   modelsDetailsOpen,
   modelsStatus,
   runIntelligenceTests,
+  selectedTestIds,
   selectTestModelDraft,
   setCheckTab,
   setModelDropdownOpen,
   setModelsDetailsOpen,
+  toggleTestSelected,
   visibleDetailTest,
 }) {
   const { t } = useI18n();
@@ -124,7 +126,13 @@ export default function ApiCheckModal({
       </div>
 
       {checkTab === 'intelligence' ? (
-        <ApiIntelligencePanel model={effectiveDetailModel} run={intelligenceRun} />
+        <IntelligencePanel
+          model={effectiveDetailModel}
+          onToggleTest={toggleTestSelected}
+          run={intelligenceRun}
+          running={intelligenceRunning}
+          selectedTestIds={selectedTestIds}
+        />
       ) : visibleDetailTest ? (
         <ApiTestDetailContent test={visibleDetailTest} />
       ) : (
@@ -133,14 +141,13 @@ export default function ApiCheckModal({
 
       <div className="api-test-detail-actions">
         {checkTab === 'intelligence' ? (
-          <button
-            type="button"
-            className="btn btn-primary api-test-detail-retest-button"
-            disabled={!detailProfile || intelligenceRunning}
-            onClick={() => runIntelligenceTests(detailProfile, checkModalProfileId, effectiveDetailModel)}
-          >
-            {intelligenceRunning ? t('测试中…') : intelligenceRun ? t('重新测试') : t('开始测试')}
-          </button>
+          <IntelligenceStartButton
+            disabled={!detailProfile}
+            onStart={() => runIntelligenceTests(detailProfile, checkModalProfileId, effectiveDetailModel)}
+            run={intelligenceRun}
+            running={intelligenceRunning}
+            selectedCount={selectedTestIds.length}
+          />
         ) : (
           <button
             type="button"

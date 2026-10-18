@@ -1,7 +1,10 @@
 use super::apply_complete_api_mode_profile_if_active;
 use crate::{
-    accounts::{http_error_message, store_payload},
-    app_log::{log_event_once, truncate_for_log},
+    accounts::{
+        access_token_from_account, account_id_from_account, find_store_account, http_error_message,
+        post_codex_prompt, store_payload,
+    },
+    app_log::{account_label, log_event_once, truncate_for_log},
     blocking_task::run_blocking,
     codex_config::ensure_config_file,
     codex_launcher::apply_codex_proxy_env_state_to_settings,
@@ -229,7 +232,7 @@ const DEFAULT_API_TEST_MODEL: &str = "gpt-6.1-sol";
 const API_PROMPT_MAX_OUTPUT_TOKENS: u32 = 64_000;
 
 /// A reasoning model may think for minutes on a test question.
-const API_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const PROMPT_TEST_TIMEOUT_MS: u64 = 300_000;
 
 #[tauri::command]
 pub(crate) async fn test_api_base_url(
@@ -442,6 +445,32 @@ pub(crate) async fn test_api_prompt(
     if api_key.is_empty() {
         return Err("API Key 不能为空".to_string());
     }
+    validate_prompt_test(&input, max_output_tokens)?;
+    let model = normalize_api_test_model(model);
+    run_blocking("发送测试题", move || {
+        api_prompt_test(&base_url, &api_key, &model, &input, max_output_tokens)
+    })
+    .await
+}
+
+/// The same test question sent with a subscription account, through the Codex backend Codex
+/// itself uses with that login. Returns what `test_api_prompt` returns.
+#[tauri::command]
+pub(crate) async fn test_subscription_prompt(
+    profile_id: String,
+    model: Option<String>,
+    input: String,
+    max_output_tokens: u32,
+) -> Result<Value, String> {
+    validate_prompt_test(&input, max_output_tokens)?;
+    let model = normalize_api_test_model(model);
+    run_blocking("发送测试题", move || {
+        subscription_prompt_test(profile_id.trim(), &model, &input, max_output_tokens)
+    })
+    .await
+}
+
+fn validate_prompt_test(input: &str, max_output_tokens: u32) -> Result<(), String> {
     if input.trim().is_empty() {
         return Err("测试题不能为空".to_string());
     }
@@ -450,11 +479,11 @@ pub(crate) async fn test_api_prompt(
             "测试题的输出上限必须在 1 到 {API_PROMPT_MAX_OUTPUT_TOKENS} 之间: {max_output_tokens}"
         ));
     }
-    let model = normalize_api_test_model(model);
-    run_blocking("发送测试题", move || {
-        api_prompt_test(&base_url, &api_key, &model, &input, max_output_tokens)
-    })
-    .await
+    Ok(())
+}
+
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn api_prompt_test(
@@ -465,7 +494,7 @@ fn api_prompt_test(
     max_output_tokens: u32,
 ) -> Result<Value, String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(API_PROMPT_TIMEOUT)
+        .timeout(std::time::Duration::from_millis(PROMPT_TEST_TIMEOUT_MS))
         .build()
         .map_err(|err| format!("创建测试请求失败: {err}"))?;
     let endpoint = api_test_endpoint(base_url, "responses");
@@ -481,9 +510,6 @@ fn api_prompt_test(
         .bearer_auth(api_key)
         .json(&body)
         .send();
-    let duration_ms = |started: std::time::Instant| {
-        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-    };
     let response = match sent {
         Ok(response) => read_api_test_response(&endpoint, response)?,
         Err(err) => {
@@ -500,12 +526,12 @@ fn api_prompt_test(
             return Ok(json!({
                 "ok": false,
                 "model": model,
-                "durationMs": duration_ms(started),
+                "durationMs": elapsed_ms(started),
                 "error": format!("测试请求失败: {error}")
             }));
         }
     };
-    let duration_ms = duration_ms(started);
+    let duration_ms = elapsed_ms(started);
     let status = u16_field(&response, "status");
     let payload = response.get("json").filter(|value| !value.is_null());
     let Some(payload) = payload.filter(|_| (200..300).contains(&status)) else {
@@ -534,8 +560,142 @@ fn api_prompt_test(
             "body": truncate_for_log(body_text, 300)
         }));
     };
+    Ok(prompt_test_answer(model, duration_ms, status, payload))
+}
+
+fn subscription_prompt_test(
+    profile_id: &str,
+    model: &str,
+    input: &str,
+    max_output_tokens: u32,
+) -> Result<Value, String> {
+    let account = find_store_account(profile_id)?;
+    let account_id = account_id_from_account(&account)?;
+    let access_token = access_token_from_account(&account);
+    if access_token.is_empty() {
+        return Err("账号缺少 access_token".to_string());
+    }
+    let failure = SubscriptionPromptFailure { profile_id, model };
+    let started = std::time::Instant::now();
+    let sent = post_codex_prompt(
+        &access_token,
+        &account_id,
+        model,
+        input,
+        max_output_tokens,
+        PROMPT_TEST_TIMEOUT_MS,
+    );
+    let response = match sent {
+        Ok(response) => response,
+        Err(err) => {
+            let error = format!("测试请求失败: {}", http_error_message(err));
+            return Ok(failure.result(elapsed_ms(started), None, error, None));
+        }
+    };
+    let status = response.status().as_u16();
+    let body = match response.text() {
+        Ok(body) => body,
+        Err(err) => {
+            let error = format!("读取测试响应失败: {}", http_error_message(err));
+            return Ok(failure.result(elapsed_ms(started), Some(status), error, None));
+        }
+    };
+    let duration_ms = elapsed_ms(started);
+    if !(200..300).contains(&status) {
+        let error = format!("测试请求返回 HTTP {status}");
+        return Ok(failure.result(duration_ms, Some(status), error, Some(&body)));
+    }
+    let payload = match codex_stream_final_response(&body) {
+        Ok(payload) => payload,
+        Err(error) => return Ok(failure.result(duration_ms, Some(status), error, None)),
+    };
+    if payload.get("status").and_then(Value::as_str) == Some("failed") {
+        let detail = payload
+            .get("error")
+            .map(Value::to_string)
+            .unwrap_or_default();
+        let error = "测试回答失败".to_string();
+        return Ok(failure.result(duration_ms, Some(status), error, Some(&detail)));
+    }
+    Ok(prompt_test_answer(model, duration_ms, status, &payload))
+}
+
+struct SubscriptionPromptFailure<'a> {
+    profile_id: &'a str,
+    model: &'a str,
+}
+
+impl SubscriptionPromptFailure<'_> {
+    /// Logs the failure and returns it as the question's result.
+    fn result(
+        &self,
+        duration_ms: u64,
+        http_status: Option<u16>,
+        error: String,
+        body: Option<&str>,
+    ) -> Value {
+        let body = body.map(|text| truncate_for_log(text, 300));
+        log_event_once(
+            "subscription_prompt_test_error",
+            json!({
+                "account": account_label(self.profile_id),
+                "model": self.model,
+                "status": http_status,
+                "error": error,
+                "body": body,
+                "handling": "shown_in_result"
+            }),
+        );
+        json!({
+            "ok": false,
+            "model": self.model,
+            "durationMs": duration_ms,
+            "httpStatus": http_status,
+            "error": error,
+            "body": body
+        })
+    }
+}
+
+/// The `response` of the event that ends a Codex stream: `response.completed`,
+/// `response.incomplete` or `response.failed`.
+fn codex_stream_final_response(body: &str) -> Result<Value, String> {
+    let events = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+        .collect::<Vec<_>>();
+    let event_type = |event: &Value| {
+        event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    for event in events.iter().rev() {
+        match event_type(event).as_str() {
+            "response.completed" | "response.incomplete" | "response.failed" => {
+                return event
+                    .get("response")
+                    .filter(|response| response.is_object())
+                    .cloned()
+                    .ok_or_else(|| format!("测试流的 {} 事件缺少 response", event_type(event)));
+            }
+            "error" => return Err(format!("测试流返回错误: {event}")),
+            _ => {}
+        }
+    }
+    Err(format!(
+        "测试流没有结束事件（共 {} 个事件，最后一个是 {}）",
+        events.len(),
+        events.last().map(event_type).unwrap_or_default()
+    ))
+}
+
+/// A question that got an answer: the answer text, the token usage and how long it took.
+fn prompt_test_answer(model: &str, duration_ms: u64, status: u16, payload: &Value) -> Value {
     let usage = payload.get("usage").unwrap_or(&Value::Null);
-    Ok(json!({
+    json!({
         "ok": true,
         "model": model,
         "durationMs": duration_ms,
@@ -551,7 +711,7 @@ fn api_prompt_test(
                 .get("output_tokens_details")
                 .and_then(|details| api_test_token_number(details, "reasoning_tokens"))
         }
-    }))
+    })
 }
 
 /// The answer text: every `output_text` part of the `message` items in `output`.
@@ -744,6 +904,89 @@ mod api_prompt_tests {
         assert_eq!(response_output_text(&payload), "答案：29\nsecond");
         assert_eq!(response_output_text(&json!({ "output": [] })), "");
         assert_eq!(response_output_text(&json!({})), "");
+    }
+
+    fn sse(events: &[Value]) -> String {
+        events
+            .iter()
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {event}\n\n",
+                    event["type"].as_str().unwrap()
+                )
+            })
+            .collect()
+    }
+
+    // Shapes as the Codex backend sent them on 2026-10-18.
+    #[test]
+    fn the_answer_comes_from_the_event_that_ends_the_stream() {
+        let completed = json!({
+            "status": "completed",
+            "model": "gpt-6.1-sol",
+            "output": [{ "type": "message", "content": [{ "type": "output_text", "text": "OK" }] }],
+            "usage": {
+                "input_tokens": 9,
+                "output_tokens": 5,
+                "output_tokens_details": { "reasoning_tokens": 0 }
+            }
+        });
+        let body = sse(&[
+            json!({ "type": "response.created", "response": { "status": "in_progress" } }),
+            json!({ "type": "response.output_text.delta", "delta": "OK" }),
+            json!({ "type": "response.completed", "response": completed }),
+        ]);
+        let answer = prompt_test_answer(
+            "gpt-6.1-sol",
+            2100,
+            200,
+            &codex_stream_final_response(&body).unwrap(),
+        );
+        assert_eq!(answer["ok"], true);
+        assert_eq!(answer["outputText"], "OK");
+        assert_eq!(answer["responseModel"], "gpt-6.1-sol");
+        assert_eq!(answer["usage"]["outputTokens"], 5);
+        assert_eq!(answer["usage"]["reasoningTokens"], 0);
+
+        let incomplete = sse(&[json!({
+            "type": "response.incomplete",
+            "response": { "status": "incomplete", "incomplete_details": { "reason": "max_output_tokens" } }
+        })]);
+        let answer = prompt_test_answer(
+            "m",
+            1,
+            200,
+            &codex_stream_final_response(&incomplete).unwrap(),
+        );
+        assert_eq!(answer["incompleteReason"], "max_output_tokens");
+
+        let failed = sse(&[json!({
+            "type": "response.failed",
+            "response": { "status": "failed", "error": { "code": "server_error", "message": "boom" } }
+        })]);
+        assert_eq!(
+            codex_stream_final_response(&failed).unwrap()["status"],
+            "failed"
+        );
+    }
+
+    #[test]
+    fn a_stream_without_its_end_event_is_an_error() {
+        let body = sse(&[
+            json!({ "type": "response.created", "response": {} }),
+            json!({ "type": "response.output_text.delta", "delta": "O" }),
+        ]);
+        assert_eq!(
+            codex_stream_final_response(&body).unwrap_err(),
+            "测试流没有结束事件（共 2 个事件，最后一个是 response.output_text.delta）"
+        );
+        let error = sse(&[json!({ "type": "error", "message": "bad" })]);
+        assert!(codex_stream_final_response(&error)
+            .unwrap_err()
+            .starts_with("测试流返回错误: "));
+        assert!(codex_stream_final_response("")
+            .unwrap_err()
+            .starts_with("测试流没有结束事件（共 0 个事件"));
     }
 }
 

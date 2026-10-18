@@ -50,7 +50,8 @@ TODO(verify): `show_codex_app_instance` 在 worker 线程调用 `SetForegroundWi
 
 - 大页面按“控制器 + 视图区块 + 纯函数”组织。控制器管状态、后端调用和事件；视图区块只接收 props；纯函数放 `utils/`。
   - 会话管理：控制器 `components/SessionManagerPage.jsx`，视图区块在 `components/session/`，纯函数在 `utils/sessionManager.js`，跨页面保留的状态在 `hooks/useSessionManagerState.js`。
-  - API 模式：控制器 `components/ApiModePage.jsx`，测试结果的展示在 `components/api/`，整理与格式化在 `utils/apiTestView.js`。降智测试的题目和判分在 `utils/apiIntelligence.js`，发题和结果状态在 `hooks/useApiIntelligenceTests.js`，展示在 `components/api/ApiIntelligencePanel.jsx`。
+  - API 模式：控制器 `components/ApiModePage.jsx`，测试结果的展示在 `components/api/`，整理与格式化在 `utils/apiTestView.js`。
+  - 降智测试（API 配置和订阅账号共用）：题目和判分在 `utils/intelligenceTests.js`，发题、勾选和结果状态在 `hooks/useIntelligenceTests.js`，题目清单在 `components/IntelligencePanel.jsx`；API 入口在 `components/api/ApiCheckModal.jsx`，订阅入口是 `components/SubscriptionIntelligenceModal.jsx`，由 `components/AccountsPage.jsx` 打开。
   - `App.jsx` 只做装配；Codex 多实例的状态与操作在 `hooks/useCodexAppInstances.js`。
 - 视图区块自己调用 `useI18n()`，不通过 props 传 `t`；其余依赖都走 props。
 - `utils/errors.js` 引用 `i18n` 属于对基础层的依赖，不算越界。

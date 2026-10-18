@@ -147,6 +147,7 @@ const EVENT_MESSAGES: &[(&str, &str)] = &[
     ),
     ("usage_stats_auto_refresh_error", "token 统计后台刷新失败"),
     ("api_prompt_test_error", "API 测试题请求失败"),
+    ("subscription_prompt_test_error", "订阅测试题请求失败"),
     ("session_sync_error", "会话 provider 同步失败"),
     ("session_sync_preflight_error", "会话 provider 预检查失败"),
     (

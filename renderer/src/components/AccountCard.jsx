@@ -56,7 +56,7 @@ function getAuthBadge(info, t, translateRuntimeText) {
     return null;
 }
 
-export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail }) {
+export default function AccountCard({ acc, isCurrent, refreshing, switching, usageStats, maskAccountName, onSwitch, onOpenCodexAppInstance, openingCodexAppTarget, runningCodexAppInstances, onRefresh, onDelete, onViewRefreshToken, onOpenUsageStatsDetail, onTestIntelligence }) {
     const { t, translateRuntimeText } = useI18n();
     const info = parseAuthInfo(acc);
     const authBadge = getAuthBadge(info, t, translateRuntimeText);
@@ -166,6 +166,20 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
 
             <div className="account-card-footer">
                 <div className="action-btns">
+                    {!info.isApiMode && (
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            title={t('降智测试')}
+                            aria-label={t('降智测试')}
+                            onClick={() => onTestIntelligence({ accountId, name: displayName })}
+                            disabled={!accountId}
+                        >
+                            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3h6m-5 0v6.5l-5.2 8.7A1.8 1.8 0 0 0 6.35 21h11.3a1.8 1.8 0 0 0 1.55-2.8L14 9.5V3M7.5 15h9" />
+                            </svg>
+                        </button>
+                    )}
                     {!info.isApiMode && (
                         <button
                             type="button"

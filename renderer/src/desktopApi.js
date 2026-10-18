@@ -98,6 +98,12 @@ const COMMAND_BINDINGS = {
     input: payload.input,
     maxOutputTokens: payload.maxOutputTokens
   })],
+  testSubscriptionPrompt: ['test_subscription_prompt', payload => ({
+    profileId: payload.profileId,
+    model: payload.model,
+    input: payload.input,
+    maxOutputTokens: payload.maxOutputTokens
+  })],
   openExternalUrl: ['open_external_url', url => ({ url })],
   openCodexConfigToml: ['open_codex_config_toml'],
   listBrandVoiceFiles: ['list_brand_voice_files'],
