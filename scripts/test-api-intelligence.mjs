@@ -13,15 +13,16 @@ const byId = Object.fromEntries(INTELLIGENCE_TESTS.map(item => [item.id, item]))
 const answered = outputText => ({ ok: true, outputText });
 
 test('the final answer is the number after the last 答案, or the last number', () => {
-  assert.equal(finalAnswerNumber('先算 16 + 12 = 28，所以\n答案：29'), '29');
-  assert.equal(finalAnswerNumber('答案: 28\n更正后答案：29'), '29');
-  assert.equal(finalAnswerNumber('最少需要取出 29 个'), '29');
+  assert.equal(finalAnswerNumber('圆形 9 个、五角星 12 个，所以\n答案：21'), '21');
+  assert.equal(finalAnswerNumber('答案: 29\n更正后答案：21'), '21');
+  assert.equal(finalAnswerNumber('最少需要取出 21 个'), '21');
   assert.equal(finalAnswerNumber('无法确定'), null);
 });
 
 test('each question is graded against its expected answer', () => {
-  assert.equal(gradeIntelligenceResponse(byId.candy, answered('……\n答案：29')).status, 'pass');
-  assert.deepEqual(gradeIntelligenceResponse(byId.candy, answered('答案：21')), { status: 'fail', answer: '21' });
+  assert.equal(gradeIntelligenceResponse(byId.candy, answered('……\n答案：21')).status, 'pass');
+  // 29 is the answer when the shapes are ignored, the trap of this puzzle.
+  assert.deepEqual(gradeIntelligenceResponse(byId.candy, answered('答案：29')), { status: 'fail', answer: '29' });
   assert.equal(
     gradeIntelligenceResponse(byId.thibault, answered('Thibault Sottiaux 是 OpenAI 的 Codex 负责人。')).status,
     'pass'

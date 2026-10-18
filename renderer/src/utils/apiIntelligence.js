@@ -42,12 +42,14 @@ export const INTELLIGENCE_TESTS = [
   {
     id: 'candy',
     title: '糖果题',
-    expected: '29',
+    // Shapes can be told apart by touch, so the draw is chosen by shape: 9 round (not all
+    // watermelon) and 12 star (at least one peach, two apple). No split of 20 guarantees it.
+    expected: '21',
     maxOutputTokens: 16000,
     prompt: CANDY_PROMPT,
     grade(text) {
       const answer = finalAnswerNumber(text);
-      return { status: answer === '29' ? 'pass' : 'fail', answer: answer || collapse(text) };
+      return { status: answer === '21' ? 'pass' : 'fail', answer: answer || collapse(text) };
     }
   },
   {
