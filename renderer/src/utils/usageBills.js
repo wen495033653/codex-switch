@@ -159,12 +159,19 @@ export function formatSeconds(ms) {
   return `${seconds.toFixed(seconds < 10 ? 2 : seconds < 100 ? 1 : 0)}s`;
 }
 
-// Output tokens over the time from the first output to completion; null without a first token.
+// CC Switch's bounds: a tool call's few tokens, or output that arrived in one burst, give a
+// transfer rate rather than a generation speed.
+export const RATE_MIN_OUTPUT_TOKENS = 100;
+export const RATE_MIN_GENERATION_MS = 100;
+
+// Output tokens over the time from the first output to completion, as CC Switch computes it;
+// null without a first token or below its bounds.
 export function outputRate(record) {
   if (!record || record.duration_ms == null || record.first_token_ms == null) return null;
+  const outputTokens = Number(record.output_tokens) || 0;
   const generationMs = record.duration_ms - record.first_token_ms;
-  if (generationMs <= 0) return null;
-  return (Number(record.output_tokens) || 0) / (generationMs / 1000);
+  if (outputTokens < RATE_MIN_OUTPUT_TOKENS || generationMs < RATE_MIN_GENERATION_MS) return null;
+  return outputTokens / (generationMs / 1000);
 }
 
 export function formatRate(rate) {

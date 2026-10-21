@@ -52,7 +52,7 @@ export default function BillsTable({
           const timingTitle = record.duration_ms === null
             ? t('没有耗时数据')
             : record.first_token_ms === null
-              ? t('总耗时 {duration}，Codex 日志里已没有这次请求的首 Token', {
+              ? t('总耗时 {duration}，没有这次请求的首 Token', {
                 duration: formatSeconds(record.duration_ms)
               })
               : t('总耗时 {duration} · 首 Token {firstToken} · {rate}', {

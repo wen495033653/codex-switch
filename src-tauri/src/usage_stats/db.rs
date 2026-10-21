@@ -31,9 +31,10 @@ pub(super) const META_RECORDS_COUNTED_AFTER: &str = "records_counted_after";
 /// checked against. Each new table is checked once; see `pending_reprice`.
 const META_UNPRICED_CHECKED_FOR: &str = "unpriced_records_checked_for";
 
-/// Set once the records stored before durations were kept got theirs from a re-read of the
-/// rollouts.
-const META_TIMINGS_FILLED: &str = "request_timings_filled";
+/// Set once the stored records got the durations and first-token times they lack from a re-read
+/// of the rollouts. The key changed when first tokens started coming from the rollout
+/// (2026-10-21), so that the records before it are read once more.
+const META_TIMINGS_FILLED: &str = "request_rollout_first_tokens_filled";
 
 /// Records migrated from the per-session statistics, not single API responses.
 const LEGACY_RESPONSE_ID_PREFIX: &str = "legacy:";
@@ -165,7 +166,8 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
                 model TEXT NOT NULL,
                 service_tier TEXT NOT NULL,
                 request_started_ms INTEGER NOT NULL DEFAULT 0,
-                output_started INTEGER NOT NULL DEFAULT 0
+                output_started INTEGER NOT NULL DEFAULT 0,
+                first_output_ms INTEGER
             );
             "#,
         )
@@ -184,6 +186,7 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
             "output_started",
             "INTEGER NOT NULL DEFAULT 0",
         ),
+        ("rollout_cursors", "first_output_ms", "INTEGER"),
     ] {
         add_column(&transaction, table, column, definition)?;
     }
@@ -1102,7 +1105,8 @@ pub(super) fn load_cursors(
         .prepare(
             r#"
             SELECT source_path, modified_nanos, file_size, byte_offset, resume_check,
-                   provider, model, service_tier, request_started_ms, output_started
+                   provider, model, service_tier, request_started_ms, output_started,
+                   first_output_ms
             FROM rollout_cursors
             "#,
         )
@@ -1124,6 +1128,7 @@ pub(super) fn load_cursors(
                         service_tier: row.get(7)?,
                         request_started_ms: row.get(8)?,
                         output_started: row.get::<_, i64>(9)? != 0,
+                        first_output_ms: row.get(10)?,
                     },
                 ),
             ))
@@ -1144,9 +1149,10 @@ pub(super) fn save_cursor(
             r#"
             INSERT INTO rollout_cursors(
                 source_path, modified_nanos, file_size, byte_offset, resume_check,
-                provider, model, service_tier, request_started_ms, output_started
+                provider, model, service_tier, request_started_ms, output_started,
+                first_output_ms
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(source_path) DO UPDATE SET
                 modified_nanos = excluded.modified_nanos,
                 file_size = excluded.file_size,
@@ -1156,7 +1162,8 @@ pub(super) fn save_cursor(
                 model = excluded.model,
                 service_tier = excluded.service_tier,
                 request_started_ms = excluded.request_started_ms,
-                output_started = excluded.output_started
+                output_started = excluded.output_started,
+                first_output_ms = excluded.first_output_ms
             "#,
         )
         .and_then(|mut statement| {
@@ -1170,7 +1177,8 @@ pub(super) fn save_cursor(
                 cursor.model,
                 cursor.service_tier,
                 cursor.request_started_ms,
-                i64::from(cursor.output_started)
+                i64::from(cursor.output_started),
+                cursor.first_output_ms
             ])
         })
         .map(|_| ())

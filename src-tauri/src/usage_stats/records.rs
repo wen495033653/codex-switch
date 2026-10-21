@@ -12,6 +12,10 @@
 //! `token_count` event); Codex writes an `item_completed` event just before each item, so those
 //! events do not count. A response with no output item in the rollout (a compaction) has no
 //! known start.
+//!
+//! Its first token is when its earliest reasoning or reply began: newer Codex versions put that
+//! in the `started_at_ms` of the `item_completed` event for the item (the rule CC Switch uses).
+//! A response that opens with a tool call, or one written by an older Codex, has none here.
 
 use super::model::TokenUsage;
 use crate::{
@@ -45,6 +49,9 @@ pub(super) struct RolloutCursor {
     pub(super) request_started_ms: i64,
     /// Whether an output item of that response was read.
     pub(super) output_started: bool,
+    /// The earliest `started_at_ms` of a reasoning or reply item read since the previous
+    /// record (ms since the epoch).
+    pub(super) first_output_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,6 +63,9 @@ pub(super) struct RolloutRecord {
     pub(super) completed_ms: i64,
     /// When its request was sent; `None` without an output item to tell.
     pub(super) request_started_ms: Option<i64>,
+    /// When its first reasoning or reply began, between the request and the record; `None`
+    /// when the rollout does not say.
+    pub(super) first_output_ms: Option<i64>,
     pub(super) provider: String,
     pub(super) model: String,
     pub(super) service_tier: String,
@@ -147,6 +157,15 @@ fn apply_line(
 ) -> Result<(), String> {
     match line_head(line).map(|head| (head.timestamp_ms, head.kind)) {
         Some((_, LineKind::Output)) => cursor.output_started = true,
+        Some((_, LineKind::ItemCompleted)) => {
+            if let Some(started_ms) = model_output_started_ms(line) {
+                cursor.first_output_ms = Some(
+                    cursor
+                        .first_output_ms
+                        .map_or(started_ms, |earliest| earliest.min(started_ms)),
+                );
+            }
+        }
         Some((timestamp_ms, LineKind::Other)) if !cursor.output_started => {
             cursor.request_started_ms = timestamp_ms;
         }
@@ -170,7 +189,8 @@ fn apply_line(
             let request_started_ms = Some(cursor.request_started_ms)
                 .filter(|started| cursor.output_started && *started > 0);
             cursor.output_started = false;
-            let record = parse_record(&value, payload, cursor, request_started_ms);
+            let first_output_ms = cursor.first_output_ms.take();
+            let record = parse_record(&value, payload, cursor, request_started_ms, first_output_ms);
             if let Ok(record) = &record {
                 cursor.request_started_ms = record.completed_ms;
             }
@@ -204,6 +224,7 @@ fn parse_record(
     payload: &Value,
     cursor: &RolloutCursor,
     request_started_ms: Option<i64>,
+    first_output_ms: Option<i64>,
 ) -> Result<RolloutRecord, String> {
     let response_id = required_string(payload, "response_id")?;
     let thread_id = required_string(payload, "thread_id")?;
@@ -215,12 +236,17 @@ fn parse_record(
         .get("usage")
         .filter(|usage| usage.is_object())
         .ok_or_else(|| "token_usage_record 缺少 usage".to_string())?;
+    let request_started_ms = request_started_ms.filter(|started| *started <= completed_ms);
     Ok(RolloutRecord {
         response_id,
         thread_id,
         timestamp_seconds,
         completed_ms,
-        request_started_ms: request_started_ms.filter(|started| *started <= completed_ms),
+        request_started_ms,
+        first_output_ms: first_output_ms.filter(|started| {
+            request_started_ms.is_some_and(|request| request <= *started)
+                && *started <= completed_ms
+        }),
         provider: cursor.provider.clone(),
         model: cursor.model.clone(),
         service_tier: cursor.service_tier.clone(),
@@ -233,6 +259,22 @@ fn parse_record(
             total_tokens: usage_field(usage, "total_tokens")?,
         },
     })
+}
+
+/// The `started_at_ms` of an `item_completed` line about a reasoning or reply item. Tool runs and
+/// user messages are reported the same way but are not model output. The field comes after the
+/// item, so the whole line is parsed; only lines naming one of those two types get that far.
+fn model_output_started_ms(line: &[u8]) -> Option<i64> {
+    if !contains(line, b"\"Reasoning\"") && !contains(line, b"\"AgentMessage\"") {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(line).ok()?;
+    let payload = value.get("payload")?;
+    let item_type = payload.get("item")?.get("type")?.as_str()?;
+    if item_type != "Reasoning" && item_type != "AgentMessage" {
+        return None;
+    }
+    payload.get("started_at_ms")?.as_i64()
 }
 
 fn required_string(object: &Value, key: &str) -> Result<String, String> {

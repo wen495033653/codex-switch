@@ -1847,6 +1847,161 @@ fn first_token_times_come_from_the_newest_codex_log() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// An `item_completed` line the way Codex writes it: the start of the item after the item.
+fn item_completed_line(timestamp: &str, item_type: &str, started: &str) -> String {
+    written_line(
+        timestamp,
+        "event_msg",
+        "item_completed",
+        &format!(
+            r#","thread_id":"thread-r","turn_id":"turn","item":{{"type":"{item_type}","id":"x"}},"started_at_ms":{},"completed_at_ms":{}"#,
+            millis(started),
+            millis(timestamp)
+        ),
+    )
+}
+
+#[test]
+fn first_token_times_come_from_the_rollout_before_the_codex_log() {
+    let root = temp_root("timing-rollout");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let thread_id = "thread-r";
+    let lines = vec![
+        session_meta_line("2026-06-15T01:00:00.000Z", thread_id, "openai"),
+        turn_context_line("2026-06-15T01:00:00.100Z", "turn-1", "gpt-5.5"),
+        written_line(
+            "2026-06-15T01:00:01.000Z",
+            "event_msg",
+            "token_count",
+            r#","info":null"#,
+        ),
+        // A tool run reported the same way is not model output.
+        item_completed_line(
+            "2026-06-15T01:00:01.200Z",
+            "CommandExecution",
+            "2026-06-15T01:00:01.100Z",
+        ),
+        item_completed_line(
+            "2026-06-15T01:00:03.000Z",
+            "Reasoning",
+            "2026-06-15T01:00:01.800Z",
+        ),
+        written_line(
+            "2026-06-15T01:00:03.001Z",
+            "response_item",
+            "reasoning",
+            r#","id":"rs_1","summary":[]"#,
+        ),
+        item_completed_line(
+            "2026-06-15T01:00:05.000Z",
+            "AgentMessage",
+            "2026-06-15T01:00:03.500Z",
+        ),
+        written_line(
+            "2026-06-15T01:00:05.001Z",
+            "response_item",
+            "message",
+            r#","id":"msg_a","role":"assistant","content":[]"#,
+        ),
+        record_line(
+            "2026-06-15T01:00:05.500Z",
+            "resp-r1",
+            thread_id,
+            100,
+            0,
+            400,
+        ),
+        written_line(
+            "2026-06-15T01:00:06.000Z",
+            "response_item",
+            "message",
+            r#","id":"msg_u","role":"user","content":[]"#,
+        ),
+        // Opens with a tool call: the rollout has no start for it, the Codex log has.
+        written_line(
+            "2026-06-15T01:00:08.000Z",
+            "response_item",
+            "custom_tool_call",
+            r#","id":"ctc_1","name":"exec","input":"""#,
+        ),
+        record_line("2026-06-15T01:00:09.000Z", "resp-r2", thread_id, 100, 0, 50),
+    ];
+    let path = write_rollout(&codex_home, "rollout-first", &lines);
+    write_codex_log(
+        &codex_home,
+        "logs_2.sqlite",
+        &[
+            (
+                "2026-06-15T01:00:02.000Z",
+                thread_id,
+                STREAM_TARGET,
+                OUTPUT_ADDED,
+            ),
+            (
+                "2026-06-15T01:00:07.000Z",
+                thread_id,
+                STREAM_TARGET,
+                OUTPUT_ADDED,
+            ),
+        ],
+    );
+
+    // Read in two parts, split between the reasoning's start and its record: the start carries
+    // over in the cursor.
+    let first = read_new_records(&path, None).unwrap();
+    assert_eq!(
+        first.records[0].first_output_ms,
+        Some(millis("2026-06-15T01:00:01.800Z"))
+    );
+    assert_eq!(first.records[1].first_output_ms, None);
+    let split = write_rollout(&codex_home, "split-first", &lines[..5]);
+    let part = read_new_records(&split, None).unwrap();
+    assert_eq!(
+        part.cursor.first_output_ms,
+        Some(millis("2026-06-15T01:00:01.800Z"))
+    );
+    append_lines(&split, &lines[5..]);
+    let rest = read_new_records(&split, Some(&part.cursor)).unwrap();
+    assert_eq!(
+        rest.records[0].first_output_ms,
+        Some(millis("2026-06-15T01:00:01.800Z"))
+    );
+    fs::remove_file(&split).unwrap();
+
+    stats(&db_path, &codex_home, "2026-06-15T01:05:00Z");
+    let page = bills(&db_path, "all", None, None, 1, 50, "2026-06-15T01:05:00Z");
+    let timing = page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            (
+                record["response_id"].as_str().unwrap().to_string(),
+                record["duration_ms"].clone(),
+                record["first_token_ms"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timing,
+        [
+            // From the Codex log: 01:00:07.000 - 01:00:06.000.
+            ("resp-r2".to_string(), json!(3_000), json!(1_000)),
+            // From the rollout (01:00:01.800 - 01:00:01.000), not the log's 01:00:02.000.
+            ("resp-r1".to_string(), json!(4_500), json!(800)),
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn records_stored_before_durations_get_them_from_one_reread() {
     let root = temp_root("timing-fill");
@@ -1920,7 +2075,7 @@ fn records_stored_before_durations_get_them_from_one_reread() {
     let filled: String = Connection::open(&db_path)
         .unwrap()
         .query_row(
-            "SELECT value FROM meta WHERE key = 'request_timings_filled'",
+            "SELECT value FROM meta WHERE key = 'request_rollout_first_tokens_filled'",
             [],
             |row| row.get(0),
         )

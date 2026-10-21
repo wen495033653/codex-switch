@@ -217,7 +217,8 @@ pub(super) fn scan_sources(
     Ok(result)
 }
 
-/// The duration from the rollout, and the first-token time from the Codex log of the same home.
+/// The duration from the rollout. The first-token time from the rollout when it says (as CC
+/// Switch reads it), otherwise from the Codex log of the same home.
 fn request_timing(
     record: &RolloutRecord,
     source_log: &mut SourceLog,
@@ -228,6 +229,18 @@ fn request_timing(
     let Some(started_ms) = record.request_started_ms else {
         return RequestTiming::default();
     };
+    let duration_ms = record.completed_ms - started_ms;
+    // CC Switch's bound: a first token at the very start or after the end is a wrong start.
+    let rollout_first_token = record
+        .first_output_ms
+        .map(|at| at - started_ms)
+        .filter(|first_token| *first_token > 0 && *first_token <= duration_ms);
+    if rollout_first_token.is_some() {
+        return RequestTiming {
+            duration_ms: Some(duration_ms),
+            first_token_ms: rollout_first_token,
+        };
+    }
     let first_output = source_log.get(codex_home).and_then(|log| {
         log.first_output_ms(&record.thread_id, started_ms, record.completed_ms)
             .inspect_err(|err| log_codex_log_error(codex_home, err.clone()))
@@ -241,7 +254,7 @@ fn request_timing(
         }
     }
     RequestTiming {
-        duration_ms: Some(record.completed_ms - started_ms),
+        duration_ms: Some(duration_ms),
         first_token_ms: first_output
             .and_then(|(_, found)| found)
             .map(|at| at - started_ms),

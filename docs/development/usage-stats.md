@@ -96,12 +96,17 @@
 Codex Switch 不在请求路径上（订阅模式 Codex 直连 chatgpt.com，API 模式直连配置的 base URL），量不到网络层的首字节，两种模式能拿到的数据一样：
 
 - **总耗时（`duration_ms`）。** 从 rollout 算：请求发出时间取这次响应第一个输出项（`reasoning`、`function_call`、`custom_tool_call`、assistant `message` 等）之前的最后一行，完成时间是 `token_usage_record` 那一行。Codex 在写每个输出项之前先写一条 `event_msg item_completed`，这类行不算请求发出时间。rollout 里没有输出项的响应（上下文压缩）没有耗时。请求发出时间要跨两次读取保留，所以 `rollout_cursors` 多存了 `request_started_ms` 和 `output_started`。
-- **首 Token（`first_token_ms`，近似）。** rollout 只记录完整的输出项。Codex 自己的日志库 `~/.codex/logs_<n>.sqlite`（取编号最大的）在每个输出项开始到达时记一行 `codex_core::stream_events_utils` 的 `Output item item_type=…`，取请求发出之后、完成之前、同一 `thread_id` 的第一行，与请求发出时间之差就是首 Token。完成事件（`handle_output_item_done`）不算。多开实例各自的 Codex 目录里有各自的日志库。
-- **输出速率。** 前端算：输出 token ÷（总耗时 − 首 Token），没有首 Token 就不算。
-- **Codex 日志只保留每个会话最近 1,000 行**（2026-10-17 核对：每个会话恰好 1,000 行，全库约 23.5 小时），繁忙的会话大约只留得住最近 140 次请求、二十来分钟。所以 `usage_stats::start_usage_stats_auto_refresher` 每 60 秒在后台入库一次，不依赖窗口是否打开（页面轮询在窗口隐藏时暂停）。已经被 Codex 清掉的请求没有首 Token。
-- **历史记录。** `meta.request_timings_filled` 没写过时，这次刷新把记录起点之后改过的 rollout 全部重读一遍，已存的记录补上耗时（日志还在的补上首 Token），写入后记 `usage_stats_timings_filled`（`rereadSince`、`rereadFiles`、`filled`）。之后再重读到已存的记录（改写、分叉），缺的耗时也会补上。
+- **首 Token（`first_token_ms`，近似）。** 先从 rollout 取，取不到再查 Codex 日志库（2026-10-21 起，和 CC Switch 的取法一致）：
+  - rollout：新版 Codex 在每个输出项的 `event_msg item_completed` 里写 `started_at_ms`（这一项开始生成的时刻）。取这次请求里最早的一个思考（`Reasoning`）或回复（`AgentMessage`）项，要在请求发出和完成之间；减去请求发出时间就是首 Token，结果要落在 (0, 总耗时] 之间。工具执行（`CommandExecution`）、用户消息等也有这个事件，但不是模型输出，不算。这个时刻要跨两次读取保留，所以 `rollout_cursors` 多存了 `first_output_ms`。
+  - Codex 日志库 `~/.codex/logs_<n>.sqlite`（取编号最大的）：在每个输出项开始到达时记一行 `codex_core::stream_events_utils` 的 `Output item item_type=…`，取请求发出之后、完成之前、同一 `thread_id` 的第一行。完成事件（`handle_output_item_done`）不算。多开实例各自的 Codex 目录里有各自的日志库。rollout 取不到的是一开头就调用工具的响应，和旧版 Codex 写的 rollout。
+  - 两个来源一致：2026-10-21 用真实数据对照，8,305 条两边都有的请求，差值全部是 0 ms。
+- **输出速率。** 前端算，公式和门槛照 CC Switch：输出 token ÷（总耗时 − 首 Token）；输出不到 100 token，或首 Token 到完成不到 100 ms 时不算（工具调用只有几个 token、或整段一次到达时，算出来的是传输突发，不是生成速度）。没有首 Token 也不算，显示"—"。
+  - CC Switch 对会话日志里的请求另有一种「≈ 估算速度」（输出 ÷ 总耗时，含首字等待），只在它自己的代理记下的请求上才扣首字。我们的首 Token 是 Codex 记下的真实时刻，所以按扣首字的公式算；没有首 Token 时仍按原来的做法不显示，没有改成估算速度（2026-10-21 用户选定）。
+  - 请求发出时间的取法和 CC Switch 略有不同（它取第一个输出项之前最近的「起点行」：上一次的 `token_count`、工具结果、用户消息、`turn_context`），2026-10-21 用 28,990 条真实请求对照，99.5% 相差不超过 100 ms，没有改。
+- **Codex 日志只保留每个会话最近 1,000 行**（2026-10-17 核对：每个会话恰好 1,000 行，全库约 23.5 小时），繁忙的会话大约只留得住最近 140 次请求、二十来分钟。所以 `usage_stats::start_usage_stats_auto_refresher` 每 60 秒在后台入库一次，不依赖窗口是否打开（页面轮询在窗口隐藏时暂停）。rollout 里也取不到、又已经被 Codex 从日志里清掉的请求没有首 Token。
+- **历史记录。** `meta.request_rollout_first_tokens_filled` 没写过时，这次刷新把记录起点之后改过的 rollout 全部重读一遍，已存的记录补上缺的耗时和首 Token（已有的值不改），写入后记 `usage_stats_timings_filled`（`rereadSince`、`rereadFiles`、`filled`）。这个键原来是 `request_timings_filled`，首 Token 改从 rollout 取时换了名字，让之前的记录再重读一次。之后再重读到已存的记录（改写、分叉），缺的耗时和首 Token 也会补上。
 - **失败。** 读不了日志库记 `usage_stats_codex_log_error`（`codexHome`、原始错误、`handling: first_token_left_empty`），统计照常；最近 10 分钟有 5 条以上可查的请求、却一条首个输出也没找到时记 `usage_stats_first_token_error`（多半是 Codex 改了日志格式）。后台刷新失败记 `usage_stats_auto_refresh_error`。
-- **为什么不只用 rollout 估首 Token。** 用有日志的请求作对照，按"第一个输出项写完的时间减去推理 token ÷ 速率"估算，固定 55 tok/s 时误差中位 0.73 s、p90 6.6 s，按每次请求自身后半段速率估误差更大（p90 20 s），真实首 Token 中位只有 2 s 左右，所以历史请求不估算，显示"—"。
+- **不用推理 token 反推首 Token。** 2026-10-17 用有日志的请求作对照，按"第一个输出项写完的时间减去推理 token ÷ 速率"估算，固定 55 tok/s 时误差中位 0.73 s、p90 6.6 s，按每次请求自身后半段速率估误差更大（p90 20 s），真实首 Token 中位只有 2 s 左右，所以不估算。当时没注意到 `item_completed` 里的 `started_at_ms`；它是 Codex 记下的开始时刻，不是估算，2026-10-21 起直接用它。
 - **要拿到实测值**，只能让 Codex Switch 做本地代理夹在 Codex 和 API 之间（API 模式可行，订阅模式还要处理 chatgpt.com 的 websocket），这次没做。
 
 ### 会话同步前先入库（2026-10-17）
@@ -126,6 +131,7 @@ Codex Switch 不在请求路径上（订阅模式 Codex 直连 chatgpt.com，API
 - **模型取自之前最近的设置行。** 压缩请求用的是它之前的模型设置。如果恰好在这次压缩前切换了模型，而切换只写进了之后的 `turn_context`，这一次会记成旧模型。
 - **档位未知的记录。** 2026-10-17 本机有 30,561 条 gpt-6.1-sol 记录（178 个会话，2026-09-30 至 10-07）的 rollout 已不在 `sessions`、`archived_sessions`、多开实例和会话管理的回收区里，无法补价，标为 `missing_service_tier`，费用不计入合计（界面显示"另有 N 条未定价"）。会话文件如果以后恢复并被重读，会按第 3 步补价。
 - **耗时数据的覆盖面。** 2026-10-17 真实库副本：重读后 33,572 条记录有总耗时，1,406 条有首 Token（Codex 日志当时还在的）。没有耗时的非旧版记录里，7,839 条的会话文件已不在，331 条（约 1%）在记录之前没有输出项。总耗时 p10 / p50 / p90 为 5.1 / 12.7 / 47.1 s，首 Token 1.49 / 1.98 / 3.53 s，输出速率 41.5 / 54.8 / 74.6 tok/s；首 Token 和速率与事先用 Python 独立算出的分布一致（1.46 / 1.97 / 3.44 s，41.3 / 55.0 / 74.3 tok/s），没有首 Token 大于总耗时或负数的记录。
+- **首 Token 的覆盖面（2026-10-21）。** 真实库副本加真实 rollout 跑一次新版的刷新（一次性重读用了 37 s）：有首 Token 的记录从 9,852 条增加到 27,622 条，10-14 之后有总耗时的 29,314 条里 25,990 条（89%）有首 Token；原有的 9,852 个首 Token 一个都没变；没有首 Token 落在 (0, 总耗时] 之外的记录。按 CC Switch 的门槛算，26,504 条有输出速率，p10 / p50 / p90 为 26.2 / 44.8 / 63.7 tok/s，首 Token 1.64 / 2.37 / 4.72 s。
 - **账单查询耗时。** 本机 14.3 万条记录（release）：今天 12 ms，7 天约 0.2 s，30 天和全部约 0.6 s，主要花在合计和归属、模型列表的全表聚合上。前端每 30 秒随统计刷新重新查询一次。
 
 ## 验证记录（2026-09-23）
