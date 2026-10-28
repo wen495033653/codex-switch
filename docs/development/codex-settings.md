@@ -1,5 +1,33 @@
 # Codex 页的设置：代理、远程控制、模型指令、原生插件
 
+## API 输入额度与自动审批模型（2026-10-28）
+
+### 当前行为与依据
+
+- 参考现象：[LinuxDo 主题及 18 楼](https://linux.do/t/topic/2962721/18)：保留 ChatGPT 登录使用第三方 API 时，官方额度耗尽仍会锁住输入；后台自动审批也可能因专用模型不可用而失败。
+- 本机 Desktop `26.1023.6123.0` 的 `app-primary-8eba40dc50b2.js`：官方额度 selector 为 `Yz`，导出 `Kq`；Local 的 `codex-composer-adapter-6b724302bfa6.js` 把它读为 `Hr`，加入 `xi`，再传为 `submitDisabled`。这与 ChatGPT composer 的独立 conversation limit 不同，后者不改。
+- API 主目录的 watcher 接管、手动重启、切换账号后重新打开，以及 API 多开实例，均携带 CDP 参数。订阅实例不启用该 Hook；多开实例按自身 channel 判断，不跟随主目录当前模式。
+- `cdp/api_quota.js` 只定位当前语义的官方额度 selector 和真实配置 descriptor；断点每次读取 Local 已加载配置，仅 `model_provider = "api"` 时浅拷贝 selector 的局部额度数据并设 `rate_limit.allowed = true`。不改共享官方额度对象，不解除策略、模型加载或第三方 API 自身的限额。
+- `cdp/api_quota.rs` 保持 Debugger 连接，用精确 URL 条件断点覆盖同 bundle 的刷新；只有 V8 已绑定实际代码位置才返回就绪。切订阅先停止 Hook，再做会话预检查；定位、执行、连接错误保留原文并向上传递，不冒充成功、不新增自动重试。
+- 日志：`codex_api_quota_hook_ready`（port、语义与实际 location）、`codex_api_quota_hook_stopped`；失败为 `codex_api_quota_hook_error`。生产不新增 Node 依赖，不修改官方安装包。
+
+### 自动审批模型目录
+
+- 当前 CLI 的审批 provider 继承主对话 provider，不应添加不存在的 `guardian_model` TOML 键。隔离实跑证明：混合 ChatGPT 登录与 API bearer 时，默认可另选 `codex-auto-review`；请求仍走同一个 API 地址与 bearer。使用 `ModelInfo.auto_review_model_override` 可把审批模型固定为当前主模型，不关闭审批。
+- `codex_config/api_auto_review.rs` 在 API 模式生成当前 home 的 `codex-switch-api-models.json`；每个模型条目的 `auto_review_model_override` 设为自身 `slug`，保留其余模型字段。源文件不修改，源是明确配置的 `model_catalog_json`，未配置时为 Codex 的 `models_cache.json`；缺失或损坏显式报错，且发生在写入账号认证之前。
+- 受管文件的 `_codex_switch.original_model_catalog_json` 是恢复信息的唯一入口，允许原值为空；重复应用从原源文件重新生成，不套娃，同内容不重写。已处于 API 的旧安装也会应用目录，不为此覆盖认证或强制重启。多开目录独立保存；订阅恢复原指针/删除原本不存在的键，只处理仍指向 SW 受管文件的配置，不覆盖后来手动选择的目录。
+- 配置生效仍需对应 Codex app-server 重新加载；写盘不是正在运行的审批已切换的证据。失败事件 `codex_api_auto_review_catalog_error` 包含 operation、catalog、source、model、原始 error。
+- 回退：切回订阅恢复原 `model_catalog_json`；源 catalog 始终未改。若手动停用 SW，先退出对应 Codex，再按受管 JSON 的上述原指针恢复 `config.toml`（原值为空则删除该根键），之后启动原程序。
+
+### 验证层级
+
+- 已真实运行（隔离 V8）：`CODEX_SWITCH_TEST_CDP=1 node --test scripts/test-api-quota.mjs` 调用真实 Rust supervisor。连续两次 API 解锁，切 `openai` 立即保持原锁定，再切 API 解锁，同 URL 重载后仍生效，停止后恢复原锁定；共享 quota 的 `allowed` 全程为 false。
+- 已真实运行（当前 CLI + localhost 替身服务）：`build_isolated_api_auto_review_catalog` 生成的实际 Rust 受管目录，令后台审批从 `codex-auto-review` 变为 `parent-model`，主对话模型未变。审批照常执行并返回 fixture deny，没有执行命令；请求目标和 bearer 仍为同一替身 provider。证据：`%TEMP%/codex-sw-guardian-qa-t7xuz94l/{requests,summary}.json`；生成目录：`%TEMP%/codex-sw-guardian-qa-j5srurbd/codex-switch-api-models.json`。
+- 离线：当前已安装 primary bundle 的 selector/config descriptor 唯一命中；目录测试覆盖原文件保留、重复应用、源更新、同内容不写、实例隔离、订阅恢复、手动指针保留、缺源/损坏错误及日志；流程故障注入覆盖停止先于失败的会话预检查，以及注入错误传播。
+- 最终离线检查：`cargo test` 为 380 passed / 7 ignored（其中本次两个显式隔离入口已另行运行通过）；`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过。`npm run check` 退出 0，68 passed / 1 opt-in skipped，前端构建通过；测试并行清理 Vite 临时缓存时打印一次 `EPERM rmdir node_modules/.vite/deps_temp_*`，不计为此处的功能验证。额外覆盖标准 TOML 路径行尾注释、引号内 `#` 和 literal 反斜杠；订阅切换先只读验证恢复计划，再写认证、应用配置，避免把目录错误变成认证半切换。
+- `npm run tauri:build -- --no-bundle` 的最终源码构建通过，本机修复版已替换，原 exe 保留为 `codex-switch.before-api-quota-20261028.exe`。替换时首次复制因结束进程后的文件映射尚未释放而报占用；只读确认 SW 进程已退出、原文件与备份均保留后，复制成功。SW 保持关闭，未为验收重启正式 Codex、切换账号或写入正式 Codex 配置；安装后的真实 API 场景仍按下一条边界区分。
+- 未验证：在真实第三方服务与官方额度耗尽的现场发送对话、真实自动审批成功结果、macOS。以上隔离证据不等同于这些现场结果。
+
 ## 代理与远程控制的状态反馈（2026-09-06）
 
 - 代理开关显示的是配置状态（已配置 / 未配置），不冒充连接状态。保存或开关返回 `restartRequired`，前端弹出重启 Codex 的提示。常驻说明只有一句“设置 Codex 使用的代理地址”。
@@ -35,7 +63,7 @@ TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条
 - 删除了“Plugin 增强”开关、它的设置字段和对 `plugin/list` 请求的 Hook，改用 Codex 原生插件目录。旧设置字段 `codex_plugins_enabled` 在读取时丢弃，不再触发重启或注入。
 - 依据：[官方插件文档](https://learn.chatgpt.com/zh-Hans/docs/plugins)说明 API key 登录可以管理受支持的官方插件；本机 26.901.6511.0 实测原生 `plugin/list` 无错误（三个目录分别有 5、8、3514 个插件），当时 Hook 并未生效（`patched=false`），说明它已经没有必要。部分 OAuth 插件有限制，任意自定义 API 提供方并未全部验证。
 - 独立的插件重启 command 已删除。模型指令、代理、远控改动后的重启提示统一调用 `restart_current_codex_app_normal`。
-- `cdp.rs` 只保留两个用途：远控的 `mobile_no_replace` Hook，以及会话同步需要的 CDP 重启流程。
+- `cdp.rs` 保留远控的 `mobile_no_replace` Hook、会话同步需要的 CDP 重启流程；2026-10-28 增加下文的 API 输入额度兼容。
 - 验证：Rust 测试（旧字段被移除且不触发动作；会话同步仍按需保留 mobile Hook）；`scripts/test-native-plugins.mjs`（保存设置不再探测插件状态；重启提示成功关闭、失败保留并显示错误；源码里没有旧开关和旧 command）。没有实测 API 身份下的插件安装卸载和远控连接。
 
 ## 远程控制关闭时不再改动未选模式的配置（2026-10-17）

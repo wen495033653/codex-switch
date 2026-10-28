@@ -241,11 +241,13 @@ fn apply_remote_control_mixed_config(settings: &Value) -> Result<(), String> {
     let account_id = remote_control_account_id_from_settings(settings);
     let account = remote_control_account(&account_id)?;
     let (api_base_url, api_key) = remote_control_api_session_profile_from_settings(settings)?;
+    let model_catalog = crate::codex_config::prepare_current_api_auto_review_catalog()?;
 
     write_account_auth(&account)?;
     set_config_values(vec![
         ("model_provider", API_PROVIDER_ID.to_string()),
         ("cli_auth_credentials_store", "file".to_string()),
+        ("model_catalog_json", model_catalog),
     ])?;
     remove_config_values(&[
         "preferred_auth_method",
@@ -526,7 +528,7 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
         }
         RemoteControlRuntimeTarget::Subscription => {
             let pending = remote_control_mixed_config_present()?;
-            set_subscription_mode()?;
+            set_subscription_mode(crate::codex_config::current_auto_review_catalog_restore()?)?;
             remove_remote_control_config()?;
             pending
         }

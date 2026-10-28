@@ -35,7 +35,27 @@ pub(crate) fn root_assignment(line: &str) -> Option<(String, String)> {
 }
 
 fn parse_toml_value(raw_value: &str) -> Value {
-    let raw = raw_value.trim();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut end = raw_value.len();
+    for (index, ch) in raw_value.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if quote == Some('"') && ch == '\\' {
+            escaped = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() {
+            if ch == '#' {
+                end = index;
+                break;
+            }
+            if ch == '"' || ch == '\'' {
+                quote = Some(ch);
+            }
+        }
+    }
+    let raw = raw_value[..end].trim();
     if raw == "true" {
         return Value::Bool(true);
     }
@@ -46,11 +66,12 @@ fn parse_toml_value(raw_value: &str) -> Value {
         && ((raw.starts_with('"') && raw.ends_with('"'))
             || (raw.starts_with('\'') && raw.ends_with('\'')))
     {
-        return Value::String(
-            raw[1..raw.len() - 1]
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\"),
-        );
+        let contents = &raw[1..raw.len() - 1];
+        return Value::String(if raw.starts_with('\'') {
+            contents.to_string()
+        } else {
+            contents.replace("\\\"", "\"").replace("\\\\", "\\")
+        });
     }
     Value::String(raw.to_string())
 }
@@ -84,7 +105,7 @@ pub(crate) fn read_table_config(table_name: &str) -> Result<Map<String, Value>, 
     Ok(table_config_from_lines(&read_config_lines()?, table_name))
 }
 
-fn root_config_from_lines(lines: &[String]) -> Map<String, Value> {
+pub(crate) fn root_config_from_lines(lines: &[String]) -> Map<String, Value> {
     let end = find_root_table_index(lines).unwrap_or(lines.len());
     let mut config = Map::new();
     for line in lines.iter().take(end) {
@@ -159,5 +180,21 @@ mod tests {
         assert_eq!(table["base_url"], "https://example.test/v1");
         assert_eq!(table["supports_websockets"], false);
         assert!(snapshot.table("model_providers.missing").is_empty());
+    }
+
+    #[test]
+    fn catalog_paths_allow_trailing_comments_without_changing_quoted_hashes() {
+        let lines = [
+            r#"model_catalog_json = "custom#models.json" # catalog"#,
+            r"literal_path = '\\server\share#catalog.json' # literal",
+            r##"escaped_path = "folder\\custom\"#models.json" # escaped quote"##,
+            "supports_websockets = false # disabled",
+        ]
+        .map(str::to_string);
+        let root = root_config_from_lines(&lines);
+        assert_eq!(root["model_catalog_json"], "custom#models.json");
+        assert_eq!(root["literal_path"], r"\\server\share#catalog.json");
+        assert_eq!(root["escaped_path"], "folder\\custom\"#models.json");
+        assert_eq!(root["supports_websockets"], false);
     }
 }

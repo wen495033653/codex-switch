@@ -1,6 +1,11 @@
 use crate::{
     api_config::API_PROVIDER_ID,
-    codex_config::{find_root_table_index, format_toml_string, root_assignment, table_bounds},
+    codex_config::{
+        api_auto_review_catalog_restore, find_root_table_index, format_toml_string,
+        prepare_api_auto_review_catalog_for_home, root_assignment, root_config_from_lines,
+        table_bounds, CatalogRestore,
+    },
+    paths::codex_dir,
 };
 use std::{fs, path::Path};
 
@@ -19,7 +24,25 @@ pub(super) fn sync_instance_config(
     model_instructions_file: Option<&str>,
 ) -> Result<(), String> {
     let lines = read_instance_config_lines(config_path)?;
+    let home = config_path
+        .parent()
+        .ok_or_else(|| format!("实例配置没有父目录: {}", config_path.display()))?;
+    let root = root_config_from_lines(&lines);
+    let catalog_change = match config {
+        InstanceConfig::Api { .. } => CatalogRestore::Set(
+            prepare_api_auto_review_catalog_for_home(home, &root, &codex_dir()?)?,
+        ),
+        InstanceConfig::Subscription => api_auto_review_catalog_restore(home, &root)?,
+    };
     let next_lines = merge_instance_config_lines(&lines, config, model_instructions_file);
+    let next_lines = match catalog_change {
+        CatalogRestore::Unchanged => next_lines,
+        CatalogRestore::Set(path) => upsert_root_config_entries(
+            &next_lines,
+            vec![("model_catalog_json", format_toml_string(&path))],
+        ),
+        CatalogRestore::Remove => remove_root_config_entries(&next_lines, &["model_catalog_json"]),
+    };
     write_instance_config_lines(config_path, &next_lines)
 }
 

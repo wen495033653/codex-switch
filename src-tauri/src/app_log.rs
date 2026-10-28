@@ -60,6 +60,8 @@ const TIMELINE_EVENTS: &[&str] = &[
     "codex_app_process_kill_tree_exited",
     "codex_app_launch_confirmation_finish",
     "codex_app_multi_open_finish",
+    "codex_api_quota_hook_ready",
+    "codex_api_quota_hook_stopped",
     "codex_remote_control_runtime_updated",
     "codex_remote_control_runtime_applied",
     "codex_remote_control_auto_disabled",
@@ -101,6 +103,13 @@ const EVENT_MESSAGES: &[(&str, &str)] = &[
     ),
     ("codex_app_launch_confirmation_finish", "启动确认完成"),
     ("codex_app_multi_open_finish", "多开窗口已打开"),
+    ("codex_api_quota_hook_ready", "API 模式输入额度兼容已就绪"),
+    ("codex_api_quota_hook_stopped", "API 模式输入额度兼容已停止"),
+    ("codex_api_quota_hook_error", "API 模式输入额度兼容失败"),
+    (
+        "codex_api_auto_review_catalog_error",
+        "API 自动审批模型目录处理失败",
+    ),
     ("codex_app_open_handler_finish", "Codex 打开处理完成"),
     (
         "codex_remote_control_runtime_updated",

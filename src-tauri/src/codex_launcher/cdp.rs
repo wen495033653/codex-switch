@@ -3,20 +3,18 @@ use super::{
     process_control::{launch_codex_process_with_options, sanitize_desktop_app_launch_env},
     shell::hide_command_window,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
-use std::{
-    collections::BTreeSet,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    path::Path,
-};
+use std::{collections::BTreeSet, net::TcpListener, path::Path};
 use std::{
     process::{Command, Stdio},
     thread,
     time::{Duration as StdDuration, Instant},
 };
-use url::Url;
+
+mod api_quota;
+mod transport;
+
+use transport::CdpConnection;
 
 pub(crate) const CODEX_CDP_DEBUG_PORT: u16 = 9229;
 const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
@@ -24,6 +22,7 @@ const CDP_CONNECT_TIMEOUT_MS: u64 = 12_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodexCdpLaunchHooks {
     pub(crate) codex_mobile_no_replace: bool,
+    pub(crate) api_quota: bool,
 }
 
 struct CdpScript {
@@ -107,39 +106,26 @@ pub(crate) fn codex_processes_have_cdp_launch(processes: &[CodexProcess]) -> boo
         .any(|process| command_line_has_cdp_launch(&process.command_line))
 }
 
-pub(crate) fn inject_codex_mobile_no_replace_hook(
-    processes: &[CodexProcess],
-) -> Result<usize, String> {
-    inject_codex_cdp_hooks(
-        processes,
-        CodexCdpLaunchHooks {
-            codex_mobile_no_replace: true,
-        },
-    )
-}
-
 pub(crate) fn inject_codex_cdp_hooks(
     processes: &[CodexProcess],
     hooks: CodexCdpLaunchHooks,
 ) -> Result<usize, String> {
     let scripts = cdp_scripts_for_hooks(hooks);
-    inject_cdp_script_bundle(processes, &scripts)
-}
-
-fn inject_cdp_script_bundle(
-    processes: &[CodexProcess],
-    scripts: &CdpScriptBundle,
-) -> Result<usize, String> {
-    if scripts.scripts.is_empty() {
-        return Ok(0);
-    }
     let ports = processes
         .iter()
         .filter_map(|process| cdp_debug_port_from_command_line(&process.command_line))
         .collect::<BTreeSet<_>>();
     let mut injected = 0usize;
     for port in ports {
-        inject_cdp_scripts(port, scripts)?;
+        if !hooks.api_quota {
+            api_quota::stop(port)?;
+        }
+        if !scripts.scripts.is_empty() {
+            inject_cdp_scripts(port, &scripts)?;
+        }
+        if hooks.api_quota {
+            api_quota::start(port, &page_websocket_url(port)?)?;
+        }
         injected += 1;
     }
     Ok(injected)
@@ -190,12 +176,13 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
     let scripts = cdp_scripts_for_hooks(hooks);
     let mut launch_args = vec![
         format!("--remote-debugging-port={debug_port}"),
+        "--remote-debugging-address=127.0.0.1".to_string(),
         format!("--remote-allow-origins=http://127.0.0.1:{debug_port}"),
     ];
     launch_args.extend(args.iter().cloned());
     // With nothing to inject, Codex only has to start with its debug port open, which the normal
     // launch confirms. Waiting for a page here would end a Codex that is slow to show one.
-    if scripts.scripts.is_empty() {
+    if scripts.scripts.is_empty() && !hooks.api_quota {
         return launch_codex_process_with_options(
             &executable_path.to_string_lossy(),
             &launch_args,
@@ -220,7 +207,13 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
     let mut child = command
         .spawn()
         .map_err(|err| format!("启动 Codex hook 模式失败: {err}"))?;
-    if let Err(err) = wait_and_inject_cdp_scripts(debug_port, &scripts) {
+    let readiness = wait_and_inject_cdp_scripts(debug_port, &scripts).and_then(|()| {
+        if hooks.api_quota {
+            api_quota::start(debug_port, &page_websocket_url(debug_port)?)?;
+        }
+        Ok(())
+    });
+    if let Err(err) = readiness {
         let cleanup = child.kill();
         return Err(format!("{err}; child cleanup={cleanup:?}"));
     }
@@ -272,33 +265,27 @@ fn wait_and_inject_cdp_scripts(port: u16, bundle: &CdpScriptBundle) -> Result<()
 
 fn inject_cdp_scripts(port: u16, bundle: &CdpScriptBundle) -> Result<(), String> {
     let websocket_url = page_websocket_url(port)?;
-    let mut ws = connect_websocket(&websocket_url)?;
-    let mut command_id = 1;
+    let mut ws = CdpConnection::connect(&websocket_url)?;
     for script in &bundle.scripts {
-        send_cdp_command(
-            &mut ws,
-            command_id,
+        ws.command(
             "Page.addScriptToEvaluateOnNewDocument",
             json!({ "source": &script.source }),
         )
         .map_err(|err| format!("注入 {} new-document 脚本失败: {err}", script.name))?;
-        command_id += 1;
     }
     for script in &bundle.scripts {
-        let response = send_cdp_command(
-            &mut ws,
-            command_id,
-            "Runtime.evaluate",
-            json!({
-                "expression": &script.source,
-                "awaitPromise": true,
-                "returnByValue": true,
-                "allowUnsafeEvalBlockedByCSP": true
-            }),
-        )
-        .map_err(|err| format!("执行 {} 脚本失败: {err}", script.name))?;
+        let response = ws
+            .command(
+                "Runtime.evaluate",
+                json!({
+                    "expression": &script.source,
+                    "awaitPromise": true,
+                    "returnByValue": true,
+                    "allowUnsafeEvalBlockedByCSP": true
+                }),
+            )
+            .map_err(|err| format!("执行 {} 脚本失败: {err}", script.name))?;
         validate_cdp_script_result(script.name, &response)?;
-        command_id += 1;
     }
     Ok(())
 }
@@ -358,181 +345,6 @@ fn is_codex_desktop_page_target(target: &Value) -> bool {
         url.to_ascii_lowercase()
     );
     identity.contains("codex") || identity.contains("chatgpt")
-}
-
-fn connect_websocket(websocket_url: &str) -> Result<TcpStream, String> {
-    let url = Url::parse(websocket_url).map_err(|err| format!("CDP WebSocket URL 无效: {err}"))?;
-    if url.scheme() != "ws" {
-        return Err("CDP WebSocket 仅支持 ws://".to_string());
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| "CDP WebSocket URL 缺少 host".to_string())?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| "CDP WebSocket URL 缺少端口".to_string())?;
-    let mut path = url.path().to_string();
-    if let Some(query) = url.query() {
-        path.push('?');
-        path.push_str(query);
-    }
-    if path.is_empty() {
-        path.push('/');
-    }
-
-    let mut stream = TcpStream::connect((host, port))
-        .map_err(|err| format!("连接 CDP WebSocket 失败: {err}"))?;
-    stream
-        .set_read_timeout(Some(StdDuration::from_secs(5)))
-        .map_err(|err| format!("设置 CDP WebSocket read timeout 失败: {err}"))?;
-    stream
-        .set_write_timeout(Some(StdDuration::from_secs(5)))
-        .map_err(|err| format!("设置 CDP WebSocket write timeout 失败: {err}"))?;
-
-    let key = BASE64_STANDARD.encode([0u8; 16]);
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|err| format!("发送 CDP WebSocket 握手失败: {err}"))?;
-
-    let mut response = Vec::new();
-    let mut buffer = [0u8; 512];
-    loop {
-        let read = stream
-            .read(&mut buffer)
-            .map_err(|err| format!("读取 CDP WebSocket 握手失败: {err}"))?;
-        if read == 0 {
-            return Err("CDP WebSocket 握手提前关闭".to_string());
-        }
-        response.extend_from_slice(&buffer[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-        if response.len() > 8192 {
-            return Err("CDP WebSocket 握手响应过大".to_string());
-        }
-    }
-    let response_text = String::from_utf8_lossy(&response);
-    if !response_text.starts_with("HTTP/1.1 101") && !response_text.starts_with("HTTP/1.0 101") {
-        return Err("CDP WebSocket 握手未升级协议".to_string());
-    }
-
-    Ok(stream)
-}
-
-fn send_cdp_command(
-    stream: &mut TcpStream,
-    id: i64,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
-    let payload = json!({
-        "id": id,
-        "method": method,
-        "params": params
-    });
-    send_ws_text(stream, &payload.to_string())?;
-
-    loop {
-        let message = read_ws_text(stream)?;
-        let value = serde_json::from_str::<Value>(&message)
-            .map_err(|err| format!("解析 CDP 响应失败: {err}"))?;
-        if value.get("id").and_then(Value::as_i64) != Some(id) {
-            continue;
-        }
-        if let Some(error) = value.get("error") {
-            return Err(format!("CDP {method} 失败: {error}"));
-        }
-        return Ok(value);
-    }
-}
-
-fn send_ws_text(stream: &mut TcpStream, text: &str) -> Result<(), String> {
-    send_ws_frame(stream, 0x1, text.as_bytes())
-}
-
-fn send_ws_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> Result<(), String> {
-    let mut frame = Vec::with_capacity(payload.len() + 14);
-    frame.push(0x80 | opcode);
-    let len = payload.len();
-    if len < 126 {
-        frame.push(0x80 | len as u8);
-    } else if len <= u16::MAX as usize {
-        frame.push(0x80 | 126);
-        frame.extend_from_slice(&(len as u16).to_be_bytes());
-    } else {
-        frame.push(0x80 | 127);
-        frame.extend_from_slice(&(len as u64).to_be_bytes());
-    }
-
-    let mask = [0x13u8, 0x37, 0x5a, 0xc0];
-    frame.extend_from_slice(&mask);
-    for (index, byte) in payload.iter().enumerate() {
-        frame.push(byte ^ mask[index % 4]);
-    }
-
-    stream
-        .write_all(&frame)
-        .map_err(|err| format!("发送 CDP WebSocket frame 失败: {err}"))
-}
-
-fn read_ws_text(stream: &mut TcpStream) -> Result<String, String> {
-    loop {
-        let mut header = [0u8; 2];
-        stream
-            .read_exact(&mut header)
-            .map_err(|err| format!("读取 CDP WebSocket frame 失败: {err}"))?;
-        let opcode = header[0] & 0x0f;
-        let masked = header[1] & 0x80 != 0;
-        let mut len = u64::from(header[1] & 0x7f);
-        if len == 126 {
-            let mut buffer = [0u8; 2];
-            stream
-                .read_exact(&mut buffer)
-                .map_err(|err| format!("读取 CDP WebSocket frame 长度失败: {err}"))?;
-            len = u64::from(u16::from_be_bytes(buffer));
-        } else if len == 127 {
-            let mut buffer = [0u8; 8];
-            stream
-                .read_exact(&mut buffer)
-                .map_err(|err| format!("读取 CDP WebSocket frame 长度失败: {err}"))?;
-            len = u64::from_be_bytes(buffer);
-        }
-
-        let mut mask = [0u8; 4];
-        if masked {
-            stream
-                .read_exact(&mut mask)
-                .map_err(|err| format!("读取 CDP WebSocket mask 失败: {err}"))?;
-        }
-        if len > 16 * 1024 * 1024 {
-            return Err("CDP WebSocket frame 过大".to_string());
-        }
-        let mut payload = vec![0u8; len as usize];
-        stream
-            .read_exact(&mut payload)
-            .map_err(|err| format!("读取 CDP WebSocket payload 失败: {err}"))?;
-        if masked {
-            for (index, byte) in payload.iter_mut().enumerate() {
-                *byte ^= mask[index % 4];
-            }
-        }
-
-        match opcode {
-            0x1 => {
-                return String::from_utf8(payload)
-                    .map_err(|err| format!("CDP WebSocket 文本不是 UTF-8: {err}"));
-            }
-            0x8 => return Err("CDP WebSocket 已关闭".to_string()),
-            0x9 => {
-                send_ws_frame(stream, 0xA, &payload)?;
-            }
-            0xA => {}
-            _ => {}
-        }
-    }
 }
 
 #[cfg(test)]
@@ -609,12 +421,14 @@ mod tests {
     #[test]
     fn bundle_contains_only_requested_mobile_hook() {
         assert!(cdp_scripts_for_hooks(CodexCdpLaunchHooks {
-            codex_mobile_no_replace: false
+            codex_mobile_no_replace: false,
+            api_quota: false,
         })
         .scripts
         .is_empty());
         let bundle = cdp_scripts_for_hooks(CodexCdpLaunchHooks {
             codex_mobile_no_replace: true,
+            api_quota: false,
         });
         assert_eq!(bundle.scripts.len(), 1);
         assert_eq!(bundle.scripts[0].name, "codex_mobile_no_replace");
