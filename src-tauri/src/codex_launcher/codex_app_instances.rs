@@ -92,7 +92,6 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
         &executable,
         &args,
         &envs,
-        channel.kind == "api",
     ) {
         Ok(launch) if launch.launched => {
             trigger_instance_legacy_migration(paths.codex_home.clone());
@@ -622,15 +621,15 @@ fn sync_instance_codex_home(
     } else {
         None
     };
-    sync_instance_config(
-        &target_home.join("config.toml"),
-        &channel.config,
-        model_instructions_file.as_deref(),
-    )?;
     write_json_file(
         &target_home.join("auth.json"),
         "实例 auth.json",
         &channel.auth,
+    )?;
+    sync_instance_config(
+        &target_home.join("config.toml"),
+        &channel.config,
+        model_instructions_file.as_deref(),
     )?;
 
     mirror_optional_file(&source_home.join(".env"), &target_home.join(".env"))?;

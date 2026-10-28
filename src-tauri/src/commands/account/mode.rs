@@ -7,9 +7,8 @@ use crate::{
         set_subscription_mode, store_payload, store_payload_from_store, sync_auth_file_if_active,
         write_account_auth,
     },
-    codex_config::current_auto_review_catalog_restore,
     codex_launcher::{
-        attach_ide_reopen, build_ide_reopen_payload,
+        attach_ide_reopen, build_ide_reopen_payload, stop_codex_api_quota_hooks,
         sync_remote_control_runtime_for_current_settings, IdeRuntime,
     },
     json_util::{bool_field, raw_string_field, string_field},
@@ -198,10 +197,10 @@ pub(super) fn switch_account_impl(
     }
     let settings = read_settings_value()?;
     let account = find_store_account(profile_id)?;
-    let catalog_restore = current_auto_review_catalog_restore()?;
     write_account_auth(&account)?;
-    set_subscription_mode(catalog_restore)?;
+    set_subscription_mode()?;
     update_settings_value(&json!({ "codex_active_mode": "chatgpt" }))?;
+    stop_codex_api_quota_hooks()?;
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
         runtime,

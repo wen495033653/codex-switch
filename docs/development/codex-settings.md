@@ -1,32 +1,34 @@
 # Codex 页的设置：代理、远程控制、模型指令、原生插件
 
-## API 输入额度与自动审批模型（2026-10-28）
+## 远程控制下的订阅额度显示兼容（2026-10-28）
 
-### 当前行为与依据
+### 范围与数据流
 
-- 参考现象：[LinuxDo 主题及 18 楼](https://linux.do/t/topic/2962721/18)：保留 ChatGPT 登录使用第三方 API 时，官方额度耗尽仍会锁住输入；后台自动审批也可能因专用模型不可用而失败。
-- 本机 Desktop `26.1023.6123.0` 的 `app-primary-8eba40dc50b2.js`：官方额度 selector 为 `Yz`，导出 `Kq`；Local 的 `codex-composer-adapter-6b724302bfa6.js` 把它读为 `Hr`，加入 `xi`，再传为 `submitDisabled`。这与 ChatGPT composer 的独立 conversation limit 不同，后者不改。
-- API 主目录的 watcher 接管、手动重启、切换账号后重新打开，以及 API 多开实例，均携带 CDP 参数。订阅实例不启用该 Hook；多开实例按自身 channel 判断，不跟随主目录当前模式。
-- `cdp/api_quota.js` 只定位当前语义的官方额度 selector 和真实配置 descriptor；断点每次读取 Local 已加载配置，仅 `model_provider = "api"` 时浅拷贝 selector 的局部额度数据并设 `rate_limit.allowed = true`。不改共享官方额度对象，不解除策略、模型加载或第三方 API 自身的限额。
-- `cdp/api_quota.rs` 保持 Debugger 连接，用精确 URL 条件断点覆盖同 bundle 的刷新；只有 V8 已绑定实际代码位置才返回就绪。切订阅先停止 Hook，再做会话预检查；定位、执行、连接错误保留原文并向上传递，不冒充成功、不新增自动重试。
-- 日志：`codex_api_quota_hook_ready`（port、语义与实际 location）、`codex_api_quota_hook_stopped`；失败为 `codex_api_quota_hook_error`。生产不新增 Node 依赖，不修改官方安装包。
+- 用户明确要求：仅在 SW 开启远程控制、保留订阅登录而会话走 API 时，官方订阅额度耗尽不应锁住发送，也不显示对应的“Codex 和工作使用额度已用完”框。普通 API、订阅模式、独立多开实例保持原行为。
+- 不改自动审批模型、审批策略或模型目录。前一轮额外加入的 `auto_review_model_override` 及受管 catalog 逻辑已撤销；只读确认正式默认 home 和已有实例均未启用该目录，因此没有为本次撤销改写正式配置。
+- 本机 Desktop `26.1023.6123.0`：primary bundle 的官方 quota selector `Yz` 导出 `Kq`，Local adapter 读为 `Hr` 并加入 `xi`，再传 `FK.submitDisabled`。额度显示框来自 composer-content 对官方 quota 的 render-local 数据消费。两处只处理官方额度，不清第三方 API 自己的错误、策略限制、模型加载或审批状态。
+- 额度框的实际消费链为 `AM.g → rateLimit → bg.rateLimit → primary.u1r`；`u1r` 只在官方 quota 非空且存在 upsell 条件时创建外框和 `Kz/d1r`。将 render-local `g` 置空会跳过整个官方额度框和其警告分支，直接返回原 lower-priority 内容，不留下空卡片；独立的 image-generation 分支不改。
+- 调用方仅在有效远控开启时启动兼容；renderer 同时核实 Local provider 为 SW 的 `api` 且 provider 带远控混合配置的 bearer 字段（只判存在/非空，不记录值）。普通 API 的 `requires_openai_auth=true` 本身不构成远控依据。
+- 已用当前 CLI 的隔离 `config/read` 验证 renderer 所读的 `config.model_providers.api.experimental_bearer_token` 仍为非空字符串，未被删成 null；前端 `_g(...).config → ng → cv.data` 保留该字段树。验证仅用虚构凭据，证据为 `%TEMP%/codex-sw-config-read-rk7mpvnq/field-shape.json`，没有读取或输出正式 key。
+- 关闭远控、控制账号失效/移除、切回订阅时停止 SW 持有的 quota Hook；不结束 Codex，不修改官方安装包，不新增 Node 生产依赖。日志沿用 `codex_api_quota_hook_ready/stopped/error`，中文说明对应远控额度兼容。
+- 已显示的额度状态会被 Maitai/Jotai 缓存，仅挂断点或普通 rerender 不保证立即重算。因此首次生效只允许在 SW 自己启动/重启的新 child 上：先挂发送 URL 断点，再只读 fetch 本地静态 JS 以预挂 banner URL 断点，随后单次 `Page.reload`。延迟加载的 banner 可先 pending，首次执行前由 V8 自动绑定；日志区分发送已绑定与 banner pending，不将后者称为已完成渲染。
+- 对已有活跃窗口，首次 attach 返回 `[REMOTE_QUOTA_RESTART_REQUIRED]`，提示通过 SW 的现有“重启 Codex”操作生效，不静默刷新，不把旧缓存当作已修复；同 target 已就绪的 supervisor 可复用，不重复 reload。远控配置预检查/应用失败时传播原错并撤 scope；post-exit 自动关闭远控后使用最新 hook flags，未核实 scope 时不沿用旧开启状态。
 
-### 自动审批模型目录
+### 外部 60 秒提示与原生就绪
 
-- 当前 CLI 的审批 provider 继承主对话 provider，不应添加不存在的 `guardian_model` TOML 键。隔离实跑证明：混合 ChatGPT 登录与 API bearer 时，默认可另选 `codex-auto-review`；请求仍走同一个 API 地址与 bearer。使用 `ModelInfo.auto_review_model_override` 可把审批模型固定为当前主模型，不关闭审批。
-- `codex_config/api_auto_review.rs` 在 API 模式生成当前 home 的 `codex-switch-api-models.json`；每个模型条目的 `auto_review_model_override` 设为自身 `slug`，保留其余模型字段。源文件不修改，源是明确配置的 `model_catalog_json`，未配置时为 Codex 的 `models_cache.json`；缺失或损坏显式报错，且发生在写入账号认证之前。
-- 受管文件的 `_codex_switch.original_model_catalog_json` 是恢复信息的唯一入口，允许原值为空；重复应用从原源文件重新生成，不套娃，同内容不重写。已处于 API 的旧安装也会应用目录，不为此覆盖认证或强制重启。多开目录独立保存；订阅恢复原指针/删除原本不存在的键，只处理仍指向 SW 受管文件的配置，不覆盖后来手动选择的目录。
-- 配置生效仍需对应 Codex app-server 重新加载；写盘不是正在运行的审批已切换的证据。失败事件 `codex_api_auto_review_catalog_error` 包含 operation、catalog、source、model、原始 error。
-- 回退：切回订阅恢复原 `model_catalog_json`；源 catalog 始终未改。若手动停用 SW，先退出对应 Codex，再按受管 JSON 的上述原指针恢复 `config.toml`（原值为空则删除该根键），之后启动原程序。
+- 用户引用的 `ERROR: Codex Input Unlock did not become ready within 60 seconds` 和 `Press Enter to close this window` 来自外部 [Codex Input Unlock PowerShell 启动器](https://github.com/1zero224/codex-input-unlock)。本机默认安装目录不存在，无该脚本/supervisor 进程，SW 源码和已查日志中未出现该原文，未证明本机发生过该故障。
+- SW 使用原生 Rust CDP，不启动上述 PS/Node 启动器或等待 Enter 的控制台窗口。定位与就绪必须保留 target、script、locator、actual breakpoint 的原始失败依据；不靠增加等待时长掩盖失败，不把仅有进程或端口当成 UI 已修复。
+- 原生 RPC 使用同一总 deadline，无关事件流不延长预算。owned reload 和后续正常刷新按 `Destroyed/Cleared/Created` 等待主 frame 的新 default context，再显式使用其 `contextId`；iframe 的 default context 不解除等待。仅在旧 context 销毁和对应 context-invalid 协议错误均已证实的情况下，将在途只读 evaluate 转到新 context；其他 RPC 错误保留原文且不重发。对应状态变化记录 `codex_api_quota_context_replaced`，包含原 code/message 和 old/new context。
+- Ready 发布只允许从 Starting 且未取消时完成；取消不能被迟到的 Ready 覆盖，已存在的 Failed 原错优先保留。缺 selector、缺主 context 或取消都显式结束等待并保留阶段诊断，不让用户只看到无依据的固定 60 秒提示。
 
-### 验证层级
+### 验证入口与边界
 
-- 已真实运行（隔离 V8）：`CODEX_SWITCH_TEST_CDP=1 node --test scripts/test-api-quota.mjs` 调用真实 Rust supervisor。连续两次 API 解锁，切 `openai` 立即保持原锁定，再切 API 解锁，同 URL 重载后仍生效，停止后恢复原锁定；共享 quota 的 `allowed` 全程为 false。
-- 已真实运行（当前 CLI + localhost 替身服务）：`build_isolated_api_auto_review_catalog` 生成的实际 Rust 受管目录，令后台审批从 `codex-auto-review` 变为 `parent-model`，主对话模型未变。审批照常执行并返回 fixture deny，没有执行命令；请求目标和 bearer 仍为同一替身 provider。证据：`%TEMP%/codex-sw-guardian-qa-t7xuz94l/{requests,summary}.json`；生成目录：`%TEMP%/codex-sw-guardian-qa-j5srurbd/codex-switch-api-models.json`。
-- 离线：当前已安装 primary bundle 的 selector/config descriptor 唯一命中；目录测试覆盖原文件保留、重复应用、源更新、同内容不写、实例隔离、订阅恢复、手动指针保留、缺源/损坏错误及日志；流程故障注入覆盖停止先于失败的会话预检查，以及注入错误传播。
-- 最终离线检查：`cargo test` 为 380 passed / 7 ignored（其中本次两个显式隔离入口已另行运行通过）；`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过。`npm run check` 退出 0，68 passed / 1 opt-in skipped，前端构建通过；测试并行清理 Vite 临时缓存时打印一次 `EPERM rmdir node_modules/.vite/deps_temp_*`，不计为此处的功能验证。额外覆盖标准 TOML 路径行尾注释、引号内 `#` 和 literal 反斜杠；订阅切换先只读验证恢复计划，再写认证、应用配置，避免把目录错误变成认证半切换。
-- `npm run tauri:build -- --no-bundle` 的最终源码构建通过，本机修复版已替换，原 exe 保留为 `codex-switch.before-api-quota-20261028.exe`。替换时首次复制因结束进程后的文件映射尚未释放而报占用；只读确认 SW 进程已退出、原文件与备份均保留后，复制成功。SW 保持关闭，未为验收重启正式 Codex、切换账号或写入正式 Codex 配置；安装后的真实 API 场景仍按下一条边界区分。
-- 未验证：在真实第三方服务与官方额度耗尽的现场发送对话、真实自动审批成功结果、macOS。以上隔离证据不等同于这些现场结果。
+- `scripts/test-api-quota.mjs` 的 opt-in 真实 V8 + Rust supervisor 入口：`CODEX_SWITCH_TEST_CDP=1 node --test scripts/test-api-quota.mjs`。定向覆盖有效远控、普通 API、订阅、官方额度共享对象不变、停止恢复、首次已缓存界面的重算与刷新。
+- 最终离线检查：`cargo test` 为 383 passed / 6 ignored；`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；`npm run check` 为 69 passed / 4 opt-in skipped，前端与 hygiene 构建通过。本次 opt-in V8 入口另行显式运行，7 项全部通过。
+- 已真实运行（隔离 V8，不是正式 UI）：先缓存 `blocked=true/banner=true`，warm 首次 attach 不刷新；owned 单次 reload 后首次缓存读取 `blocked=false/firstBanner=false`，重复读取不增加重算次数；lazy banner 第一次执行即 false。普通 API/订阅保持原 true；共享官方 quota 全程仍为 `allowed=false` 和 `usage_limit`。缺 selector 在约 37ms 返回原 V8 stack，启动取消约 240ms 返回。
+- 已真实运行（本地 CDP 协议 fixture）：持续无关事件仍受总 RPC deadline 约束；主 default context 延迟创建、iframe 先到、正常刷新、缺主 context、在途旧 context 销毁后切换均有定向证据；任意其他 RPC error 不重发。取消后发布 Ready 的确定序列也保持取消。Node 的重编译/生命周期适配器与实际 Chromium 页面导航分开，不将这些证据称为正式 Codex 整机 UI 验证。
+- 本机替换（2026-10-28）：`npm run tauri:build -- --no-bundle` 通过；本轮最终 exe 为 9,284,608 字节，构建时间 21:16（UTC+8）。用户确认后只结束旧 SW，等待其进程退出并释放句柄，再复制修复版；复制后长度和修改时间与构建产物一致，原版 `codex-switch.before-api-quota-20261028.exe` 保留。当前 Codex 的 PID 未变，未为替换刷新或重启；SW 按确认保持关闭。回退时退出 SW，用该原版备份覆盖主程序，再重启 Codex 以清除运行期 Hook/缓存。
+- 本机正式远控当前关闭；没有为测试切换正式账号、修改正式 `config.toml` 或重启当前 Codex。隔离验证与真实耗尽订阅账号的现场结果分开记录，不将前者称为后者。
 
 ## 代理与远程控制的状态反馈（2026-09-06）
 
@@ -63,7 +65,7 @@ TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条
 - 删除了“Plugin 增强”开关、它的设置字段和对 `plugin/list` 请求的 Hook，改用 Codex 原生插件目录。旧设置字段 `codex_plugins_enabled` 在读取时丢弃，不再触发重启或注入。
 - 依据：[官方插件文档](https://learn.chatgpt.com/zh-Hans/docs/plugins)说明 API key 登录可以管理受支持的官方插件；本机 26.901.6511.0 实测原生 `plugin/list` 无错误（三个目录分别有 5、8、3514 个插件），当时 Hook 并未生效（`patched=false`），说明它已经没有必要。部分 OAuth 插件有限制，任意自定义 API 提供方并未全部验证。
 - 独立的插件重启 command 已删除。模型指令、代理、远控改动后的重启提示统一调用 `restart_current_codex_app_normal`。
-- `cdp.rs` 保留远控的 `mobile_no_replace` Hook、会话同步需要的 CDP 重启流程；2026-10-28 增加下文的 API 输入额度兼容。
+- `cdp.rs` 保留远控的 `mobile_no_replace` Hook、会话同步需要的 CDP 重启流程；2026-10-28 增加上文的远程控制订阅额度显示兼容。
 - 验证：Rust 测试（旧字段被移除且不触发动作；会话同步仍按需保留 mobile Hook）；`scripts/test-native-plugins.mjs`（保存设置不再探测插件状态；重启提示成功关闭、失败保留并显示错误；源码里没有旧开关和旧 command）。没有实测 API 身份下的插件安装卸载和远控连接。
 
 ## 远程控制关闭时不再改动未选模式的配置（2026-10-17）

@@ -133,7 +133,9 @@ fn missing_remote_control_account_fallback_patch() -> Value {
 }
 
 pub(crate) fn reset_remote_control_to_api_mode_settings() -> Result<Value, String> {
-    update_settings_value(&missing_remote_control_account_fallback_patch())
+    let settings = update_settings_value(&missing_remote_control_account_fallback_patch())?;
+    super::cdp::stop_codex_api_quota_hooks()?;
+    Ok(settings)
 }
 
 fn remote_control_sync_changed(legacy_runtime_changed: bool, runtime_config_changed: bool) -> bool {
@@ -241,13 +243,11 @@ fn apply_remote_control_mixed_config(settings: &Value) -> Result<(), String> {
     let account_id = remote_control_account_id_from_settings(settings);
     let account = remote_control_account(&account_id)?;
     let (api_base_url, api_key) = remote_control_api_session_profile_from_settings(settings)?;
-    let model_catalog = crate::codex_config::prepare_current_api_auto_review_catalog()?;
 
     write_account_auth(&account)?;
     set_config_values(vec![
         ("model_provider", API_PROVIDER_ID.to_string()),
         ("cli_auth_credentials_store", "file".to_string()),
-        ("model_catalog_json", model_catalog),
     ])?;
     remove_config_values(&[
         "preferred_auth_method",
@@ -511,6 +511,9 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
         None => {}
     }
     let runtime_target = remote_control_runtime_target(&settings);
+    if !remote_control_enabled_from_settings(&settings) {
+        super::cdp::stop_codex_api_quota_hooks()?;
+    }
     let fallback_changed_runtime_target = matches!(
         account_issue.as_ref(),
         Some(RemoteControlAccountIssue::Missing(_))
@@ -528,7 +531,7 @@ pub(crate) fn sync_remote_control_runtime_for_current_settings(
         }
         RemoteControlRuntimeTarget::Subscription => {
             let pending = remote_control_mixed_config_present()?;
-            set_subscription_mode(crate::codex_config::current_auto_review_catalog_restore()?)?;
+            set_subscription_mode()?;
             remove_remote_control_config()?;
             pending
         }
@@ -683,6 +686,7 @@ fn disable_remote_control_after_login_expired() -> Result<(Value, bool), String>
     let settings = update_settings_value(&json!({
         REMOTE_CONTROL_ENABLED_SETTING_KEY: false
     }))?;
+    super::cdp::stop_codex_api_quota_hooks()?;
     let settings = super::proxy_env::apply_codex_proxy_env_state_to_settings(settings)?;
     let changed = sync_remote_control_runtime_for_current_settings("remote_control_login_expired")?;
     Ok((settings, changed))
@@ -734,6 +738,9 @@ pub(crate) async fn get_codex_remote_control_status() -> Result<Value, String> {
 
 fn get_codex_remote_control_status_impl() -> Result<Value, String> {
     let mut settings = read_settings_value()?;
+    if !remote_control_enabled_from_settings(&settings) {
+        super::cdp::stop_codex_api_quota_hooks()?;
+    }
     let account_issue = remote_control_account_issue(&settings)?;
     let mut auto_disable_message = None;
     let mut changed = false;
@@ -864,6 +871,9 @@ fn set_codex_remote_control_enabled_impl(enabled: bool) -> Result<Value, String>
         })
     };
     let settings = update_settings_value(&settings_patch)?;
+    if !remote_control_enabled_from_settings(&settings) {
+        super::cdp::stop_codex_api_quota_hooks()?;
+    }
     let settings = super::proxy_env::apply_codex_proxy_env_state_to_settings(settings)?;
     let changed =
         sync_remote_control_runtime_for_current_settings("set_codex_remote_control_enabled")?;

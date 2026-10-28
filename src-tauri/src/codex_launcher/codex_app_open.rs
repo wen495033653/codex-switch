@@ -5,7 +5,7 @@ use super::remote_control::{
 use super::{
     cdp::{
         codex_processes_have_cdp_launch, inject_codex_cdp_hooks, launch_codex_with_cdp_hooks,
-        launch_codex_with_cdp_hooks_with_options, CodexCdpLaunchHooks,
+        stop_codex_api_quota_hooks, CodexCdpLaunchHooks,
     },
     codex_app_watcher::{
         codex_processes_log_value, disable_automatic_codex_app_open, CodexAppOpenOutcome,
@@ -86,14 +86,14 @@ pub(crate) struct CodexAppInstanceLaunch {
 
 impl CodexAppOpenActions {
     fn from_settings(settings: &Value) -> Self {
+        let remote_control_enabled = remote_control_enabled_from_settings(settings);
         Self {
-            remote_control_enabled: remote_control_enabled_from_settings(settings),
+            remote_control_enabled,
             session_sync_enabled: settings
                 .get("codex_session_sync_enabled")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
-            api_quota_enabled: settings.get("codex_active_mode").and_then(Value::as_str)
-                == Some("api"),
+            api_quota_enabled: remote_control_enabled,
         }
     }
 
@@ -116,6 +116,11 @@ pub(crate) fn handle_codex_app_open(
         return Ok(CodexAppOpenOutcome::default());
     };
     trigger_legacy_codex_data_migration();
+    reconcile_remote_quota_scope(
+        codex_app_open_actions()?.remote_control_enabled,
+        || sync_remote_control_runtime_for_open_if_pending("codex_app_open_handler"),
+        stop_codex_api_quota_hooks,
+    )?;
     let actions = codex_app_open_actions()?;
     log_event(
         "codex_app_open_handler_start",
@@ -156,8 +161,6 @@ pub(crate) fn handle_codex_app_open(
     }
 
     let session_sync_pending = status.session_sync_pending;
-    sync_remote_control_runtime_for_open_if_pending("codex_app_open_handler");
-
     let Some(relaunch_mode) = codex_relaunch_mode_for_app_open(actions, status) else {
         if status.cdp_launch_applied && actions.api_quota_enabled {
             reconcile_cdp_hooks_for_open(actions, || {
@@ -478,37 +481,69 @@ fn remote_control_runtime_pending_from_preview(
     }
 }
 
-fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) {
-    match preview_remote_control_runtime_for_current_settings(trigger) {
-        Ok(true) => match sync_remote_control_runtime_for_current_settings(trigger) {
-            Ok(changed) => log_event(
+fn reconcile_remote_quota_scope(
+    remote_enabled: bool,
+    sync_runtime: impl FnOnce() -> Result<(), String>,
+    mut stop_hooks: impl FnMut() -> Result<usize, String>,
+) -> Result<(), String> {
+    if !remote_enabled {
+        stop_hooks()?;
+    }
+    match sync_runtime() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if remote_enabled {
+                if let Err(cleanup) = stop_hooks() {
+                    return Err(format!("{error}；停止远控额度兼容失败: {cleanup}"));
+                }
+            }
+            Err(error)
+        }
+    }
+}
+
+fn sync_remote_control_runtime_for_open_if_pending(trigger: &str) -> Result<(), String> {
+    reconcile_remote_runtime_for_open(
+        trigger,
+        preview_remote_control_runtime_for_current_settings(trigger),
+        || sync_remote_control_runtime_for_current_settings(trigger),
+    )
+}
+
+fn reconcile_remote_runtime_for_open(
+    trigger: &str,
+    preview: Result<bool, String>,
+    sync: impl FnOnce() -> Result<bool, String>,
+) -> Result<(), String> {
+    let result = match preview {
+        Ok(true) => sync().map(|changed| {
+            log_event(
                 "codex_app_open_handler_remote_control_runtime_applied",
                 json!({
                     "reason": "runtime_pending",
                     "changed": changed
                 }),
-            ),
-            Err(err) => log_event_once(
-                "codex_app_open_handler_remote_control_runtime_error",
-                json!({
-                    "trigger": trigger,
-                    "error": err
-                }),
-            ),
-        },
-        Ok(false) => log_event(
-            "codex_app_open_handler_remote_control_runtime_skip",
-            json!({ "reason": "runtime_current" }),
-        ),
-        // Reached on the watcher's 60 s reconcile too: one lasting cause is recorded once per run.
-        Err(err) => log_event_once(
+            )
+        }),
+        Ok(false) => {
+            log_event(
+                "codex_app_open_handler_remote_control_runtime_skip",
+                json!({ "reason": "runtime_current" }),
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = &result {
+        log_event_once(
             "codex_app_open_handler_remote_control_runtime_error",
             json!({
                 "trigger": trigger,
-                "error": err
+                "error": error
             }),
-        ),
+        );
     }
+    result
 }
 
 pub(crate) fn restart_current_codex_app_normal() -> Result<Value, String> {
@@ -625,7 +660,6 @@ pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
     executable: &str,
     args: &[String],
     envs: &[(String, String)],
-    api_quota: bool,
 ) -> Result<CodexAppInstanceLaunch, String> {
     let path = Path::new(executable);
     if !path.exists() {
@@ -638,15 +672,8 @@ pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
         );
         return Ok(CodexAppInstanceLaunch { launched: false });
     }
-    // An instance follows its own channel, not the default home's selected account.
-    let mode = if api_quota {
-        CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
-            codex_mobile_no_replace: false,
-            api_quota: true,
-        })
-    } else {
-        CodexRelaunchMode::Normal
-    };
+    // Standalone instances do not use the default home's remote-control login.
+    let mode = CodexRelaunchMode::Normal;
     log_event(
         "codex_app_instance_launch_start",
         json!({
@@ -654,12 +681,7 @@ pub(crate) fn launch_codex_app_instance_for_current_settings_with_options(
             "mode": format!("{mode:?}")
         }),
     );
-    match mode {
-        CodexRelaunchMode::Cdp(hooks) => {
-            launch_codex_with_cdp_hooks_with_options(path, hooks, args, envs)?;
-        }
-        CodexRelaunchMode::Normal => launch_codex_process_with_options(executable, args, envs)?,
-    }
+    launch_codex_process_with_options(executable, args, envs)?;
     Ok(CodexAppInstanceLaunch { launched: true })
 }
 
@@ -788,7 +810,14 @@ fn relaunch_codex_after_exit(
                 Ok(())
             }
         },
-        || relaunch_closed_codex(executables, mode, origin),
+        || {
+            relaunch_with_verified_scope(
+                mode,
+                post_exit_session_sync,
+                codex_app_open_actions,
+                |mode| relaunch_closed_codex(executables, mode, origin),
+            )
+        },
     )?;
     log_event(
         "codex_app_relaunch_processes_finish",
@@ -799,6 +828,49 @@ fn relaunch_codex_after_exit(
         }),
     );
     Ok(restarted)
+}
+
+fn relaunch_with_verified_scope(
+    requested: CodexRelaunchMode,
+    session_sync_pending: bool,
+    read_scope: impl FnOnce() -> Result<CodexAppOpenActions, String>,
+    launch: impl FnOnce(CodexRelaunchMode) -> Result<usize, String>,
+) -> Result<usize, String> {
+    match read_scope() {
+        Ok(latest) => launch(refreshed_relaunch_mode(
+            requested,
+            latest,
+            session_sync_pending,
+        )),
+        Err(error) => {
+            // The desktop was already closed. Keep the existing one-reopen error contract,
+            // but never attach hooks whose current scope could not be verified.
+            let reopened = launch(CodexRelaunchMode::Normal);
+            log_event(
+                "codex_app_relaunch_scope_read_error",
+                json!({
+                    "error": error, "hooksEnabled": false, "retry": false,
+                    "restartedCount": reopened.as_ref().ok(), "relaunchError": reopened.as_ref().err()
+                }),
+            );
+            match reopened {
+                Ok(_) => Err(error),
+                Err(relaunch) => Err(format!("{error}；重新打开 Codex 失败: {relaunch}")),
+            }
+        }
+    }
+}
+
+fn refreshed_relaunch_mode(
+    requested: CodexRelaunchMode,
+    latest: CodexAppOpenActions,
+    session_sync_pending: bool,
+) -> CodexRelaunchMode {
+    if session_sync_pending && matches!(requested, CodexRelaunchMode::Cdp(_)) {
+        CodexRelaunchMode::Cdp(codex_cdp_launch_hooks_for_watch_open(latest))
+    } else {
+        codex_relaunch_mode_for_user_open(latest)
+    }
 }
 
 // Codex is already closed here. A failed config apply or session sync still reopens it once;
@@ -1305,7 +1377,13 @@ mod tests {
                 "codex_session_sync_enabled": true
             }));
             assert_eq!(
-                codex_relaunch_mode_for_app_open(actions, CodexAppOpenStatus::default()),
+                codex_relaunch_mode_for_app_open(
+                    actions,
+                    CodexAppOpenStatus {
+                        cdp_launch_applied: true,
+                        ..CodexAppOpenStatus::default()
+                    }
+                ),
                 None
             );
             assert_eq!(
@@ -1318,46 +1396,48 @@ mod tests {
                 ),
                 Some(CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
                     codex_mobile_no_replace: remote,
-                    api_quota: false,
+                    api_quota: remote,
                 }))
             );
         }
     }
 
     #[test]
-    fn api_mode_requires_cdp_even_without_session_sync_or_remote_control() {
+    fn only_effective_remote_control_requires_quota_cdp() {
         for mode in ["", "chatgpt", "api"] {
-            let actions = CodexAppOpenActions::from_settings(&json!({
-                "codex_active_mode": mode,
-                "codex_session_sync_enabled": false,
-                "codex_remote_control_enabled": false
-            }));
-            let expected = if mode == "api" {
-                Some(CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
-                    codex_mobile_no_replace: false,
-                    api_quota: true,
-                }))
-            } else {
-                None
-            };
-            assert_eq!(
-                codex_relaunch_mode_for_app_open(actions, CodexAppOpenStatus::default()),
-                expected
-            );
-            assert_eq!(
-                codex_relaunch_mode_for_app_open(
-                    actions,
-                    CodexAppOpenStatus {
-                        cdp_launch_applied: true,
-                        ..CodexAppOpenStatus::default()
-                    }
-                ),
-                None
-            );
-            assert_eq!(
-                codex_relaunch_mode_for_user_open(actions),
-                expected.unwrap_or(CodexRelaunchMode::Normal)
-            );
+            for remote in [false, true] {
+                let actions = CodexAppOpenActions::from_settings(&json!({
+                    "codex_active_mode": mode,
+                    "codex_session_sync_enabled": false,
+                    "codex_remote_control_enabled": remote
+                }));
+                let expected = if remote && mode != "chatgpt" {
+                    Some(CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
+                        codex_mobile_no_replace: true,
+                        api_quota: true,
+                    }))
+                } else {
+                    None
+                };
+                assert_eq!(
+                    codex_relaunch_mode_for_app_open(actions, CodexAppOpenStatus::default()),
+                    expected
+                );
+                assert_eq!(
+                    codex_relaunch_mode_for_app_open(
+                        actions,
+                        CodexAppOpenStatus {
+                            cdp_launch_applied: true,
+                            ..CodexAppOpenStatus::default()
+                        }
+                    ),
+                    None
+                );
+                assert_eq!(
+                    codex_relaunch_mode_for_user_open(actions),
+                    expected.unwrap_or(CodexRelaunchMode::Normal)
+                );
+            }
         }
     }
 
@@ -1384,8 +1464,10 @@ mod tests {
     }
 
     #[test]
-    fn api_hook_failure_is_logged_and_returned_without_claiming_success() {
-        let actions = CodexAppOpenActions::from_settings(&json!({ "codex_active_mode": "api" }));
+    fn remote_quota_hook_failure_is_logged_and_returned_without_claiming_success() {
+        let actions = CodexAppOpenActions::from_settings(&json!({
+            "codex_active_mode": "api", "codex_remote_control_enabled": true
+        }));
         let error =
             reconcile_cdp_hooks_for_open(actions, || Err("fixture locator matches=0".into()))
                 .unwrap_err();
@@ -1395,5 +1477,93 @@ mod tests {
             entry["details"]["event"] == "codex_app_open_handler_cdp_hook_error"
                 && entry["details"]["details"]["error"] == error
         }));
+    }
+
+    #[test]
+    fn remote_runtime_failure_stops_hooks_instead_of_continuing_with_enabled_flag() {
+        for remote_enabled in [false, true] {
+            let calls = RefCell::new(Vec::new());
+            let error = reconcile_remote_quota_scope(
+                remote_enabled,
+                || {
+                    calls.borrow_mut().push("sync");
+                    Err("fixture invalid auth.json".into())
+                },
+                || {
+                    calls.borrow_mut().push("stop");
+                    Ok(1)
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, "fixture invalid auth.json");
+            assert_eq!(
+                *calls.borrow(),
+                if remote_enabled {
+                    vec!["sync", "stop"]
+                } else {
+                    vec!["stop", "sync"]
+                }
+            );
+        }
+        let error = reconcile_remote_runtime_for_open(
+            "fixture_preview",
+            Err("fixture preview error".into()),
+            || panic!("must not apply after failed preview"),
+        )
+        .unwrap_err();
+        assert_eq!(error, "fixture preview error");
+        let error = reconcile_remote_runtime_for_open("fixture_sync", Ok(true), || {
+            Err("fixture apply error".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "fixture apply error");
+    }
+
+    #[test]
+    fn restart_uses_effective_remote_scope_after_account_auto_disable() {
+        let requested = CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
+            codex_mobile_no_replace: true,
+            api_quota: true,
+        });
+        let latest = CodexAppOpenActions::from_settings(&json!({
+            "codex_active_mode": "api", "codex_remote_control_enabled": false
+        }));
+        assert_eq!(
+            refreshed_relaunch_mode(requested, latest, false),
+            CodexRelaunchMode::Normal
+        );
+        assert_eq!(
+            refreshed_relaunch_mode(requested, latest, true),
+            CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
+                codex_mobile_no_replace: false,
+                api_quota: false,
+            })
+        );
+    }
+
+    #[test]
+    fn post_exit_scope_read_error_reopens_once_without_hooks_and_returns_error() {
+        let requested = CodexRelaunchMode::Cdp(CodexCdpLaunchHooks {
+            codex_mobile_no_replace: true,
+            api_quota: true,
+        });
+        for launch_result in [Ok(1), Err("fixture spawn error".to_string())] {
+            let calls = RefCell::new(Vec::new());
+            let error = relaunch_with_verified_scope(
+                requested,
+                true,
+                || Err("fixture settings.json read error".into()),
+                |mode| {
+                    calls.borrow_mut().push(mode);
+                    launch_result.clone()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(*calls.borrow(), [CodexRelaunchMode::Normal]);
+            assert!(error.contains("fixture settings.json read error"));
+            if launch_result.is_err() {
+                assert!(error.contains("fixture spawn error"));
+            }
+        }
     }
 }

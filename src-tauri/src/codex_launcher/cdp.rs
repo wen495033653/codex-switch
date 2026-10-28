@@ -124,11 +124,15 @@ pub(crate) fn inject_codex_cdp_hooks(
             inject_cdp_scripts(port, &scripts)?;
         }
         if hooks.api_quota {
-            api_quota::start(port, &page_websocket_url(port)?)?;
+            api_quota::start(port, &page_websocket_url(port)?, false)?;
         }
         injected += 1;
     }
     Ok(injected)
+}
+
+pub(crate) fn stop_codex_api_quota_hooks() -> Result<usize, String> {
+    api_quota::stop_all()
 }
 
 fn command_line_has_cdp_launch(command_line: &str) -> bool {
@@ -207,15 +211,26 @@ pub(crate) fn launch_codex_with_cdp_hooks_with_options(
     let mut child = command
         .spawn()
         .map_err(|err| format!("启动 Codex hook 模式失败: {err}"))?;
-    let readiness = wait_and_inject_cdp_scripts(debug_port, &scripts).and_then(|()| {
-        if hooks.api_quota {
-            api_quota::start(debug_port, &page_websocket_url(debug_port)?)?;
-        }
-        Ok(())
-    });
+    let empty = CdpScriptBundle {
+        scripts: Vec::new(),
+    };
+    let readiness =
+        wait_and_inject_cdp_scripts(debug_port, if hooks.api_quota { &empty } else { &scripts })
+            .and_then(|()| {
+                if hooks.api_quota {
+                    api_quota::start(debug_port, &page_websocket_url(debug_port)?, true)?;
+                    if !scripts.scripts.is_empty() {
+                        inject_cdp_scripts(debug_port, &scripts)?;
+                    }
+                }
+                Ok(())
+            });
     if let Err(err) = readiness {
+        let quota_cleanup = api_quota::stop(debug_port);
         let cleanup = child.kill();
-        return Err(format!("{err}; child cleanup={cleanup:?}"));
+        return Err(format!(
+            "{err}; quota cleanup={quota_cleanup:?}; child cleanup={cleanup:?}"
+        ));
     }
     Ok(())
 }

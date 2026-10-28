@@ -11,9 +11,8 @@ use crate::{
 use crate::{
     api_config::API_PROVIDER_ID,
     codex_config::{
-        apply_auto_review_catalog_restore, prepare_current_api_auto_review_catalog,
         read_config_snapshot, remove_config_values, remove_table_config, set_config_values,
-        set_table_config, CatalogRestore, ConfigSnapshot,
+        set_table_config, ConfigSnapshot,
     },
     json_util::raw_string_field,
 };
@@ -37,8 +36,7 @@ impl ApiModeProfile {
     }
 }
 
-pub(crate) fn set_subscription_mode(catalog_restore: CatalogRestore) -> Result<(), String> {
-    apply_auto_review_catalog_restore(catalog_restore)?;
+pub(crate) fn set_subscription_mode() -> Result<(), String> {
     set_config_values(vec![("cli_auth_credentials_store", "file".to_string())])?;
     remove_config_values(&[
         "preferred_auth_method",
@@ -129,12 +127,10 @@ fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Valu
 pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
     let profile = ApiModeProfile::from_value(profile)?;
     let api_key = profile.api_key_or_auth_file().trim().to_string();
-    let model_catalog = prepare_current_api_auto_review_catalog()?;
     write_api_auth(&api_key)?;
     set_config_values(vec![
         ("model_provider", API_PROVIDER_ID.to_string()),
         ("cli_auth_credentials_store", "file".to_string()),
-        ("model_catalog_json", model_catalog),
     ])?;
     remove_config_values(&[
         "preferred_auth_method",
@@ -166,9 +162,6 @@ pub(crate) fn restore_api_mode_if_selected() -> Result<bool, String> {
     if raw_string_field(&state, "mode") == "api"
         && raw_string_field(&state, "model_provider") == API_PROVIDER_ID
     {
-        // Upgrade an already-selected API mode without replacing its auth or restarting Codex.
-        let model_catalog = prepare_current_api_auto_review_catalog()?;
-        set_config_values(vec![("model_catalog_json", model_catalog)])?;
         return Ok(false);
     }
 

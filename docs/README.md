@@ -9,7 +9,7 @@
 | [dev-preview.md](development/dev-preview.md) | 想运行开发版又不影响正式数据；大改之后做真实运行检查 |
 | [codex-restart.md](development/codex-restart.md) | 改 Codex 的结束、重启、接管和会话同步流程 |
 | [session-manager.md](development/session-manager.md) | 改会话管理（归档、删除恢复、导入导出、预览、旧版数据迁移），或会话同步读写 rollout / global state 的方式 |
-| [codex-settings.md](development/codex-settings.md) | 改 Codex 页：代理、远程控制、模型指令、原生插件；API 输入额度与后台审批模型兼容 |
+| [codex-settings.md](development/codex-settings.md) | 改 Codex 页：代理、远程控制、模型指令、原生插件；远程控制下的发送锁、订阅额度提示与原生 CDP 就绪 |
 | [subscription-refresh.md](development/subscription-refresh.md) | 改订阅到期日、套餐、重置次数的数据来源；改配额、订阅、token 端点的 HTTP 请求与错误信息 |
 | [account-store.md](development/account-store.md) | 改 accounts.json / settings.json 的读写、token 轮换或刷新全部 |
 | [codex-state.md](development/codex-state.md) | 改从 `auth.json` / `config.toml` 推出当前模式的逻辑 |

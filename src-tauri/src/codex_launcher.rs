@@ -19,6 +19,7 @@ mod proxy_env;
 pub(crate) mod remote_control;
 mod shell;
 
+pub(crate) use cdp::stop_codex_api_quota_hooks;
 pub(crate) use codex_app_instances::{codex_desktop_cli_source_path, codex_desktop_support_status};
 pub(crate) use codex_app_watcher::CodexProcess;
 pub(crate) use ide_snapshot::{attach_ide_reopen, build_ide_reopen_payload, IdeRuntime};
