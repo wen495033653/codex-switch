@@ -1,8 +1,6 @@
 use super::{
     backup::reserve_reason_backup_file,
-    codex_home::path_to_slash,
     model::{ManifestSession, SessionSummary, StatusMove, ThreadMetadata},
-    util::dedupe_strings,
 };
 use crate::{paths::codex_state_db_path_for_root, time_util::parse_rfc3339_seconds};
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
@@ -91,33 +89,6 @@ pub(super) struct StateThreadColumn {
     pub(super) not_null: bool,
     pub(super) default_value: Option<String>,
     pub(super) primary_key: bool,
-}
-
-/// At most one `VACUUM INTO` snapshot per batch operation, taken right before the first statement
-/// that actually changes rows. A batch whose ids match no row takes none.
-pub(super) struct StateDbBatchBackup {
-    reason: &'static str,
-    path: Option<PathBuf>,
-}
-
-impl StateDbBatchBackup {
-    pub(super) fn new(reason: &'static str) -> Self {
-        Self { reason, path: None }
-    }
-
-    #[cfg(test)]
-    pub(super) fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-
-    fn ensure(&mut self, connection: &Connection) -> Result<PathBuf, String> {
-        if let Some(path) = &self.path {
-            return Ok(path.clone());
-        }
-        let path = backup_state_database_with_reason(connection, self.reason)?;
-        self.path = Some(path.clone());
-        Ok(path)
-    }
 }
 
 /// The ids that have a `threads` row or a row in one of the tables referencing thread ids, i.e.
@@ -454,7 +425,7 @@ fn thread_metadata_supported_column(column: &str) -> bool {
 
 /// Columns `write_state_threads` can fill for this `threads` schema. A schema we cannot write
 /// completely is an error naming the columns, never a silent zero-row success: callers keep the
-/// trash record or skip the migration marker when nothing was written.
+/// migration marker when nothing was written.
 pub(super) fn state_threads_write_columns(
     schema: Option<&HashMap<String, StateThreadColumn>>,
     state_db: &Path,
@@ -688,7 +659,7 @@ pub(super) fn apply_status_moves_to_state_db(
         return Ok(None);
     }
 
-    let backup_path = StateDbBatchBackup::new("status").ensure(&connection)?;
+    let backup_path = backup_state_database_with_reason(&connection, "status")?;
     let archived = target_status == "archived";
     let archived_value = i64::from(archived);
     let archived_at = archived.then(now_unix_seconds);
@@ -856,79 +827,6 @@ fn rename_thread_references(
     Ok(())
 }
 
-pub(super) fn delete_state_threads_for_sessions(
-    root: &Path,
-    ids: &[String],
-    rollout_paths: &[PathBuf],
-    backup: &mut StateDbBatchBackup,
-) -> Result<(), String> {
-    let state_db = codex_state_db_path_for_root(root)?;
-    if !state_db.exists() {
-        return Ok(());
-    }
-    let mut connection = Connection::open_with_flags(
-        &state_db,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|err| format!("打开 Codex state 数据库失败 {}: {err}", state_db.display()))?;
-    connection
-        .busy_timeout(Duration::from_millis(3000))
-        .map_err(|err| format!("配置 Codex state 数据库等待超时失败: {err}"))?;
-
-    let mut delete_ids: HashSet<String> = ids.iter().cloned().collect();
-    if !state_threads_has_columns(&connection, &["id"])? {
-        return Ok(());
-    }
-    for path in rollout_paths {
-        for path_text in rollout_path_lookup_values(root, path) {
-            let mut statement = connection
-                .prepare("SELECT id FROM threads WHERE rollout_path = ?1")
-                .map_err(|err| format!("查询 Codex Desktop threads 索引失败: {err}"))?;
-            let rows = statement
-                .query_map([path_text], |row| row.get::<_, String>(0))
-                .map_err(|err| format!("查询 Codex Desktop threads 索引失败: {err}"))?;
-            for id in rows {
-                delete_ids
-                    .insert(id.map_err(|err| format!("读取 Codex Desktop thread id 失败: {err}"))?);
-            }
-        }
-    }
-
-    let reference_tables = thread_reference_tables(&connection)?;
-    let mut ids = ids_with_thread_rows(&connection, &delete_ids, reference_tables)?;
-    if ids.is_empty() {
-        return Ok(());
-    }
-    ids.sort();
-
-    backup.ensure(&connection)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|err| format!("开始 Codex state 删除事务失败: {err}"))?;
-    delete_thread_rows(&transaction, &ids, reference_tables)?;
-    transaction
-        .commit()
-        .map_err(|err| format!("保存 Codex Desktop threads 删除结果失败: {err}"))?;
-    let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-    Ok(())
-}
-
-fn rollout_path_lookup_values(root: &Path, path: &Path) -> Vec<String> {
-    let mut values = Vec::new();
-    values.push(path.to_string_lossy().to_string());
-    values.push(path_to_slash(path));
-    if let Ok(canonical) = path.canonicalize() {
-        values.push(canonical.to_string_lossy().to_string());
-        values.push(path_to_slash(&canonical));
-    }
-    if let Ok(relative) = path.strip_prefix(root) {
-        values.push(relative.to_string_lossy().to_string());
-        values.push(path_to_slash(relative));
-    }
-    dedupe_strings(&mut values);
-    values
-}
-
 pub(super) fn state_threads_schema(
     connection: &Connection,
 ) -> Result<Option<HashMap<String, StateThreadColumn>>, String> {
@@ -972,13 +870,6 @@ pub(super) fn state_threads_schema_for(
         columns.insert(column.name.clone(), column);
     }
     Ok(Some(columns))
-}
-
-fn state_threads_has_columns(connection: &Connection, required: &[&str]) -> Result<bool, String> {
-    let Some(columns) = state_threads_schema(connection)? else {
-        return Ok(false);
-    };
-    Ok(required.iter().all(|column| columns.contains_key(*column)))
 }
 
 fn state_table_has_columns(

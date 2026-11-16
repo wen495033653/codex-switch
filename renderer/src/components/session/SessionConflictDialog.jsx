@@ -13,10 +13,10 @@ export default function SessionConflictDialog({
         <p id="session-conflict-message">{conflictConfirm.message}</p>
         <div className="session-conflict-list">
           {conflictConfirm.conflicts.slice(0, 8).map((item, index) => (
-            <div key={`${item.target || item.relative_path || item.delete_id || index}`} className="session-conflict-item">
+            <div key={`${item.target || item.relative_path || index}`} className="session-conflict-item">
               <strong title={item.title || item.target || ''}>{item.title || item.target || t('冲突会话')}</strong>
-              <span title={item.target || item.relative_path || item.delete_id || ''}>
-                {item.target || item.relative_path || item.delete_id}
+              <span title={item.target || item.relative_path || ''}>
+                {item.target || item.relative_path}
               </span>
             </div>
           ))}

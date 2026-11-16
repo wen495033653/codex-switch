@@ -37,6 +37,12 @@ pub(crate) struct CodexDesktopThread {
     pub(crate) archived: bool,
 }
 
+pub(crate) struct ThreadDeleteBatch {
+    pub(crate) deleted: usize,
+    pub(crate) removed_ids: HashSet<String>,
+    pub(crate) errors: Vec<String>,
+}
+
 #[derive(Debug)]
 struct ThreadListPage {
     threads: Vec<CodexDesktopThread>,
@@ -60,28 +66,40 @@ struct AppServerClient {
 }
 
 pub(crate) fn list_interactive_threads(root: &Path) -> Result<Vec<CodexDesktopThread>, String> {
-    validate_codex_root(root)?;
-    let cli_path = cached_codex_desktop_cli()?;
-    let mut client = AppServerClient::start(&cli_path, root)?;
-
-    let initialize_result = client.request(
-        "initialize",
-        json!({
-            "clientInfo": {
-                "name": CLIENT_NAME,
-                "title": "Codex Switch",
-                "version": env!("CARGO_PKG_VERSION")
-            },
-            "capabilities": {
-                "experimentalApi": true
-            }
-        }),
-    )?;
-    validate_initialized_codex_home(root, &initialize_result)?;
-
+    let mut client = AppServerClient::connect(root)?;
     let mut threads = list_threads_for_archive_state(&mut client, root, false)?;
     threads.extend(list_threads_for_archive_state(&mut client, root, true)?);
     Ok(threads)
+}
+
+pub(crate) fn delete_threads(
+    root: &Path,
+    thread_ids: Vec<String>,
+) -> Result<ThreadDeleteBatch, String> {
+    let mut client = AppServerClient::connect(root)?;
+    let mut removed_ids = HashSet::new();
+    let mut errors = Vec::new();
+    for id in &thread_ids {
+        if removed_ids.contains(id) {
+            // Codex may have already removed this selection as a descendant of another.
+            continue;
+        }
+        if let Err(err) = client.request_with_delete_confirmation(
+            "thread/delete",
+            json!({ "threadId": id }),
+            Some((id.as_str(), &mut removed_ids)),
+        ) {
+            errors.push(format!("会话 {id}: {err}"));
+        }
+    }
+    Ok(ThreadDeleteBatch {
+        deleted: thread_ids
+            .iter()
+            .filter(|id| removed_ids.contains(*id))
+            .count(),
+        removed_ids,
+        errors,
+    })
 }
 
 fn validate_codex_root(root: &Path) -> Result<(), String> {
@@ -518,6 +536,27 @@ fn cleanup_stale_cached_clis(cache_dir: &Path, current: &Path) {
 }
 
 impl AppServerClient {
+    fn connect(root: &Path) -> Result<Self, String> {
+        validate_codex_root(root)?;
+        let cli_path = cached_codex_desktop_cli()?;
+        let mut client = Self::start(&cli_path, root)?;
+        let initialize_result = client.request(
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": CLIENT_NAME,
+                    "title": "Codex Switch",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }),
+        )?;
+        validate_initialized_codex_home(root, &initialize_result)?;
+        Ok(client)
+    }
+
     fn start(cli_path: &Path, root: &Path) -> Result<Self, String> {
         let mut command = Command::new(cli_path);
         command
@@ -602,6 +641,15 @@ impl AppServerClient {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_with_delete_confirmation(method, params, None)
+    }
+
+    fn request_with_delete_confirmation(
+        &mut self,
+        method: &str,
+        params: Value,
+        deletion: Option<(&str, &mut HashSet<String>)>,
+    ) -> Result<Value, String> {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         let request = json!({
@@ -614,7 +662,7 @@ impl AppServerClient {
                 "向 Codex Desktop app-server 发送 {method} 请求失败: {err}"
             ))
         })?;
-        self.wait_for_response(request_id, method)
+        self.wait_for_response(request_id, method, deletion)
     }
 
     fn write_message(&mut self, message: &Value) -> Result<(), String> {
@@ -630,21 +678,31 @@ impl AppServerClient {
             .map_err(|err| err.to_string())
     }
 
-    fn wait_for_response(&mut self, request_id: u64, method: &str) -> Result<Value, String> {
+    fn wait_for_response(
+        &mut self,
+        request_id: u64,
+        method: &str,
+        mut deletion: Option<(&str, &mut HashSet<String>)>,
+    ) -> Result<Value, String> {
         let deadline = Instant::now() + RPC_TIMEOUT;
+        let mut delete_response = None;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(self.error_with_stderr(format!(
-                    "Codex Desktop app-server {method} 请求超时（{} 秒）",
-                    RPC_TIMEOUT.as_secs()
-                )));
-            }
-            let event = match self.stdout_receiver.recv_timeout(remaining) {
+            let queued = if remaining.is_zero() {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                self.stdout_receiver.recv_timeout(remaining)
+            };
+            let event = match queued {
                 Ok(event) => event,
                 Err(RecvTimeoutError::Timeout) => {
+                    let stage = if delete_response.is_some() {
+                        "等待 thread/deleted 通知"
+                    } else {
+                        "请求"
+                    };
                     return Err(self.error_with_stderr(format!(
-                        "Codex Desktop app-server {method} 请求超时（{} 秒）",
+                        "Codex Desktop app-server {method} {stage}超时（{} 秒）",
                         RPC_TIMEOUT.as_secs()
                     )));
                 }
@@ -686,6 +744,20 @@ impl AppServerClient {
                 self.reject_server_request(&message)?;
                 continue;
             }
+            if message.get("method").and_then(Value::as_str) == Some("thread/deleted") {
+                if let Some((target, removed)) = deletion.as_mut() {
+                    let id = message
+                        .pointer("/params/threadId")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(|| format!("Codex Desktop app-server thread/deleted 通知缺少 threadId: {message}"))?;
+                    removed.insert(id.to_string());
+                    if let Some(result) = delete_response.take_if(|_| id == *target) {
+                        return Ok(result);
+                    }
+                }
+                continue;
+            }
             if !rpc_id_matches(message.get("id"), request_id) {
                 continue;
             }
@@ -695,9 +767,23 @@ impl AppServerClient {
                     format_rpc_error(error)
                 )));
             }
-            return message.get("result").cloned().ok_or_else(|| {
+            let result = message.get("result").cloned().ok_or_else(|| {
                 self.error_with_stderr(format!("Codex Desktop app-server {method} 响应缺少 result"))
-            });
+            })?;
+            if let Some((target, removed)) = deletion.as_ref() {
+                if !result.is_object() {
+                    return Err(format!(
+                        "Codex Desktop app-server {method} result 无效: {result}"
+                    ));
+                }
+                // The response precedes notifications. The selected root is emitted last, after
+                // any descendants, so wait for it before processing the next selection.
+                if !removed.contains(*target) {
+                    delete_response = Some(result);
+                    continue;
+                }
+            }
+            return Ok(result);
         }
     }
 
@@ -709,7 +795,7 @@ impl AppServerClient {
             "id": id,
             "error": {
                 "code": -32601,
-                "message": "Codex Switch session listing does not support server requests"
+                "message": "Codex Switch does not support app-server requests"
             }
         }))
         .map_err(|err| {

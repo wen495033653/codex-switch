@@ -1,7 +1,6 @@
 import { useI18n } from '../../i18n';
 import {
   PAGE_SIZE_OPTIONS,
-  deletedActiveKey,
   formatCompactTime,
   formatSize,
   formatTime,
@@ -15,14 +14,10 @@ export default function SessionListPanel({
   clearSelection,
   conversations,
   currentPage,
-  deletedSessions,
   handleDeleteSessions,
   handleExport,
-  handlePurgeDeleted,
-  handleRestoreDeleted,
   handleRowKeyDown,
   handleSetStatus,
-  isDeletedView,
   loadPreview,
   openContextMenu,
   pageItems,
@@ -31,7 +26,6 @@ export default function SessionListPanel({
   selectedActivePaths,
   selectedArchivedPaths,
   selectedCount,
-  selectedDeleted,
   selectedSize,
   setPage,
   setPageSize,
@@ -54,24 +48,20 @@ export default function SessionListPanel({
         </label>
         <span>{t('标题')}</span>
         <span>{t('状态')}</span>
-        <span>{isDeletedView ? t('删除时间') : t('更新时间')}</span>
+        <span>{t('更新时间')}</span>
         <span>{t('大小')}</span>
       </div>
       <div className="session-list-body">
         <div className={`session-list ${selectedCount > 0 ? 'has-batch-actions' : ''}`}>
           {pageItems.map(item => {
-            const rowKey = isDeletedView ? item.delete_id : item.relative_path;
-            const activeKey = isDeletedView ? deletedActiveKey(item) : item.relative_path;
-            const isSelected = isDeletedView
-              ? selectedDeleted.has(item.delete_id)
-              : selected.has(item.relative_path);
+            const path = item.relative_path;
             return (
               <div
-                key={rowKey}
+                key={path}
                 role="button"
                 tabIndex={0}
                 aria-label={item.title}
-                className={`session-row ${activePath === activeKey ? 'active' : ''}`}
+                className={`session-row ${activePath === path ? 'active' : ''}`}
                 onClick={() => loadPreview(item)}
                 onKeyDown={event => handleRowKeyDown(event, item)}
                 onContextMenu={event => openContextMenu(event, item)}
@@ -80,7 +70,7 @@ export default function SessionListPanel({
                   <input
                     type="checkbox"
                     aria-label={t('选择会话：{title}', { title: item.title || t('未命名') })}
-                    checked={isSelected}
+                    checked={selected.has(path)}
                     onChange={event => toggleSelection(item, event.target.checked)}
                   />
                 </span>
@@ -90,9 +80,9 @@ export default function SessionListPanel({
                 <span className={`session-status-pill ${item.status}`}>{statusLabel(item.status, t)}</span>
                 <span
                   className="session-muted"
-                  title={formatTime(isDeletedView ? item.deleted_at : item.updated_at, language, t)}
+                  title={formatTime(item.updated_at, language, t)}
                 >
-                  {formatCompactTime(isDeletedView ? item.deleted_at : item.updated_at, language, t)}
+                  {formatCompactTime(item.updated_at, language, t)}
                 </span>
                 <span className="session-muted">{formatSize(item.size_bytes)}</span>
               </div>
@@ -100,42 +90,29 @@ export default function SessionListPanel({
           })}
           {visibleItems.length === 0 && (
             <div className="empty-state session-empty">
-              {isDeletedView ? t('暂无已删除会话') : t('暂无会话数据')}
+              {t('暂无会话数据')}
             </div>
           )}
         </div>
         {selectedCount > 0 && (
           <div className="session-contextual-toolbar" role="toolbar" aria-label={t('会话批量操作')}>
             <span className="session-batch-count">{t('已选 {count}', { count: selectedCount })}</span>
-            {isDeletedView ? (
-              <>
-                <button type="button" className="btn btn-secondary" onClick={() => handleRestoreDeleted()} disabled={actionLoading}>
-                  {t('恢复')}
-                </button>
-                <button type="button" className="btn btn-danger" onClick={() => handlePurgeDeleted()} disabled={actionLoading}>
-                  {t('彻底删除')}
-                </button>
-              </>
-            ) : (
-              <>
-                <button type="button" className="btn btn-secondary" onClick={() => handleExport()} disabled={actionLoading}>
-                  {t('导出')}
-                </button>
-                {selectedActivePaths.length > 0 && (
-                  <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedActivePaths, 'archived')} disabled={actionLoading}>
-                    {t('归档')}
-                  </button>
-                )}
-                {selectedArchivedPaths.length > 0 && (
-                  <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedArchivedPaths, 'active')} disabled={actionLoading}>
-                    {t('取消归档')}
-                  </button>
-                )}
-                <button type="button" className="btn btn-danger" onClick={() => handleDeleteSessions()} disabled={actionLoading}>
-                  {t('删除')}
-                </button>
-              </>
+            <button type="button" className="btn btn-secondary" onClick={() => handleExport()} disabled={actionLoading}>
+              {t('导出')}
+            </button>
+            {selectedActivePaths.length > 0 && (
+              <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedActivePaths, 'archived')} disabled={actionLoading}>
+                {t('归档')}
+              </button>
             )}
+            {selectedArchivedPaths.length > 0 && (
+              <button type="button" className="btn btn-secondary" onClick={() => handleSetStatus(selectedArchivedPaths, 'active')} disabled={actionLoading}>
+                {t('取消归档')}
+              </button>
+            )}
+            <button type="button" className="btn btn-danger" onClick={() => handleDeleteSessions()} disabled={actionLoading}>
+              {t('永久删除')}
+            </button>
             <button type="button" className="btn btn-secondary" onClick={clearSelection} disabled={actionLoading}>
               {t('取消选择')}
             </button>
@@ -143,7 +120,7 @@ export default function SessionListPanel({
         )}
       </div>
       <div className="session-footer">
-        <span>{t('总计 {count} 个', { count: isDeletedView ? deletedSessions.length : conversations.length })}</span>
+        <span>{t('总计 {count} 个', { count: conversations.length })}</span>
         <span>{t('筛选 {count} 个', { count: visibleItems.length })}</span>
         <span>{t('本页 {count} 个', { count: pageItems.length })}</span>
         <span>{t('已选 {count} 个', { count: selectedCount })}</span>

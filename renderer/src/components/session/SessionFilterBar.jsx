@@ -6,9 +6,7 @@ import {
 export default function SessionFilterBar({
   actionLoading,
   conversations,
-  deletedSessions,
   handleImport,
-  isDeletedView,
   loading,
   refreshSessions,
   rootPath,
@@ -37,20 +35,18 @@ export default function SessionFilterBar({
         {STATUS_FILTERS.map(item => {
           const count = item.key === 'all'
             ? conversations.length
-            : item.key === 'deleted'
-              ? deletedSessions.length
-              : conversations.filter(conversation => conversation.status === item.key).length;
+            : conversations.filter(conversation => conversation.status === item.key).length;
           return (
             <button
               key={item.key}
-                type="button"
-                className={`nav-item session-status-tab ${statusFilter === item.key ? 'active' : ''}`}
-                aria-pressed={statusFilter === item.key}
-                onClick={() => setStatusFilter(item.key)}
-              >
-                <span className="session-status-label">{t(item.label)}</span>
-                <span className="session-status-count">{count}</span>
-              </button>
+              type="button"
+              className={`nav-item session-status-tab ${statusFilter === item.key ? 'active' : ''}`}
+              aria-pressed={statusFilter === item.key}
+              onClick={() => setStatusFilter(item.key)}
+            >
+              <span className="session-status-label">{t(item.label)}</span>
+              <span className="session-status-count">{count}</span>
+            </button>
           );
         })}
       </div>
@@ -58,11 +54,9 @@ export default function SessionFilterBar({
         <button type="button" className="btn btn-secondary" onClick={() => refreshSessions(rootPath)} disabled={loading || actionLoading}>
           {loading ? t('刷新中...') : t('刷新')}
         </button>
-        {!isDeletedView && (
-          <button type="button" className="btn btn-primary" onClick={handleImport} disabled={!rootPath || actionLoading}>
-            {t('导入会话')}
-          </button>
-        )}
+        <button type="button" className="btn btn-primary" onClick={handleImport} disabled={!rootPath || actionLoading}>
+          {t('导入会话')}
+        </button>
       </div>
     </div>
   );

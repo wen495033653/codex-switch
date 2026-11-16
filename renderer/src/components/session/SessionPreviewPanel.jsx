@@ -39,9 +39,7 @@ export default function SessionPreviewPanel({
           </div>
           <div className="session-preview-meta">
             <span>
-              {activeConversation.status === 'deleted'
-                ? t('删除时间：{time}', { time: formatTime(activeConversation.updated_at, language, t) })
-                : t('更新时间：{time}', { time: formatTime(activeConversation.updated_at, language, t) })}
+              {t('更新时间：{time}', { time: formatTime(activeConversation.updated_at, language, t) })}
             </span>
             <span>{t('大小：{size}', { size: formatSize(activeConversation.size_bytes) })}</span>
             <span title={activeCwd}>{t('工作目录：{path}', { path: activeCwd || t('未知') })}</span>

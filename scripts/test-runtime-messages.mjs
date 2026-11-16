@@ -48,8 +48,9 @@ const BACKEND_MESSAGES = [
   ['模型列表认证失败 HTTP 401', 'Model list authentication failed: HTTP 401'],
   ['Responses 测试返回 HTTP 502', 'Responses test returned HTTP 502'],
   ['导入完成：2 个导入，0 个跳过，1 个冲突，1 个失败', '2 imported, 0 skipped, 1 conflicts, 1 failed'],
-  ['已删除 2 个会话，1 个失败：a.jsonl: fixture', '2 sessions deleted, 1 failed: a.jsonl: fixture'],
-  ['已恢复 2 个会话；fixture warning', '2 sessions restored; fixture warning'],
+  ['已永久删除 2 个会话', '2 sessions permanently deleted'],
+  ['已永久删除 2 个会话，1 个失败：a.jsonl: fixture', '2 sessions permanently deleted, 1 failed: a.jsonl: fixture'],
+  ['已永久删除 2 个会话；fixture warning', '2 sessions permanently deleted; fixture warning'],
   ['已切换 3 个会话状态，1 个失败：b.jsonl: fixture', '3 session statuses updated, 1 failed: b.jsonl: fixture']
 ];
 

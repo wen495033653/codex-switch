@@ -1,6 +1,6 @@
 # 会话管理与会话同步的文件读写
 
-范围：`src-tauri/src/session_manager/`（归档、删除/恢复、导入导出、预览、旧版数据迁移），以及 `src-tauri/src/codex_sessions/` 中读写 rollout、`state_5.sqlite`、`.codex-global-state.json` 的部分。Codex 的结束与重启流程见 [codex-restart.md](codex-restart.md)。读写会话数据仍须先拿 `codex_sessions::lock_codex_session_io(...)`（见 CONTRIBUTING.md）。
+范围：`src-tauri/src/session_manager/`（归档、永久删除、导入导出、预览、旧版数据迁移），以及 `src-tauri/src/codex_sessions/` 中读写 rollout、`state_5.sqlite`、`.codex-global-state.json` 的部分。Codex 的结束与重启流程见 [codex-restart.md](codex-restart.md)。读写会话数据仍须先拿 `codex_sessions::lock_codex_session_io(...)`（见 CONTRIBUTING.md）。
 
 ## 当前行为
 
@@ -20,7 +20,6 @@
 
 表缺失、缺 `id`/`rollout_path`、或存在我们无法填充的 `NOT NULL` 且无默认值的列时，返回错误并列出列名，不再返回 `Ok(0)`。数据库文件不存在仍返回 `Ok(0)`。调用方：
 
-- 恢复（`trash_store`）：DB 没写入 → 删除刚恢复的文件、回滚被覆盖目标、保留回收站记录。
 - 旧版迁移（`legacy_migration`）：在备份之前用同一判断预检（`state_threads_write_columns`），不写 completed 标记，也不在每次重试时产生新的全库备份。错误由调用方记为 `codex_desktop_data_migration_error`。
 - 导入：见下。
 
@@ -43,16 +42,15 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 
 按字节读行。非 UTF-8 的行逐行记录（行号 + 解码错误）并跳过，后面的行照常读取；读文件本身出错时记录行号并停止。两种情况都写入返回的 `warnings`，并记一条 `session_manager_session_index_read_error` 日志（路径、已读行数、条目数、跳过的行）。
 
-### 回收站的完整性校验（`trash_store.rs`）
+### 永久删除（`delete.rs` / `codex_app_server.rs`）
 
-- 列出回收站、翻页预览、规划恢复时只检查备份文件存在且大小与记录一致，不再整文件计算 SHA-256。
-- 恢复时在即将放到位的副本上校验：普通恢复在写完临时文件后计算其 SHA-256，必须等于记录值；“修改 ID”恢复把备份整读一次，先用这份内存快照对比记录值，再从快照改写 ID。没有 `sha256` 的旧记录仍比较副本与备份。校验不通过时目标不动、临时文件删除、回收站记录保留。
-- 删除时只对回收站副本算一次 SHA-256；删除原文件前原有的“对原文件再算一次并比较”同时证明副本完整、原文件没有变化（不一致时保留原文件，提示改为“复制期间发生变化或复制不完整”）。
-- 恢复后给 `thread_metadata_from_manifest` 的 manifest 不再计算目标文件哈希（该函数只读 id、标题、更新时间、状态）。
+- 普通和归档会话用列表返回的 thread ID，在会话 I/O 锁内通过同一 Codex Desktop app-server 调用官方 `thread/delete`。rollout、SQLite 和 `session_index.jsonl` 由官方自行清理，不直接删文件绕过它的 fork 历史依赖与子代理处理。没有回收站或撤销；升级不改旧版本留下的 `session-manager/deleted-sessions/`。
+- Codex 先返回 RPC 结果，再发 `thread/deleted`；关联子代理先通知，所选根会话最后通知。同批选中已级联删除的会话时不重复发请求。删除数只统计收到通知的已选会话；收到通知的全部 ID（含子代理）一起从 `.codex-global-state.json` 清理。仅收到 RPC 成功结果但未收到删除通知，不计为成功。
+- 单项错误保留 RPC 原因并继续批量操作；应用状态清理失败也返回 `ok=false` 及原始错误，不把已删除内容说成仍可恢复。旧版 Codex 不识别命令时原样报告，不退回本地文件删除。
 
-### state DB 备份（`state_db::StateDbBatchBackup`）
+### state DB 备份
 
-一次批量操作（删除一批、恢复一批、归档一批）最多做一次 `VACUUM INTO`，在第一条真正改动行的语句之前；传入的 id 在 `threads` 和引用 thread id 的子表中都没有行时不备份。没有子行也没有主表行的 id 不再触发备份；只有子行（孤儿行）的 id 仍会被删除并触发备份。备份保留/清理策略没有改动。
+一批归档 / 取消归档在实际有行改动时，事务前通过 `state_db::backup_state_database_with_reason` 做一次 `VACUUM INTO`。永久删除的数据库写入由官方 app-server 处理，Codex Switch 不另做数据库快照；`.codex-global-state.json` 的原有元数据备份仍保留。
 
 ### 预览的单行查找（`catalog::current_state_conversation_for_path`）
 
@@ -77,38 +75,45 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 | --- | --- |
 | `session_manager_status_state_db_error` | `root`、`targetStatus`、`conflictStrategy`、`movedFiles`、`overwrittenIds`、`error`、`rolledBack`、`rollbackErrors` |
 | `session_manager_status_cleanup_error` | `root`、`targetStatus`、`changed`、`overwrittenIds`、`errors` |
-| `session_manager_restore_state_db_error` | `deleteId`、`root`、`target`、`trashRetained`、`error` |
+| `session_manager_delete_error` | `root`、`errors` / `error` |
+| `session_manager_delete_cleanup_error` | `root`、`deleted`、`globalStateError` |
 | `session_manager_import_apply_error` | `root`、`candidates`、`imported`、`skipped`、`lateConflicts`、`indexedFiles`、`errors`、`sqliteError` |
 | `session_manager_session_index_read_error` | `path`、`linesRead`、`entries`、`skippedLines`、`readError` |
 
 ## 2026-10-17 审查修复
 
-- **同批重名不会互相覆盖**（提交 `dba96dc`）：两个文件名相同的会话（例如同一 uuid 分别在 `sessions/2026/05/13/` 和 `05/14/`）同批归档时，以前选“覆盖”会把第一个先移入的会话改名为覆盖备份、提交后删除，两行 state DB 指向同一个文件。现在只有计划阶段判定为覆盖（`StatusMove.overwrite`）的目标才会被替换；同批里已被前一项占用的目标按冲突处理，与恢复流程相同：询问时列出、跳过时跳过、覆盖时报错并保留会话原位、修改 ID 时另取空闲名字。测试：`status_overwrite_never_replaces_a_session_moved_earlier_in_the_batch`（旧实现下失败）。
-- **含非 UTF-8 行的会话能列出和恢复**（提交 `2cb6057`）：前 240 行里只要有一行不是 UTF-8（例如最后一行在多字节字符中间被截断），摘要解析就整体失败，回收站里的这种会话每次恢复都会回滚，删除无法撤销；以“修改 ID”方式恢复也会因整文件转字符串失败。现在这样的行和非 JSON 行一样跳过，修改 ID 按字节处理，解析不了的行原样保留。测试：`sessions_with_a_non_utf8_line_list_and_restore_unchanged`（旧实现下失败）。
+- **同批重名不会互相覆盖**（提交 `dba96dc`）：两个文件名相同的会话（例如同一 uuid 分别在 `sessions/2026/05/13/` 和 `05/14/`）同批归档时，以前选“覆盖”会把第一个先移入的会话改名为覆盖备份、提交后删除，两行 state DB 指向同一个文件。现在只有计划阶段判定为覆盖（`StatusMove.overwrite`）的目标才会被替换；同批里已被前一项占用的目标按冲突处理：询问时列出、跳过时跳过、覆盖时报错并保留会话原位、修改 ID 时另取空闲名字。测试：`status_overwrite_never_replaces_a_session_moved_earlier_in_the_batch`（旧实现下失败）。
+- **当时修复含非 UTF-8 行的会话列出与恢复**（提交 `2cb6057`）：前 240 行里只要有一行不是 UTF-8（例如最后一行在多字节字符中间被截断），摘要解析就整体失败，回收站里的这种会话每次恢复都会回滚，删除无法撤销；以“修改 ID”方式恢复也会因整文件转字符串失败。现在这样的行和非 JSON 行一样跳过，修改 ID 按字节处理，解析不了的行原样保留。测试：`sessions_with_a_non_utf8_line_list_and_restore_unchanged`（旧实现下失败）。
 - **10 个命令统一用 `run_blocking`**（提交 `3ce279a`）；**删除记录 id 复用 `unique_backup_id`**（提交 `df1577f`）；**迁移标记改用原子写**（提交 `80d2317`，测试 `legacy_migration_writes_its_marker_and_runs_once`）。
 - **zip 的 CRC32 改用 `crc32fast`**：导出、导入的每个条目都要算 CRC，原来逐位循环（每字节 8 轮移位异或）是这两步里最慢的一环；`crc32fast` 1.5.2 本来就经 png、flate2 编进了程序，现在作为直接依赖使用。测试：`crc32_matches_the_standard_check_value`（CRC-32 标准校验值），导出后导入的往返测试照常通过。提速幅度没有实测。
 
-- **单个会话的失败写进错误日志**：删除、归档/取消归档、恢复、彻底删除、导出时，某个会话失败（例如文件被占用、SHA-256 复核不一致）以前只出现在返回给界面的 `report.errors` 里，用户关掉提示后错误日志没有任何依据。现在命令入口发现报告里有单项错误时，分别记 `session_manager_delete_error`、`session_manager_status_error`、`session_manager_restore_error`、`session_manager_purge_error`、`session_manager_export_error`（`root`、`errors` 原文）。导入原来就记 `session_manager_import_apply_error`，不重复。测试：`per_session_failures_in_a_report_are_logged`。
+- **单个会话的失败写进错误日志**：某个会话失败（例如文件被占用）以前只出现在返回给界面的 `report.errors`。现在删除、归档/取消归档、导出的命令入口发现单项错误时，分别记 `session_manager_delete_error`、`session_manager_status_error`、`session_manager_export_error`（`root`、`errors` 原文）。导入原来就记 `session_manager_import_apply_error`，不重复。测试：`per_session_failures_in_a_report_are_logged`。
 
 - **旧版数据迁移漏掉的会话写进错误日志**：迁移时个别 rollout 打不开或解析失败，以前只写进 `%APPDATA%/codex-switch/migrations/` 下的标记文件，调用方记的 `codex_desktop_data_migration` 不在任何名单里，不落盘也不显示。迁移仍按完成处理（否则每次重试都要多做一次全库备份），同时记 `codex_desktop_data_migration_rollout_error`（`root`、`rolloutFiles`、`errors`）。验证：迁移相关测试通过；这条日志没有真实触发。
 
-- **预览读文件前拿会话 I/O 锁**：会话同步原地改写 rollout（先截断再写），预览在这期间读到的是被截断的文件，表现为“会话文件已变化”、分段读取失败或首页少了消息。现在预览与其它会话读写一样先拿 `lock_codex_session_io`，同步进行时等它结束（回收站里的副本不会被同步改写，不加锁）。预览调用链里没有其它地方拿这把锁，不会重入。验证：会话管理 51 个测试通过；等待时长没有实测。
+- **预览读文件前拿会话 I/O 锁**：会话同步原地改写 rollout（先截断再写），预览在这期间读到的是被截断的文件，表现为“会话文件已变化”、分段读取失败或首页少了消息。现在预览与其它会话读写一样先拿 `lock_codex_session_io`，同步进行时等它结束。预览调用链里没有其它地方拿这把锁，不会重入。验证：会话管理 51 个测试通过；等待时长没有实测。
 
 ## 关键决策和原因
 
 - **归档的顺序是“可逆的文件移动 → DB 事务 → 不可逆清理”，而不是用 DB 事务包住文件 I/O。** 持有 SQLite 写事务做文件复制（“修改 ID”要整文件重写）会让同时运行的 Codex 长时间拿不到写锁；而把删除原文件、删除覆盖备份推迟到提交之后，DB 失败时每一步都能撤回，得到同样的一致性。
-- **“修改 ID”必须同时改子表。** 依据：`delete_state_threads_for_sessions` 与 `write_state_threads` 已把这些子表当作引用 thread id 的表；测试夹具里 `thread_dynamic_tools` 声明了 `FOREIGN KEY(thread_id) REFERENCES threads(id)`；项目使用的 `libsqlite3-sys 0.38.2`（bundled）编译参数含 `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`，外键默认生效。测试 `status_modify_id_moves_child_rows_with_the_renamed_thread` 先证实只改 `threads.id` 会报 `FOREIGN KEY constraint failed`——也就是旧代码在有子行时这一步必然失败，而错误此前被放进 `desktop_error` 后 `ok=true`。现在事务内先 `PRAGMA defer_foreign_keys = ON`，改完主表和子表后在提交时检查。
+- **“修改 ID”必须同时改子表。** 依据：`delete_thread_rows` 与 `write_state_threads` 按引用 thread id 处理这些子表；测试夹具里 `thread_dynamic_tools` 声明了 `FOREIGN KEY(thread_id) REFERENCES threads(id)`；项目使用的 `libsqlite3-sys 0.38.2`（bundled）编译参数含 `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`，外键默认生效。测试 `status_modify_id_moves_child_rows_with_the_renamed_thread` 先证实只改 `threads.id` 会报 `FOREIGN KEY constraint failed`——也就是旧代码在有子行时这一步必然失败，而错误此前被放进 `desktop_error` 后 `ok=true`。现在事务内先 `PRAGMA defer_foreign_keys = ON`，改完主表和子表后在提交时检查。
 - **迁移在备份前预检 schema。** 迁移在启动时和每次打开 Codex 时都会重试；如果只把写入错误往上抛，不支持的 schema 会让每次重试都做一次全库 `VACUUM INTO` 备份。
 - **导入的 DB 失败不删除已写入的文件。** 文件本身完整且经过 SHA-256 校验；保留它们让“重新导入”成为补写索引的途径，删除则会让用户丢掉已确认导入的内容。
 - **`session_index.jsonl` 选择“逐行记录并跳过”而不是整体报错。** 它只提供标题和更新时间；一行坏数据不该让所有会话失去标题，但必须留下行号和日志。
-- **回收站只在恢复时校验内容。** 完整性要保证的是“恢复出来的内容等于删除时的内容”，在要放到位的副本上校验一次就够；列表和预览只是展示。代价：同样大小但内容损坏的备份仍会出现在列表里，恢复时才报 SHA-256 不匹配（测试 `restore_rejects_a_same_size_corrupted_backup` 固定了这一行为）。
-- **不按 mtime 预筛“最近 50 个 rollout”。** 活动时间取自文件尾部事件的时间戳，mtime 与它可以无关：现有测试 `sync_uses_combined_activity_time_limit` 就把 mtime 设成与活动时间相反的顺序；导入、恢复、“修改 ID”或复制目录会让大量旧会话获得新 mtime，按 mtime 取前 2×limit 会把真正最近的会话挤出候选。同步回写会恢复 mtime（`rollouts.rs` 写后 `set_modified`），但这不足以保证等价。
+- **不按 mtime 预筛“最近 50 个 rollout”。** 活动时间取自文件尾部事件的时间戳，mtime 与它可以无关：现有测试 `sync_uses_combined_activity_time_limit` 就把 mtime 设成与活动时间相反的顺序；导入、“修改 ID”或复制目录会让大量旧会话获得新 mtime，按 mtime 取前 2×limit 会把真正最近的会话挤出候选。同步回写会恢复 mtime（`rollouts.rs` 写后 `set_modified`），但这不足以保证等价。
 - **`"model_provider"` / `"session_meta"` 字面量预筛的前提**：Codex 用 serde 写 JSONL，键名不会被转义（`_` 之类）。只有这种人为转义的行才会与“逐行解析”的结果不同。
 - **`.codex-global-state.json` 的写入放在 `codex_sessions`。** `session_manager` 已依赖 `codex_sessions`（I/O 锁），反向不行。两套旧实现都不是原子写（一个 `fs::write`，一个截断后原地写）；合并时保留了“只写已存在的文件”的一套，之后在 `main` 上换成了 `atomic_file::write_file_atomically`。
 - **rollout 回写仍是原地写，但写前复核（2026-09-23）。** 关闭 Codex 失败后的直接同步、重开编辑器前的同步都可能在 Codex 仍运行时改写 rollout。这里不能换成临时文件 + rename：Codex 手里的追加句柄会继续写进被替换掉的旧文件，新内容永久丢失。改为写入前比对文件长度和修改时间，与读取时不一致（Codex 在这期间追加过）就跳过该文件并作为同步错误报告，避免截断掉新追加的行；复核与写入之间仍有极短窗口。测试 `rollout_appended_after_the_read_is_not_rewritten`。
 - **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `app_log` 的日志文件同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
 
 ## 验证记录
+
+### 2026-11-17：永久删除
+
+- Windows 隔离运行，安装版 Codex app-server `0.169.0-alpha.11.1`。`permanent_delete_uses_official_app_server_in_isolated_home` 由合成 rollout 建立七条会话；批量删除选中的未归档会话、归档会话和子代理，另一个未选中的子代理由 Codex 级联删除，不计入选中数量。仍被 fork 历史引用的会话返回 `-32600`，该会话、fork 和无关会话均保留。
+- 回读 rollout 文件、`session_index.jsonl`、`state_5.sqlite`、官方会话列表和 `.codex-global-state.json`：已删项消失，保留项不变。运行使用独立 HOME、APPDATA、LOCALAPPDATA 和临时目录，不读写真实会话；未验证 macOS 上的真实操作。
+- 离线：`permanent_delete_reports_rpc_failures_and_cleans_only_successes` 验证部分失败的报告及仅移除成功项的应用状态。真实 app-server 测试默认忽略，在隔离环境显式运行 `cargo test permanent_delete_uses_official_app_server_in_isolated_home -- --ignored`。
+- 完整检查：`npm run check`（72 passed / 4 skipped）、`cargo test --locked`（372 passed / 7 ignored）、fmt 和 Clippy all-targets 通过。前端定向 VM 回归验证确认前不删除、单次 IPC、批量部分失败提示及删除后清除旧预览；未操作安装版 UI。
 
 ### 2026-09-23：一致性与错误可见性修复（离线）
 
@@ -153,4 +158,4 @@ TODO(verify): 流式读取与单行查找的耗时收益没有在真实规模上
 
 ## 回退
 
-revert 对应提交后重新构建。每次写 state DB 前的 `VACUUM INTO` 备份在数据目录 `session-manager/backups/<reason>/`，可用于恢复数据库。
+revert 对应提交后重新构建。每次写 state DB 前的 `VACUUM INTO` 备份在数据目录 `session-manager/backups/<reason>/`，可用于恢复数据库，不会恢复已永久删除的会话内容。

@@ -1,32 +1,10 @@
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashSet,
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-    time::SystemTime,
-};
+use std::{collections::HashSet, fs, io::Read, path::Path, time::SystemTime};
 use time::OffsetDateTime;
 
 pub(super) fn dedupe_strings(items: &mut Vec<String>) {
     let mut seen = HashSet::new();
     items.retain(|item| seen.insert(item.clone()));
-}
-
-pub(super) fn unique_sibling_path(path: &Path, base_name: &str) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    for index in 0..1000 {
-        let file_name = if index == 0 {
-            base_name.to_string()
-        } else {
-            format!("{base_name}-{index:03}")
-        };
-        let candidate = parent.join(file_name);
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    parent.join(format!("{base_name}-overflow"))
 }
 
 pub(super) fn first_non_empty(values: &[String]) -> Option<String> {

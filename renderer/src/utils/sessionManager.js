@@ -1,14 +1,12 @@
 export const STATUS_FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'active', label: '未归档' },
-  { key: 'archived', label: '已归档' },
-  { key: 'deleted', label: '已删除' }
+  { key: 'archived', label: '已归档' }
 ];
 
 export const PAGE_SIZE_OPTIONS = [50, 100, 200];
 export const PREVIEW_PAGE_SIZE = 80;
 export const PREVIEW_MESSAGE_WINDOW = 240;
-export const DELETE_UNDO_WINDOW_MS = 10_000;
 
 export function formatSize(bytes) {
   const value = Number(bytes) || 0;
@@ -45,7 +43,6 @@ export function formatCompactTime(value, language, t) {
 
 export function statusLabel(status, t) {
   if (status === 'archived') return t('已归档');
-  if (status === 'deleted') return t('已删除');
   return t('未归档');
 }
 
@@ -55,42 +52,6 @@ export function statusActionLabel(status, t) {
 
 export function lower(value) {
   return String(value || '').toLowerCase();
-}
-
-export function deletedActiveKey(item) {
-  return `deleted:${item.delete_id}`;
-}
-
-export function deletedPreviewConversation(item) {
-  return {
-    id: item.id,
-    title: item.title,
-    status: 'deleted',
-    updated_at: item.deleted_at,
-    size_bytes: item.size_bytes,
-    cwd: item.cwd,
-    source_path: item.root_path,
-    relative_path: item.original_relative_path
-  };
-}
-
-export function responseDeleteIds(response) {
-  const ids = Array.isArray(response?.report?.delete_ids)
-    ? response.report.delete_ids
-    : response?.delete_ids;
-  return Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
-}
-
-export function responseRestoredDeleteIds(response) {
-  const ids = Array.isArray(response?.report?.restored_delete_ids)
-    ? response.report.restored_delete_ids
-    : response?.restored_delete_ids;
-  return Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
-}
-
-export function responsePurgedDeleteIds(response) {
-  const ids = response?.report?.purged_delete_ids;
-  return Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
 }
 
 export function previewMessageKey(message, fallbackIndex = 0) {

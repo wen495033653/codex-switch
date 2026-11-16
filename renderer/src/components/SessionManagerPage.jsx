@@ -3,18 +3,12 @@ import { useI18n } from '../i18n';
 import {
   PREVIEW_PAGE_SIZE,
   PREVIEW_MESSAGE_WINDOW,
-  DELETE_UNDO_WINDOW_MS,
   formatSize,
   displayPath,
   formatTime,
   statusLabel,
   statusActionLabel,
   lower,
-  deletedActiveKey,
-  deletedPreviewConversation,
-  responseDeleteIds,
-  responseRestoredDeleteIds,
-  responsePurgedDeleteIds,
   previewMessageKey,
   isPreviewCancellation,
   isPreviewStale,
@@ -28,14 +22,12 @@ import SessionListPanel from './session/SessionListPanel';
 import SessionPreviewPanel from './session/SessionPreviewPanel';
 
 export default function SessionManagerPage({ toast, toastError, sessionState }) {
-  const { language, t, translateRuntimeText } = useI18n();
+  const { language, t } = useI18n();
   const {
     rootPath,
     setRootPath,
     conversations,
     setConversations,
-    deletedSessions,
-    setDeletedSessions,
     search,
     setSearch,
     statusFilter,
@@ -46,8 +38,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     setPageSize,
     selected,
     setSelected,
-    selectedDeleted,
-    setSelectedDeleted,
     activePath,
     setActivePath,
     preview,
@@ -56,10 +46,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     setContextMenu,
     deleteConfirm,
     setDeleteConfirm,
-    purgeConfirm,
-    setPurgeConfirm,
-    deleteUndo,
-    setDeleteUndo,
     conflictConfirm,
     setConflictConfirm,
     loading,
@@ -77,10 +63,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   const previewItemRef = useRef(null);
   // The preview shown now; a refresh that finishes later checks this, not the value it started with.
   const activePathRef = useRef(activePath);
-  const isDeletedView = statusFilter === 'deleted';
 
-  const filteredConversations = useMemo(() => {
-    if (isDeletedView) return [];
+  const visibleItems = useMemo(() => {
     const query = lower(search.trim());
     return conversations.filter(item => {
       if (statusFilter !== 'all' && item.status !== statusFilter) return false;
@@ -90,33 +74,18 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
         || lower(item.cwd).includes(query)
         || lower(item.relative_path).includes(query);
     });
-  }, [conversations, isDeletedView, search, statusFilter]);
+  }, [conversations, search, statusFilter]);
 
-  const filteredDeletedSessions = useMemo(() => {
-    if (!isDeletedView) return [];
-    const query = lower(search.trim());
-    return deletedSessions.filter(item => {
-      if (!query) return true;
-      return lower(item.title).includes(query)
-        || lower(item.id).includes(query)
-        || lower(item.cwd).includes(query)
-        || lower(item.original_relative_path).includes(query)
-        || lower(item.root_path).includes(query);
-    });
-  }, [deletedSessions, isDeletedView, search]);
-
-  const visibleItems = isDeletedView ? filteredDeletedSessions : filteredConversations;
   const totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
   const pageItems = visibleItems.slice(pageStart, pageStart + pageSize);
   const selectedPaths = useMemo(() => Array.from(selected), [selected]);
-  const selectedDeletedIds = useMemo(() => Array.from(selectedDeleted), [selectedDeleted]);
 
-  const selectedItems = useMemo(() => {
-    const selectedSet = new Set(selectedPaths);
-    return conversations.filter(item => selectedSet.has(item.relative_path));
-  }, [conversations, selectedPaths]);
+  const selectedItems = useMemo(
+    () => conversations.filter(item => selected.has(item.relative_path)),
+    [conversations, selected]
+  );
 
   const selectedActivePaths = useMemo(
     () => selectedItems.filter(item => item.status === 'active').map(item => item.relative_path),
@@ -127,18 +96,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     [selectedItems]
   );
 
-  const selectedDeletedItems = useMemo(() => {
-    const selectedSet = new Set(selectedDeletedIds);
-    return deletedSessions.filter(item => selectedSet.has(item.delete_id));
-  }, [deletedSessions, selectedDeletedIds]);
-
-  const selectedSize = (isDeletedView ? selectedDeletedItems : selectedItems)
-    .reduce((sum, item) => sum + (Number(item.size_bytes) || 0), 0);
-  const selectedCount = isDeletedView ? selectedDeletedIds.length : selectedPaths.length;
-  const allPageSelected = pageItems.length > 0
-    && pageItems.every(item => (
-      isDeletedView ? selectedDeleted.has(item.delete_id) : selected.has(item.relative_path)
-    ));
+  const selectedSize = selectedItems.reduce((sum, item) => sum + (Number(item.size_bytes) || 0), 0);
+  const allPageSelected = pageItems.length > 0 && pageItems.every(item => selected.has(item.relative_path));
 
   const scrollPreviewToBottom = () => {
     requestAnimationFrame(() => {
@@ -149,61 +108,32 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     });
   };
 
-  const loadDeletedSessions = async () => {
-    try {
-      const res = await window.api.listDeletedSessions();
-      const nextDeleted = Array.isArray(res.deleted)
-        ? res.deleted.map(item => ({ ...item, status: 'deleted' }))
-        : [];
-      setDeletedSessions(nextDeleted);
-      setSelectedDeleted(prev => {
-        const existing = new Set(nextDeleted.map(item => item.delete_id));
-        return new Set(Array.from(prev).filter(id => existing.has(id)));
-      });
-      return nextDeleted;
-    } catch (err) {
-      toastError(err, t('读取已删除会话失败'), 6000);
-      return deletedSessions;
-    }
-  };
-
-  const requestPreviewPage = (item, options) => {
-    const payload = {
-      beforeCursor: options.beforeCursor ?? null,
-      snapshotSize: options.snapshotSize ?? null,
-      limit: PREVIEW_PAGE_SIZE,
-      messageSource: options.messageSource || null,
-      requestId: options.requestId
-    };
-    if (item.status === 'deleted') {
-      return window.api.previewDeletedSession({
-        ...payload,
-        deleteId: item.delete_id
-      });
-    }
-    return window.api.previewSession({
-      ...payload,
-      root: rootPath,
-      relativePath: item.relative_path
-    });
-  };
+  const requestPreviewPage = (item, options) => window.api.previewSession({
+    root: rootPath,
+    relativePath: item.relative_path,
+    beforeCursor: options.beforeCursor ?? null,
+    snapshotSize: options.snapshotSize ?? null,
+    limit: PREVIEW_PAGE_SIZE,
+    messageSource: options.messageSource || null,
+    requestId: options.requestId
+  });
 
   const loadPreview = async (item) => {
-    if (!item || (item.status !== 'deleted' && !rootPath)) return;
+    if (!item || !rootPath) return;
     const requestId = nextPreviewRequestId(previewRequestRef);
     previewItemRef.current = item;
-    activePathRef.current = item.status === 'deleted' ? deletedActiveKey(item) : item.relative_path;
+    activePathRef.current = item.relative_path;
     setActivePath(activePathRef.current);
     setPreviewTrimmedNewer(false);
     setPreviewEarlierLoading(false);
     setPreview({
-      conversation: item.status === 'deleted' ? deletedPreviewConversation(item) : item,
+      conversation: item,
       messages: [],
       message_page: null,
       parse_error: item.parse_error || null
     });
 
-    if (item.status !== 'deleted' && item.parse_error && Number(item.size_bytes) === 0) {
+    if (item.parse_error && Number(item.size_bytes) === 0) {
       setPreviewLoading(false);
       return;
     }
@@ -217,25 +147,14 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
         requestId
       });
       if (previewRequestRef.current !== requestId) return;
-      setPreview(item.status === 'deleted'
-        ? {
-            ...res,
-            conversation: {
-              ...deletedPreviewConversation(item),
-              ...(res.conversation || {}),
-              status: 'deleted'
-            }
-          }
-        : res);
+      setPreview(res);
       scrollPreviewToBottom();
     } catch (err) {
       if (previewRequestRef.current !== requestId || isPreviewCancellation(err)) return;
-      const previewErrorMessage = item.status === 'deleted'
-        ? t('读取已删除会话预览失败')
-        : t('读取会话预览失败');
+      const previewErrorMessage = t('读取会话预览失败');
       setPreview(current => ({
         ...(current || {}),
-        conversation: item.status === 'deleted' ? deletedPreviewConversation(item) : item,
+        conversation: item,
         messages: [],
         parse_error: err && err.message
           ? err.message
@@ -315,35 +234,28 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
 
   const refreshSessions = async (nextRoot = rootPath) => {
     setLoading(true);
-    let nextConversations = conversations;
-    let nextDeleted = deletedSessions;
     try {
       const res = await window.api.scanSessions(nextRoot || undefined);
-      nextConversations = Array.isArray(res.conversations) ? res.conversations : [];
+      const nextConversations = Array.isArray(res.conversations) ? res.conversations : [];
+      const existing = new Set(nextConversations.map(item => item.relative_path));
       setRootPath(res.root || nextRoot || '');
       setConversations(nextConversations);
-      setSelected(prev => {
-        const existing = new Set(nextConversations.map(item => item.relative_path));
-        return new Set(Array.from(prev).filter(path => existing.has(path)));
-      });
-    } catch (err) {
-      toastError(err, t('扫描会话失败'), 7000);
-    }
-    nextDeleted = await loadDeletedSessions();
-    const currentActivePath = activePathRef.current;
-    if (currentActivePath) {
-      const activeExists = nextConversations.some(item => item.relative_path === currentActivePath)
-        || nextDeleted.some(item => deletedActiveKey(item) === currentActivePath);
-      if (!activeExists) {
+      setSelected(prev => new Set(Array.from(prev).filter(path => existing.has(path))));
+      if (activePathRef.current && !existing.has(activePathRef.current)) {
         previewRequestRef.current += 1;
         previewItemRef.current = null;
         activePathRef.current = '';
         setActivePath('');
         setPreview(null);
+        setPreviewLoading(false);
+        setPreviewEarlierLoading(false);
         setPreviewTrimmedNewer(false);
       }
+    } catch (err) {
+      toastError(err, t('扫描会话失败'), 7000);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
@@ -372,17 +284,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   }, [page, totalPages]);
 
   useEffect(() => {
-    if (!deleteUndo) return undefined;
-    const remaining = deleteUndo.expiresAt - Date.now();
-    if (remaining <= 0) {
-      setDeleteUndo(null);
-      return undefined;
-    }
-    const timer = window.setTimeout(() => setDeleteUndo(null), remaining);
-    return () => window.clearTimeout(timer);
-  }, [deleteUndo, setDeleteUndo]);
-
-  useEffect(() => {
     if (!contextMenu) return undefined;
     const close = () => setContextMenu(null);
     window.addEventListener('click', close);
@@ -403,15 +304,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   }, []);
 
   const toggleSelection = (item, checked) => {
-    if (isDeletedView) {
-      setSelectedDeleted(prev => {
-        const next = new Set(prev);
-        if (checked) next.add(item.delete_id);
-        else next.delete(item.delete_id);
-        return next;
-      });
-      return;
-    }
     setSelected(prev => {
       const next = new Set(prev);
       if (checked) next.add(item.relative_path);
@@ -421,18 +313,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   };
 
   const toggleSelectFiltered = () => {
-    if (isDeletedView) {
-      setSelectedDeleted(prev => {
-        const next = new Set(prev);
-        if (allPageSelected) {
-          pageItems.forEach(item => next.delete(item.delete_id));
-        } else {
-          pageItems.forEach(item => next.add(item.delete_id));
-        }
-        return next;
-      });
-      return;
-    }
     setSelected(prev => {
       const next = new Set(prev);
       if (allPageSelected) {
@@ -444,19 +324,17 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     });
   };
 
-  const clearSelection = () => {
-    if (isDeletedView) setSelectedDeleted(new Set());
-    else setSelected(new Set());
-  };
+  const clearSelection = () => setSelected(new Set());
 
-  const runAction = async (action, successMessage, errorMessage, refreshRoot = rootPath) => {
+  const runAction = async (action, successMessage, errorMessage) => {
     if (actionLoading) return null;
     setActionLoading(true);
     try {
       const res = await action();
       if (res && res.report && res.report.conflict_action_required) return res;
-      toast((res && res.message) || successMessage);
-      await refreshSessions(refreshRoot);
+      if (res?.ok === false) toastError(res, errorMessage, 7000);
+      else toast(res?.message || successMessage);
+      await refreshSessions();
       return res;
     } catch (err) {
       toastError(err, errorMessage || successMessage, 7000);
@@ -510,15 +388,13 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   };
 
   const handleDeleteSessions = (paths = selectedPaths) => {
-    const nextPaths = Array.from(new Set(paths));
-    if (nextPaths.length === 0) {
+    const pathSet = new Set(paths);
+    const items = conversations.filter(item => pathSet.has(item.relative_path));
+    if (items.length === 0) {
       toast(t('请先选择要删除的会话'));
       return;
     }
-    const pathSet = new Set(nextPaths);
-    const items = conversations.filter(item => pathSet.has(item.relative_path));
     setDeleteConfirm({
-      paths: nextPaths,
       items,
       totalSize: items.reduce((sum, item) => sum + (Number(item.size_bytes) || 0), 0)
     });
@@ -528,26 +404,15 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     if (!actionLoading) setDeleteConfirm(null);
   };
 
-  const confirmDeleteSessions = () => {
+  const confirmDeleteSessions = async () => {
     if (!deleteConfirm || actionLoading) return;
-    const paths = deleteConfirm.paths;
-    const deleteRoot = rootPath;
-    runAction(
-      () => window.api.deleteSessions({ root: deleteRoot, relativePaths: paths }),
+    const threadIds = deleteConfirm.items.map(item => item.id);
+    await runAction(
+      () => window.api.deleteSessions({ root: rootPath, threadIds }),
       t('删除会话完成'),
       t('删除会话失败')
-    ).then(res => {
-      const deleteIds = responseDeleteIds(res);
-      if (deleteIds.length > 0) {
-        const now = Date.now();
-        setDeleteUndo({
-          root: deleteRoot,
-          deleteIds,
-          expiresAt: now + DELETE_UNDO_WINDOW_MS
-        });
-      }
-      setDeleteConfirm(null);
-    });
+    );
+    setDeleteConfirm(null);
   };
 
   const openConflictDialog = ({ title, message, conflicts, onResolve }) => {
@@ -564,114 +429,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     const action = conflictConfirm.onResolve;
     setConflictConfirm(null);
     action(strategy);
-  };
-
-  const handleRestoreDeleted = (
-    deleteIds = selectedDeletedIds,
-    conflictStrategy = 'ask',
-    options = {}
-  ) => {
-    const ids = Array.from(new Set(deleteIds));
-    if (ids.length === 0) {
-      toast(t('请先选择要恢复的会话'));
-      return;
-    }
-    const idSet = new Set(ids);
-    const items = deletedSessions.filter(item => idSet.has(item.delete_id));
-    const targetRoot = options.root || rootPath || items[0]?.root_path || '';
-    if (!targetRoot) {
-      toast(t('请先选择 Codex 数据目录'));
-      return;
-    }
-    runAction(
-      () => window.api.restoreDeletedSessions({
-        root: targetRoot,
-        deleteIds: ids,
-        conflictStrategy
-      }),
-      t('恢复会话完成'),
-      t('恢复会话失败'),
-      targetRoot
-    ).then(res => {
-      if (res && res.report && res.report.conflict_action_required) {
-        openConflictDialog({
-          title: t('恢复会话存在冲突'),
-          message: t('恢复目标位置已有会话文件，请选择这批冲突的处理方式。'),
-          conflicts: res.report.conflicts,
-          onResolve: strategy => handleRestoreDeleted(ids, strategy, options)
-        });
-        return;
-      }
-      if (!res) return;
-      const restoredIds = responseRestoredDeleteIds(res);
-      if (restoredIds.length > 0) {
-        const restoredSet = new Set(restoredIds);
-        setSelectedDeleted(prev => new Set(
-          Array.from(prev).filter(id => !restoredSet.has(id))
-        ));
-        setDeleteUndo(current => {
-          if (!current) return current;
-          const remainingIds = current.deleteIds.filter(id => !restoredSet.has(id));
-          return remainingIds.length > 0
-            ? { ...current, deleteIds: remainingIds }
-            : null;
-        });
-      }
-    });
-  };
-
-  const handleUndoDelete = () => {
-    if (!deleteUndo) return;
-    if (deleteUndo.expiresAt <= Date.now()) {
-      setDeleteUndo(null);
-      return;
-    }
-    handleRestoreDeleted(deleteUndo.deleteIds, 'ask', {
-      root: deleteUndo.root
-    });
-  };
-
-  const handlePurgeDeleted = (deleteIds = selectedDeletedIds) => {
-    const ids = Array.from(new Set(deleteIds));
-    if (ids.length === 0) {
-      toast(t('请先选择要彻底删除的会话'));
-      return;
-    }
-    const idSet = new Set(ids);
-    const items = deletedSessions.filter(item => idSet.has(item.delete_id));
-    setPurgeConfirm({
-      deleteIds: ids,
-      items,
-      totalSize: items.reduce((sum, item) => sum + (Number(item.size_bytes) || 0), 0)
-    });
-  };
-
-  const cancelPurgeDeleted = () => {
-    if (!actionLoading) setPurgeConfirm(null);
-  };
-
-  const confirmPurgeDeleted = () => {
-    if (!purgeConfirm || actionLoading) return;
-    const ids = purgeConfirm.deleteIds;
-    runAction(
-      () => window.api.purgeDeletedSessions(ids),
-      t('彻底删除完成'),
-      t('彻底删除失败')
-    ).then(res => {
-      if (res) {
-        const purgedIds = responsePurgedDeleteIds(res);
-        const purgedSet = new Set(purgedIds);
-        setSelectedDeleted(prev => new Set(Array.from(prev).filter(id => !purgedSet.has(id))));
-        setDeleteUndo(current => {
-          if (!current) return current;
-          const remainingIds = current.deleteIds.filter(id => !purgedSet.has(id));
-          return remainingIds.length > 0
-            ? { ...current, deleteIds: remainingIds }
-            : null;
-        });
-      }
-      setPurgeConfirm(null);
-    });
   };
 
   const openContextMenu = (event, item) => {
@@ -700,9 +457,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
       <SessionFilterBar
         actionLoading={actionLoading}
         conversations={conversations}
-        deletedSessions={deletedSessions}
         handleImport={handleImport}
-        isDeletedView={isDeletedView}
         loading={loading}
         refreshSessions={refreshSessions}
         rootPath={rootPath}
@@ -712,20 +467,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
         statusFilter={statusFilter}
       />
 
-      {deleteUndo && (
-        <div className="session-delete-undo" role="status" aria-live="polite">
-          <span>{t('已删除 {count} 个会话', { count: deleteUndo.deleteIds.length })}</span>
-          <button
-            type="button"
-            className="session-delete-undo-action"
-            onClick={handleUndoDelete}
-            disabled={actionLoading}
-          >
-            {t('撤销')}
-          </button>
-        </div>
-      )}
-
       <div className="session-workspace">
         <SessionListPanel
           actionLoading={actionLoading}
@@ -734,14 +475,10 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           clearSelection={clearSelection}
           conversations={conversations}
           currentPage={currentPage}
-          deletedSessions={deletedSessions}
           handleDeleteSessions={handleDeleteSessions}
           handleExport={handleExport}
-          handlePurgeDeleted={handlePurgeDeleted}
-          handleRestoreDeleted={handleRestoreDeleted}
           handleRowKeyDown={handleRowKeyDown}
           handleSetStatus={handleSetStatus}
-          isDeletedView={isDeletedView}
           loadPreview={loadPreview}
           openContextMenu={openContextMenu}
           pageItems={pageItems}
@@ -749,8 +486,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           selected={selected}
           selectedActivePaths={selectedActivePaths}
           selectedArchivedPaths={selectedArchivedPaths}
-          selectedCount={selectedCount}
-          selectedDeleted={selectedDeleted}
+          selectedCount={selectedPaths.length}
           selectedSize={selectedSize}
           setPage={setPage}
           setPageSize={changePageSize}
@@ -781,8 +517,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           contextMenu={contextMenu}
           handleDeleteSessions={handleDeleteSessions}
           handleExport={handleExport}
-          handlePurgeDeleted={handlePurgeDeleted}
-          handleRestoreDeleted={handleRestoreDeleted}
           handleSetStatus={handleSetStatus}
           setContextMenu={setContextMenu}
         />
@@ -798,9 +532,9 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
 
       {deleteConfirm && (
         <ConfirmDialog
-          title={t('确认删除会话')}
+          title={t('确认永久删除会话')}
           width="460px"
-          confirmText={t('删除')}
+          confirmText={t('永久删除')}
           loadingText={t('删除中...')}
           confirmVariant="danger"
           isLoading={actionLoading}
@@ -808,9 +542,9 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           onConfirm={confirmDeleteSessions}
           content={(
             <div className="session-delete-confirm">
-              <p>{t('将 {count} 个会话移入已删除，可在已删除列表中恢复。', { count: deleteConfirm.paths.length })}</p>
+              <p>{t('将永久删除所选 {count} 个会话及其子代理会话，删除后不可恢复。', { count: deleteConfirm.items.length })}</p>
               <div className="session-delete-summary">
-                <span>{t('数量：{count}', { count: deleteConfirm.paths.length })}</span>
+                <span>{t('数量：{count}', { count: deleteConfirm.items.length })}</span>
                 <span>{t('总大小：{size}', { size: formatSize(deleteConfirm.totalSize) })}</span>
               </div>
               <div className="session-delete-list">
@@ -820,37 +554,6 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
                     <span>
                       {statusLabel(item.status, t)} · {formatTime(item.updated_at, language, t)} · {formatSize(item.size_bytes)}
                     </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        />
-      )}
-
-      {purgeConfirm && (
-        <ConfirmDialog
-          title={t('确认彻底删除')}
-          width="460px"
-          confirmText={t('彻底删除')}
-          loadingText={t('删除中...')}
-          confirmVariant="danger"
-          isLoading={actionLoading}
-          onCancel={cancelPurgeDeleted}
-          onConfirm={confirmPurgeDeleted}
-          content={(
-            <div className="session-delete-confirm">
-              <p>{t('将从 Codex Switch 数据目录中彻底删除 {count} 个会话备份。', { count: purgeConfirm.deleteIds.length })}</p>
-              <p>{t('彻底删除后无法恢复。')}</p>
-              <div className="session-delete-summary">
-                <span>{t('数量：{count}', { count: purgeConfirm.deleteIds.length })}</span>
-                <span>{t('总大小：{size}', { size: formatSize(purgeConfirm.totalSize) })}</span>
-              </div>
-              <div className="session-delete-list">
-                {purgeConfirm.items.map(item => (
-                  <div key={item.delete_id} className="session-delete-item">
-                    <strong title={item.title}>{item.title}</strong>
-                    <span>{formatTime(item.deleted_at, language, t)} · {formatSize(item.size_bytes)}</span>
                   </div>
                 ))}
               </div>

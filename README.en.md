@@ -15,7 +15,7 @@ Download the latest version from [GitHub Releases](https://github.com/wen4950336
 - **Accounts**: add accounts with OAuth, a `refresh_token`, or a JSON file; see quota, subscription expiry and refresh time; scheduled refresh, import and export.
 - **API mode**: keep several OpenAI-compatible API profiles, normalize the Base URL automatically, test the connection, and switch to and from subscription accounts with one click.
 - **Session sync**: subscription mode and API mode share one session list, so earlier conversations stay usable after switching.
-- **Session manager**: browse and preview local sessions; archive, delete (restorable), import and export them.
+- **Session manager**: browse and preview local sessions; archive, permanently delete, import and export them.
 - **Usage statistics**: token usage per account and API profile, with an estimated cost; the Bills page lists every request with its token breakdown and the price of each part.
 - **Codex proxy**: set a local HTTP/HTTPS proxy for the Codex app; turning it off removes the configuration.
 - **Also**: in-app updates, light and dark themes, Chinese and English UI, start at login, a support entry.

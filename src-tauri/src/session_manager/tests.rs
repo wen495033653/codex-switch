@@ -2,6 +2,7 @@ use super::{
     backup::{sanitize_backup_reason, session_manager_data_dir},
     catalog::*,
     codex_home::*,
+    delete::*,
     legacy_migration::*,
     model::*,
     preview::*,
@@ -9,12 +10,10 @@ use super::{
     state_db::*,
     status::*,
     transfer::*,
-    trash::*,
-    trash_store::*,
     util::*,
     zip::*,
 };
-use crate::codex_app_server::CodexDesktopThread;
+use crate::codex_app_server::{CodexDesktopThread, ThreadDeleteBatch};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::env;
@@ -127,281 +126,215 @@ fn write_test_session(root: &Path, relative: &Path, id: &str, label: &str) -> Pa
     path
 }
 
-fn delete_test_session(root: &Path, deleted_root: &Path, relative: &Path) -> (Value, String) {
-    let result =
-        delete_conversations_locked(root, vec![path_to_slash(relative)], deleted_root).unwrap();
-    assert_eq!(result["report"]["deleted"], 1, "{result}");
-    let delete_id = result["delete_ids"][0].as_str().unwrap().to_string();
-    (result, delete_id)
-}
-
 #[test]
-fn soft_delete_preview_and_restore_round_trip() {
-    let base = temp_path("delete-restore-round-trip");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-delete-restore.jsonl");
-    let session_id = "019f0000-0000-7000-8000-000000000001";
-    let source = write_test_session(&root, &relative, session_id, "delete me");
-    let original = fs::read(&source).unwrap();
-
-    let (delete_result, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    assert_eq!(delete_result["report"]["deleted"], 1);
-    assert!(!source.exists());
-    let record_dir = deleted_root.join(&delete_id);
-    let record = read_deleted_session_record(&record_dir).unwrap();
-    assert_eq!(record.root_path, root.to_string_lossy());
-    assert_eq!(
-        record.sha256.as_deref(),
-        Some(sha256_bytes(&original).as_str())
-    );
-
-    let preview = preview_deleted_conversation_from_dir(
-        &deleted_root,
-        &delete_id,
-        None,
-        None,
-        Some(1),
-        None,
-        None,
+fn permanent_delete_reports_rpc_failures_and_cleans_only_successes() {
+    let root = temp_path("permanent-delete-report");
+    fs::create_dir_all(&root).unwrap();
+    let state = root.join(".codex-global-state.json");
+    fs::write(
+        &state,
+        r#"{"pinned-thread-ids":["local:deleted-id","refused-id"],"threads":{"deleted-id":true,"refused-id":true}}"#,
     )
     .unwrap();
-    assert_eq!(preview["conversation"]["status"], "deleted");
-    assert_eq!(preview["messages"].as_array().unwrap().len(), 1);
-    assert_eq!(preview["message_page"]["has_more"], true);
 
-    let restore = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Ask,
-    )
-    .unwrap();
-    assert_eq!(restore["report"]["restored"], 1);
-    assert_eq!(fs::read(&source).unwrap(), original);
-    assert!(!record_dir.exists());
-
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
-fn purge_removes_persistent_trash_record() {
-    let base = temp_path("delete-purge");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-delete-purge.jsonl");
-    write_test_session(
+    let result = finish_delete(
         &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000002",
-        "purge me",
+        ThreadDeleteBatch {
+            deleted: 1,
+            removed_ids: HashSet::from(["deleted-id".to_string()]),
+            errors: vec![
+                "会话 refused-id: code -32600: forked history still references it".to_string(),
+            ],
+        },
     );
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let record_dir = deleted_root.join(&delete_id);
-    assert!(record_dir.exists());
 
-    let result = purge_deleted_sessions_locked(&deleted_root, vec![delete_id.clone()]).unwrap();
-    assert_eq!(result["report"]["purged"], 1);
-    assert_eq!(result["report"]["purged_delete_ids"][0], delete_id);
-    assert!(!record_dir.exists());
-
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
-fn delete_cleanup_failure_keeps_verified_trash() {
-    let base = temp_path("delete-cleanup-failure");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-cleanup-failure.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000003",
-        "cleanup failure",
-    );
-    fs::write(root.join("state_5.sqlite"), b"not sqlite").unwrap();
-    fs::write(root.join(".codex-global-state.json"), b"not json").unwrap();
-
-    let (result, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    assert!(!source.exists());
-    assert!(deleted_root.join(&delete_id).join("session.jsonl").exists());
-    assert!(result["report"]["desktop_error"].is_string());
-    assert!(result["report"]["global_state_error"].is_string());
-
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
-fn prepared_record_is_hidden_until_original_file_is_gone() {
-    let base = temp_path("delete-prepared-recovery");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-prepared-recovery.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000006",
-        "prepared recovery",
-    );
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let record_dir = deleted_root.join(&delete_id);
-    fs::remove_file(record_dir.join("ready")).unwrap();
-    fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, b"original still exists\n").unwrap();
-
-    let hidden = list_deleted_sessions_from_dir(&deleted_root).unwrap();
-    assert!(hidden["deleted"].as_array().unwrap().is_empty());
-    fs::remove_file(&source).unwrap();
-
-    let recovered = list_deleted_sessions_from_dir(&deleted_root).unwrap();
-    assert_eq!(recovered["deleted"].as_array().unwrap().len(), 1);
-    assert_eq!(recovered["deleted"][0]["state"], "ready");
-
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
-fn restore_db_failure_rolls_back_overwrite_and_keeps_trash() {
-    let base = temp_path("restore-db-failure-rollback");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-restore-rollback.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000004",
-        "trashed version",
-    );
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let replacement = b"existing target must survive\n".to_vec();
-    fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, &replacement).unwrap();
-    fs::write(root.join("state_5.sqlite"), b"not sqlite").unwrap();
-
-    let result = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Overwrite,
-    )
-    .unwrap();
-    assert_eq!(result["report"]["restored"], 0);
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(result["report"]["deleted"], 1);
     assert_eq!(result["report"]["failed"], 1);
-    assert_eq!(fs::read(&source).unwrap(), replacement);
-    assert!(deleted_root.join(&delete_id).join("session.jsonl").exists());
-
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
-fn restore_conflict_supports_ask_skip_and_modify_id() {
-    let base = temp_path("restore-conflict-strategies");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-restore-conflict.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000005",
-        "trashed conflict",
+    assert!(result["message"].as_str().unwrap().contains("code -32600"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(state).unwrap()).unwrap(),
+        json!({ "pinned-thread-ids": ["refused-id"], "threads": { "refused-id": true } })
     );
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let existing = b"existing target\n".to_vec();
-    fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, &existing).unwrap();
-
-    let ask = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Ask,
-    )
-    .unwrap();
-    assert_eq!(ask["report"]["conflict_action_required"], true);
-    assert_eq!(fs::read(&source).unwrap(), existing);
-
-    let skip = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Skip,
-    )
-    .unwrap();
-    assert_eq!(skip["report"]["skipped"], 1);
-    assert!(deleted_root.join(&delete_id).exists());
-
-    let modified = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::ModifyId,
-    )
-    .unwrap();
-    assert_eq!(modified["report"]["restored"], 1);
-    assert_eq!(fs::read(&source).unwrap(), existing);
-    assert!(!deleted_root.join(&delete_id).exists());
-    let mut files = Vec::new();
-    let mut collect_errors = Vec::new();
-    collect_conversation_files(
-        &root.join("sessions"),
-        "active",
-        &mut files,
-        &mut collect_errors,
-    );
-    assert!(collect_errors.is_empty());
-    assert_eq!(files.len(), 2);
-    let restored = files
-        .iter()
-        .map(|(_, path)| path)
-        .find(|path| **path != source)
-        .unwrap();
-    let restored_summary = parse_session_file_for_list(restored).unwrap();
-    assert_ne!(
-        restored_summary.id.as_deref(),
-        Some("019f0000-0000-7000-8000-000000000005")
-    );
-
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
-fn sessions_with_a_non_utf8_line_list_and_restore_unchanged() {
-    let base = temp_path("restore-non-utf8");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-non-utf8.jsonl");
-    let session_id = "019f0000-0000-7000-8000-000000000011";
-    let source = write_test_session(&root, &relative, session_id, "broken line");
-    let mut file = fs::OpenOptions::new().append(true).open(&source).unwrap();
-    file.write_all(b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\n")
-        .unwrap();
-    drop(file);
-    let original = fs::read(&source).unwrap();
-
-    let summary = parse_session_file_for_list(&source).unwrap();
-    assert_eq!(summary.id.as_deref(), Some(session_id));
-
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let restored =
-        restore_deleted_sessions_locked(&deleted_root, vec![delete_id], ConflictStrategy::Ask)
-            .unwrap();
-    assert_eq!(restored["report"]["restored"], 1, "{restored}");
-    assert_eq!(fs::read(&source).unwrap(), original);
-
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, b"existing target\n").unwrap();
-    let modified =
-        restore_deleted_sessions_locked(&deleted_root, vec![delete_id], ConflictStrategy::ModifyId)
-            .unwrap();
-    assert_eq!(modified["report"]["restored"], 1, "{modified}");
-    let copy = fs::read_dir(source.parent().unwrap())
+    assert!(!session_manager_data_dir()
         .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| *path != source)
-        .unwrap();
-    let copy_bytes = fs::read(&copy).unwrap();
-    assert!(copy_bytes.ends_with(b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\n"));
-    let copy_summary = parse_session_file_for_list(&copy).unwrap();
-    assert_ne!(copy_summary.id.as_deref(), Some(session_id));
+        .join("deleted-sessions")
+        .exists());
+    fs::remove_dir_all(&root).unwrap();
+}
 
-    fs::remove_dir_all(&base).unwrap();
+#[test]
+#[ignore = "starts the installed Codex Desktop app-server; run with isolated HOME and APPDATA"]
+fn permanent_delete_uses_official_app_server_in_isolated_home() {
+    let root = temp_path("permanent-delete-official-rpc");
+    fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let stamp = "2026-11-17T00:00:00Z";
+    let write_rollout = |id: &str,
+                         label: &str,
+                         archived: bool,
+                         paginated: bool,
+                         base: Option<(&str, u64)>,
+                         parent: Option<&str>| {
+        let folder = root.join(if archived {
+            "archived_sessions"
+        } else {
+            "sessions/2026/11/17"
+        });
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(format!("rollout-2026-11-17T00-00-00-{id}.jsonl"));
+        let mut meta = json!({
+            "session_id": id, "id": id, "timestamp": stamp, "cwd": root,
+            "originator": "codex_fixture", "cli_version": "0.169.0", "source": "vscode",
+            "model_provider": "openai", "history_mode": if paginated { "paginated" } else { "legacy" }
+        });
+        if let Some((base_id, end)) = base {
+            meta["history_base"] = json!({
+                "thread_id": base_id, "end_ordinal_exclusive": 2, "end_byte_offset": end
+            });
+            meta["forked_from_id"] = json!(base_id);
+            meta["forked_from_ordinal_exclusive"] = json!(2);
+        }
+        if let Some(parent) = parent {
+            meta["source"] = json!({ "subagent": { "thread_spawn": {
+                "parent_thread_id": parent, "depth": 1, "agent_path": "/root/test-fixture",
+                "agent_nickname": "Fixture", "agent_role": null
+            }}});
+        }
+        let mut first = json!({ "timestamp": stamp, "type": "session_meta", "payload": meta });
+        let mut second = json!({
+            "timestamp": stamp, "type": "event_msg",
+            "payload": { "type": "user_message", "message": label, "kind": "plain" }
+        });
+        if paginated {
+            first["ordinal"] = json!(0);
+            second["ordinal"] = json!(1);
+        }
+        fs::write(&path, format!("{first}\n{second}\n")).unwrap();
+        path
+    };
+    let [active, archive, base, fork, keep, child, child_unselected] =
+        [1, 2, 3, 4, 5, 6, 7].map(|n| format!("019f0000-0000-7000-8000-{n:012}"));
+    let active_path = write_rollout(&active, "active", false, false, None, None);
+    let archive_path = write_rollout(&archive, "archived", true, false, None, None);
+    let base_path = write_rollout(&base, "fork source", false, true, None, None);
+    let fork_path = write_rollout(
+        &fork,
+        "fork",
+        false,
+        true,
+        Some((&base, base_path.metadata().unwrap().len())),
+        None,
+    );
+    let keep_path = write_rollout(&keep, "unrelated", false, false, None, None);
+    let child_path = write_rollout(&child, "selected child", false, false, None, Some(&active));
+    let child_unselected_path = write_rollout(
+        &child_unselected,
+        "unselected child",
+        false,
+        false,
+        None,
+        Some(&active),
+    );
+    let index = root.join("session_index.jsonl");
+    let ids = [
+        &active,
+        &archive,
+        &base,
+        &fork,
+        &keep,
+        &child,
+        &child_unselected,
+    ];
+    fs::write(
+        &index,
+        ids.iter()
+            .map(|id| {
+                format!(
+                    "{}\n",
+                    json!({"id": id, "thread_name": id, "updated_at": stamp})
+                )
+            })
+            .collect::<String>(),
+    )
+    .unwrap();
+    let global = root.join(".codex-global-state.json");
+    fs::write(
+        &global,
+        json!({ "pinned-thread-ids": ids, "unrelated": "keep" }).to_string(),
+    )
+    .unwrap();
+
+    let root_path = root.to_string_lossy().into_owned();
+    let before = scan_conversations_impl(Some(root_path.clone())).unwrap();
+    assert_eq!(
+        before["conversations"].as_array().unwrap().len(),
+        7,
+        "{before}"
+    );
+    {
+        let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
+        for child in [&child, &child_unselected] {
+            connection.execute(
+                "INSERT INTO thread_spawn_edges(parent_thread_id,child_thread_id,status) VALUES (?1,?2,'closed')",
+                params![active, child],
+            ).unwrap();
+        }
+    }
+    let result = delete_conversations_impl(
+        root_path.clone(),
+        vec![active.clone(), child, base.clone(), archive.clone(), active],
+    )
+    .unwrap();
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(result["report"]["deleted"], 3);
+    assert_eq!(result["report"]["failed"], 1);
+    let error = result["report"]["errors"][0].as_str().unwrap();
+    assert!(
+        error.contains("-32600") && error.contains("forked history"),
+        "{error}"
+    );
+    assert!(!active_path.exists() && !archive_path.exists());
+    assert!(!child_path.exists() && !child_unselected_path.exists());
+    assert!(base_path.exists() && fork_path.exists() && keep_path.exists());
+    let index_ids = read_session_index(&root, &mut Vec::new());
+    let after = scan_conversations_impl(Some(root_path)).unwrap();
+    let survivors: HashSet<&str> = [&base, &fork, &keep]
+        .into_iter()
+        .map(String::as_str)
+        .collect();
+    {
+        let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
+        let mut query = connection.prepare("SELECT id FROM threads").unwrap();
+        let stored_ids = query
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<HashSet<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            stored_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>(),
+            survivors
+        );
+    }
+    assert_eq!(
+        after["conversations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<HashSet<_>>(),
+        survivors,
+    );
+    assert_eq!(index_ids.len(), 6); // each surviving ID has a bare and a local variant
+    assert!(survivors.iter().all(|id| index_ids.contains_key(*id)));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(global).unwrap()).unwrap(),
+        json!({ "pinned-thread-ids": [base, fork, keep], "unrelated": "keep" }),
+    );
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -1549,46 +1482,6 @@ fn status_overwrite_removes_overwritten_rows_and_surfaces_global_state_failure()
 }
 
 #[test]
-fn restore_keeps_trash_when_state_schema_cannot_be_written() {
-    let base = temp_path("restore-unsupported-schema");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-restore-schema.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000011",
-        "schema",
-    );
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    Connection::open(root.join("state_5.sqlite"))
-        .unwrap()
-        .execute_batch(
-            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, unsupported TEXT NOT NULL);",
-        )
-        .unwrap();
-
-    let result = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Ask,
-    )
-    .unwrap();
-    let trash_kept = deleted_root.join(&delete_id).join("session.jsonl").exists();
-    let restored_exists = source.exists();
-    fs::remove_dir_all(&base).unwrap();
-
-    assert_eq!(result["report"]["restored"], 0, "{result}");
-    assert_eq!(result["report"]["failed"], 1);
-    assert!(result["report"]["errors"][0]
-        .as_str()
-        .unwrap()
-        .contains("[unsupported]"));
-    assert!(trash_kept);
-    assert!(!restored_exists);
-}
-
-#[test]
 fn legacy_migration_rejects_unwritable_schema_without_marker_or_backup() {
     let root = temp_path("legacy-migration-unwritable");
     let marker = root.join("markers").join("migration.json");
@@ -1934,119 +1827,6 @@ fn session_index_skips_non_utf8_lines_and_keeps_reading() {
 }
 
 #[test]
-fn delete_state_threads_removes_related_rows() {
-    let root = temp_path("delete-state-related");
-    fs::create_dir_all(&root).unwrap();
-    let state_db = root.join("state_5.sqlite");
-    let connection = Connection::open(&state_db).unwrap();
-    connection
-            .execute_batch(
-                r#"
-                CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT);
-                CREATE TABLE thread_dynamic_tools (thread_id TEXT NOT NULL, tool_name TEXT NOT NULL);
-                CREATE TABLE thread_goals (thread_id TEXT NOT NULL, goal TEXT NOT NULL);
-                CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL);
-                CREATE TABLE stage1_outputs (thread_id TEXT NOT NULL, output TEXT NOT NULL);
-                CREATE TABLE agent_job_items (id TEXT PRIMARY KEY, assigned_thread_id TEXT);
-                INSERT INTO threads (id, rollout_path, title) VALUES ('t1', 'sessions/rollout-t1.jsonl', 'Thread');
-                INSERT INTO thread_dynamic_tools (thread_id, tool_name) VALUES ('t1', 'Read');
-                INSERT INTO thread_goals (thread_id, goal) VALUES ('t1', 'goal');
-                INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id) VALUES ('t1', 'child');
-                INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id) VALUES ('parent', 't1');
-                INSERT INTO stage1_outputs (thread_id, output) VALUES ('t1', 'cached');
-                INSERT INTO agent_job_items (id, assigned_thread_id) VALUES ('job1', 't1');
-                "#,
-            )
-            .unwrap();
-    drop(connection);
-
-    let mut backup = StateDbBatchBackup::new("delete");
-    delete_state_threads_for_sessions(&root, &["t1".to_string()], &[], &mut backup).unwrap();
-    assert!(backup.path().is_some_and(Path::exists));
-    let connection = Connection::open(&state_db).unwrap();
-
-    assert_eq!(
-        connection
-            .query_row("SELECT COUNT(*) FROM threads WHERE id = 't1'", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-            connection
-                .query_row(
-                    "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = 't1' OR child_thread_id = 't1'",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap(),
-            0
-        );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT assigned_thread_id FROM agent_job_items WHERE id = 'job1'",
-                [],
-                |row| { row.get::<_, Option<String>>(0) }
-            )
-            .unwrap(),
-        None
-    );
-
-    drop(connection);
-    fs::remove_dir_all(&root).unwrap();
-}
-
-#[test]
-fn delete_state_threads_resolves_thread_id_from_rollout_path() {
-    let root = temp_path("delete-state-rollout-path");
-    let rollout_relative = PathBuf::from("sessions/2026/05/15/rollout-t1.jsonl");
-    let rollout_path = root.join(&rollout_relative);
-    fs::create_dir_all(rollout_path.parent().unwrap()).unwrap();
-    fs::write(&rollout_path, "{}\n").unwrap();
-    let state_db = root.join("state_5.sqlite");
-    let connection = Connection::open(&state_db).unwrap();
-    connection
-        .execute_batch(
-            r#"
-                CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT);
-                "#,
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO threads (id, rollout_path, title) VALUES (?1, ?2, 'Thread')",
-            ("local:t1", path_to_slash(&rollout_relative)),
-        )
-        .unwrap();
-    drop(connection);
-
-    delete_state_threads_for_sessions(
-        &root,
-        &["t1".to_string()],
-        &[rollout_path],
-        &mut StateDbBatchBackup::new("delete"),
-    )
-    .unwrap();
-    let connection = Connection::open(&state_db).unwrap();
-
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT COUNT(*) FROM threads WHERE id = 'local:t1'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        0
-    );
-
-    drop(connection);
-    fs::remove_dir_all(&root).unwrap();
-}
-
-#[test]
 fn global_state_cleanup_removes_pinned_thread_ids() {
     let mut value = json!({
         "pinned-thread-ids": ["keep", "remove"],
@@ -2218,146 +1998,6 @@ fn legacy_state_metadata_migration_preserves_current_rows_and_backfills_recency(
 
     drop(current);
     fs::remove_dir_all(root).unwrap();
-}
-
-fn corrupt_first_byte(path: &Path) {
-    let mut bytes = fs::read(path).unwrap();
-    bytes[0] = if bytes[0] == b'{' { b'[' } else { b'{' };
-    fs::write(path, bytes).unwrap();
-}
-
-#[test]
-fn restore_rejects_a_same_size_corrupted_backup() {
-    let base = temp_path("restore-corrupted-backup");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-corrupted.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000031",
-        "corrupted",
-    );
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let backup = deleted_root.join(&delete_id).join("session.jsonl");
-    corrupt_first_byte(&backup);
-
-    // Listing only checks presence and size, so the damaged record is still listed ...
-    let listed = list_deleted_sessions_from_dir(&deleted_root).unwrap();
-    // ... but neither a plain restore nor a restore under a new id may put it in place.
-    let plain = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Ask,
-    )
-    .unwrap();
-    let plain_target_exists = source.exists();
-    fs::write(&source, b"existing target\n").unwrap();
-    let modified = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::ModifyId,
-    )
-    .unwrap();
-    let session_dir_files = count_files(source.parent().unwrap());
-    let trash_kept = backup.exists();
-    fs::remove_dir_all(&base).unwrap();
-
-    assert_eq!(listed["deleted"].as_array().unwrap().len(), 1, "{listed}");
-    for result in [&plain, &modified] {
-        assert_eq!(result["report"]["restored"], 0, "{result}");
-        assert!(result["report"]["errors"][0]
-            .as_str()
-            .unwrap()
-            .contains("SHA-256 不匹配"));
-    }
-    assert!(!plain_target_exists);
-    assert_eq!(session_dir_files, 1, "no restore copy may be left behind");
-    assert!(trash_kept);
-}
-
-#[test]
-fn restore_legacy_record_without_hash_still_restores() {
-    let base = temp_path("restore-legacy-record");
-    let root = base.join("codex");
-    let deleted_root = base.join("deleted-sessions");
-    let relative = PathBuf::from("sessions/2026/07/13/rollout-legacy.jsonl");
-    let source = write_test_session(
-        &root,
-        &relative,
-        "019f0000-0000-7000-8000-000000000032",
-        "legacy",
-    );
-    let original = fs::read(&source).unwrap();
-    let (_, delete_id) = delete_test_session(&root, &deleted_root, &relative);
-    let metadata_path = deleted_root.join(&delete_id).join("metadata.json");
-    let mut metadata: Value =
-        serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
-    metadata.as_object_mut().unwrap().remove("sha256");
-    fs::write(&metadata_path, metadata.to_string()).unwrap();
-
-    let result = restore_deleted_sessions_locked(
-        &deleted_root,
-        vec![delete_id.clone()],
-        ConflictStrategy::Ask,
-    )
-    .unwrap();
-    let restored = fs::read(&source).unwrap();
-    fs::remove_dir_all(&base).unwrap();
-
-    assert_eq!(result["report"]["restored"], 1, "{result}");
-    assert_eq!(restored, original);
-}
-
-#[test]
-fn state_db_backup_is_taken_once_per_batch_and_only_when_rows_change() {
-    let root = temp_path("state-db-backup-once");
-    fs::create_dir_all(&root).unwrap();
-    let state_db = root.join("state_5.sqlite");
-    Connection::open(&state_db)
-        .unwrap()
-        .execute_batch(
-            r#"
-            CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT);
-            CREATE TABLE thread_goals (thread_id TEXT NOT NULL, goal TEXT NOT NULL);
-            INSERT INTO threads (id, rollout_path, title) VALUES ('t1', 'a.jsonl', 'A'), ('t2', 'b.jsonl', 'B');
-            INSERT INTO thread_goals (thread_id, goal) VALUES ('orphan', 'left behind');
-            "#,
-        )
-        .unwrap();
-
-    let mut untouched = StateDbBatchBackup::new("delete");
-    delete_state_threads_for_sessions(&root, &["missing".to_string()], &[], &mut untouched)
-        .unwrap();
-    let mut batch = StateDbBatchBackup::new("delete");
-    delete_state_threads_for_sessions(&root, &["t1".to_string()], &[], &mut batch).unwrap();
-    let first_backup = batch.path().map(Path::to_path_buf);
-    delete_state_threads_for_sessions(&root, &["t2".to_string()], &[], &mut batch).unwrap();
-    let second_backup = batch.path().map(Path::to_path_buf);
-    // A child row without a thread row still counts as a change (and is still removed).
-    let mut orphan = StateDbBatchBackup::new("delete");
-    delete_state_threads_for_sessions(&root, &["orphan".to_string()], &[], &mut orphan).unwrap();
-    let connection = Connection::open(&state_db).unwrap();
-    let threads: i64 = connection
-        .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
-        .unwrap();
-    let goals: i64 = connection
-        .query_row("SELECT COUNT(*) FROM thread_goals", [], |row| row.get(0))
-        .unwrap();
-    let rows_in_first_backup: i64 = Connection::open(first_backup.as_ref().unwrap())
-        .unwrap()
-        .query_row("SELECT COUNT(*) FROM threads", [], |row| row.get(0))
-        .unwrap();
-    drop(connection);
-    fs::remove_dir_all(&root).unwrap();
-
-    assert!(untouched.path().is_none());
-    assert!(first_backup.is_some());
-    assert_eq!(first_backup, second_backup);
-    assert_eq!(rows_in_first_backup, 2);
-    assert!(orphan.path().is_some());
-    assert_eq!(threads, 0);
-    assert_eq!(goals, 0);
 }
 
 #[test]
@@ -2639,8 +2279,8 @@ fn per_session_failures_in_a_report_are_logged() {
         &failed,
     );
     super::log_item_errors(
-        "session_manager_purge_error",
-        None,
+        "session_manager_delete_error",
+        Some("C:/root-under-test"),
         &serde_json::json!({ "ok": true, "errors": [] }),
     );
 
@@ -2650,9 +2290,8 @@ fn per_session_failures_in_a_report_are_logged() {
             && entry["details"]["details"]["root"] == "C:/root-under-test"
     });
     assert_eq!(logged.count(), 1, "{entries}");
-    assert!(!entries
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|entry| { entry["details"]["event"] == "session_manager_purge_error" }));
+    assert!(!entries.as_array().unwrap().iter().any(|entry| {
+        entry["details"]["event"] == "session_manager_delete_error"
+            && entry["details"]["details"]["root"] == "C:/root-under-test"
+    }));
 }
