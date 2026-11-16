@@ -1,10 +1,15 @@
 //! HTTP reads against the ChatGPT backend. Every endpoint this app talks to lives here,
 //! together with the client identity Cloudflare expects in front of those paths.
 
-use super::state::{build_error_state, normalize_subscription, normalize_usage_info};
-use crate::json_util::raw_string_field;
+use super::state::{
+    apply_reset_credit_details, build_error_state, normalize_subscription, normalize_usage_info,
+};
+use crate::{
+    app_log::{account_label, log_event_once, truncate_for_log},
+    json_util::raw_string_field,
+};
 use reqwest::blocking::{Client, RequestBuilder};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::time::Duration as StdDuration;
 
 /// Codex CLI identity. Cloudflare only lets `/backend-api/subscriptions` through for this
@@ -23,6 +28,13 @@ const USAGE_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
     path: "/backend-api/wham/usage",
     label: "quota",
     failure_code: "usage_sync_failed",
+};
+
+const RESET_CREDIT_DETAILS_ENDPOINT: ChatgptEndpoint = ChatgptEndpoint {
+    url: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    path: "/backend-api/wham/rate-limit-reset-credits",
+    label: "reset credit details",
+    failure_code: "reset_credit_details_failed",
 };
 
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
@@ -185,23 +197,103 @@ pub(crate) fn parse_endpoint_error(status: u16, text: &str) -> EndpointError {
     }
 }
 
+fn usage_request(
+    client: &Client,
+    endpoint: &ChatgptEndpoint,
+    access_token: &str,
+    account_id: &str,
+) -> RequestBuilder {
+    client
+        .get(endpoint.url)
+        .bearer_auth(access_token)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", CODEX_USER_AGENT)
+        .header("chatgpt-account-id", account_id)
+}
+
+fn reset_credit_response_for_log(data: &Value) -> String {
+    // Only capture the wire fields used here, without credit IDs or profile metadata.
+    let credits = match &data["credits"] {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|credit| json!({ "status": credit["status"], "expires_at": credit["expires_at"] }))
+                .collect(),
+        ),
+        other => other.clone(),
+    };
+    let response = json!({ "available_count": data["available_count"], "credits": credits });
+    truncate_for_log(&response.to_string(), 300)
+}
+
+fn apply_reset_credit_response(
+    reset_credits: &mut Value,
+    account_id: &str,
+    response: Result<Value, Value>,
+) {
+    let endpoint = &RESET_CREDIT_DETAILS_ENDPOINT;
+    let result = response.and_then(|data| {
+        apply_reset_credit_details(reset_credits, &data).map_err(|err| {
+            build_error_state(
+                &err,
+                endpoint.failure_code,
+                &reset_credit_response_for_log(&data),
+                200,
+                endpoint.path,
+            )
+        })
+    });
+    if let Err(err) = result {
+        // The count from the usage response is still valid; the expiry list stays unsynced.
+        log_event_once(
+            "account_reset_credit_details_error",
+            json!({
+                "account": account_label(account_id),
+                "path": err["path"],
+                "status": err["status"],
+                "code": err["code"],
+                "error": err["message"],
+                "response": err["raw_message"],
+                "available_count": reset_credits["available_count"],
+                "handling": "expiry_unsynced"
+            }),
+        );
+    }
+}
+
 pub(crate) fn get_usage(
     access_token: &str,
     account_id: &str,
     timeout_ms: u64,
 ) -> Result<Value, Value> {
-    let request = blocking_client(timeout_ms, false).map(|client| {
-        client
-            .get(USAGE_ENDPOINT.url)
-            .bearer_auth(access_token)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", CODEX_USER_AGENT)
-            .header("chatgpt-account-id", account_id)
-    });
-    let data = USAGE_ENDPOINT.fetch_json(request)?;
-    let usage = normalize_usage_info(Some(&data));
+    let client = blocking_client(timeout_ms, false)
+        .map_err(|err| USAGE_ENDPOINT.failure(&http_error_message(err)))?;
+    let data = USAGE_ENDPOINT.fetch_json(Ok(usage_request(
+        &client,
+        &USAGE_ENDPOINT,
+        access_token,
+        account_id,
+    )))?;
+    let mut usage = normalize_usage_info(Some(&data));
     if usage.is_null() {
         return Err(USAGE_ENDPOINT.failure("配额响应缺少 rate_limit"));
+    }
+    let reset_credits = &mut usage["reset_credits"];
+    if reset_credits["available_count"]
+        .as_u64()
+        .is_some_and(|count| count > 0)
+    {
+        let endpoint = &RESET_CREDIT_DETAILS_ENDPOINT;
+        apply_reset_credit_response(
+            reset_credits,
+            account_id,
+            endpoint.fetch_json(Ok(usage_request(
+                &client,
+                endpoint,
+                access_token,
+                account_id,
+            ))),
+        );
     }
     Ok(usage)
 }
@@ -315,7 +407,7 @@ pub(crate) fn post_codex_prompt(
 mod tests {
     use super::super::state::error_state_is_auth_rejected;
     use super::*;
-    use crate::json_util::value_u64_field;
+    use crate::{app_log::get_dev_log_entries, json_util::value_u64_field};
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -403,5 +495,60 @@ mod tests {
         assert!(message.starts_with("error sending request: "), "{message}");
         assert!(!message.contains("account-secret"), "{message}");
         assert_eq!(error["path"], "/test");
+    }
+
+    #[test]
+    fn reset_credit_details_failures_log_evidence_and_keep_expiry_unsynced() {
+        let endpoint = &RESET_CREDIT_DETAILS_ENDPOINT;
+        let cases = [
+            (
+                Err(endpoint.rejected(503, "<fixture unavailable>")),
+                503,
+                "<fixture unavailable>",
+            ),
+            (
+                Ok(json!({"credits": [], "available_count": "bad-count"})),
+                200,
+                "bad-count",
+            ),
+            (
+                Ok(json!({"credits": "bad-credits", "available_count": 1})),
+                200,
+                "bad-credits",
+            ),
+            (
+                Ok(
+                    json!({"credits": [{"id": "fixture-id", "status": "available", "expires_at": "bad-date"}], "available_count": 1}),
+                ),
+                200,
+                "bad-date",
+            ),
+        ];
+        for (index, (response, status, evidence)) in cases.into_iter().enumerate() {
+            let account = format!("reset00{index}");
+            let summary = json!({"available_count": 3, "applicable_available_count": 0, "expires_at_ms": null});
+            let mut reset_credits = summary.clone();
+            apply_reset_credit_response(&mut reset_credits, &account, response);
+            assert_eq!(reset_credits, summary);
+
+            let logs = get_dev_log_entries();
+            let details = logs
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|entry| {
+                    let log = &entry["details"];
+                    (log["event"] == "account_reset_credit_details_error"
+                        && log["details"]["account"] == account)
+                        .then_some(&log["details"])
+                })
+                .unwrap();
+            assert_eq!(details["path"], endpoint.path);
+            assert_eq!(details["status"], status);
+            assert_eq!(details["handling"], "expiry_unsynced");
+            let response = details["response"].as_str().unwrap();
+            assert!(response.contains(evidence), "{response}");
+            assert!(!response.contains("fixture-id"), "{response}");
+        }
     }
 }

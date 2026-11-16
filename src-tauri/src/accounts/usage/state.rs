@@ -9,4 +9,4 @@ pub(crate) use custom::{
 };
 pub(crate) use error::{build_error_state, error_state_is_auth_rejected};
 pub(super) use subscription::normalize_subscription;
-pub(super) use usage_info::normalize_usage_info;
+pub(super) use usage_info::{apply_reset_credit_details, normalize_usage_info};

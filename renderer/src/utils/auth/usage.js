@@ -27,7 +27,8 @@ export function getResetCredits(usage) {
     if (availableCount === null) return null;
     return {
         availableCount,
-        applicableAvailableCount: toCount(raw.applicable_available_count)
+        applicableAvailableCount: toCount(raw.applicable_available_count),
+        expiresAtMs: Array.isArray(raw.expires_at_ms) ? raw.expires_at_ms : null
     };
 }
 

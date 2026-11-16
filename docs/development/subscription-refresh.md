@@ -54,7 +54,14 @@ User-Agent: codex_cli_rs/...
 3. 调用点：手动“刷新配额”、“刷新所有配额”与定时刷新、导入账号后的后台同步。都不额外重签 token。
 4. `normalize_usage_info` 保留 `plan_type` 和 `reset_credits`；Codex 会话 `token_count` 事件解析 `rate_limits.plan_type`，该来源没有重置券信息，当前账号从会话同步时沿用上一次 API 返回的值。
 5. 前端 `parseAuthInfo`：到期日优先取 `custom.subscription.active_until`，接口从未成功过才回退 id_token claim；套餐优先取 `usage_info.plan_type`，其次 `subscription.plan_type`，最后 claim。
-6. 账号卡片：到期徽标 tooltip 区分“到期后自动续费”和“到期后不再续费”；`is_delinquent` 为 true 时显示“欠费”徽标；`available_count > 0` 时显示“可重置 {count} 次”。仅在接口从未成功、claim 已过期且 usage 套餐仍为付费时，才显示“到期时间未同步”，避免把已知错误的过期日期当成真实到期时间。
+6. 账号卡片：到期徽标 tooltip 区分“到期后自动续费”和“到期后不再续费”；`is_delinquent` 为 true 时显示“欠费”徽标；`available_count > 0` 时显示“可重置 {count} 次”，悬停逐张显示重置券的过期时间。仅在接口从未成功、claim 已过期且 usage 套餐仍为付费时，才显示“到期时间未同步”，避免把已知错误的过期日期当成真实到期时间。
+
+## 重置券过期时间（2026-11-17）
+
+- `/backend-api/wham/usage` 的 `rate_limit_reset_credits` 是计数摘要，不含逐张过期时间。官方 Codex Desktop 26.1111.2228.0 从 `GET /backend-api/wham/rate-limit-reset-credits` 读明细，按 `credits[].status === "available"` 选可用券，并读取 `credits[].expires_at`（RFC 3339 时间或 null）。
+- 现有刷新配额路径只在摘要有可用券时，用同一个 HTTP client 补一次明细 GET；不消费券，不新增轮询。成功时保存明细的 `available_count` 和按时间排序的 `expires_at_ms`（保留同一时刻到期的多张券；未提供时间的排最后）。界面 tooltip 以本地时区逐张显示。明细请求失败时保留本次刷新所得的摘要，提示过期时间未同步，不沿用旧日期，按 `account_reset_credit_details_error` 记录路径、状态码和错误响应。
+- 现场接口证据：使用现有登录凭据发只读 GET，PRO、FREE、PLUS 三个有券账号均返回 HTTP 200；明细分别为 1、1、3 张可用券，每张均带有过期时间。未重签 token 或消费券。
+- 验证：2026-11-17，账号卡片 9 项 SSR 回归通过，Rust 覆盖排序、状态过滤、重复日期、空日期及 HTTP 503 / 无效明细的错误日志；完整 `npm run check`（72 passed / 4 skipped）、`cargo test --locked`（372 passed / 7 ignored）、fmt 与 Clippy all-targets 通过。未在安装版 UI 操作刷新；真实接口读取与离线组件验证分开进行。
 
 ## HTTP 请求与错误信息（2026-09-23）
 
@@ -91,7 +98,7 @@ User-Agent: codex_cli_rs/...
 
 - `/backend-api/subscriptions` 是非公开接口，字段和路径可能随 OpenAI 更新变化；失败时界面退回 claim 或“到期时间未同步”，不会报错中断配额刷新。
 - 与 CPA 共用 refresh_token 的账号，任一方重签都会让另一方在下次刷新时失效。自动认证刷新（token 到期前 30 分钟）仍会重签，这是既有行为。
-- 重置次数只展示 `available_count`，不展示 `applicable_available_count` 和每张券的到期时间。
+- 重置次数展示 `available_count`，不展示 `applicable_available_count`；旧快照需刷新配额才有逐张过期时间。
 - 旧版本（5.4.8 及以前）写 accounts.json 时会丢弃 `custom.subscription` 字段；新旧版本交替运行时该字段会在下次刷新后重新补上。
 
 ## 验证记录（2026-09-14）

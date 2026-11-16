@@ -139,6 +139,10 @@ const EVENT_MESSAGES: &[(&str, &str)] = &[
     ),
     ("account_subscription_updated", "订阅信息已更新"),
     (
+        "account_reset_credit_details_error",
+        "读取重置券过期时间失败",
+    ),
+    (
         "usage_stats_prices_backfilled",
         "token 记录已补存写入时的单价",
     ),

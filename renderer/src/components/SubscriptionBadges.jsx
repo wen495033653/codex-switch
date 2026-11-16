@@ -6,6 +6,19 @@ function expireTitle(subscription, t) {
     return t('订阅到期日期');
 }
 
+function resetCreditsTitle(expiresAtMs, language, t) {
+    if (!expiresAtMs?.length) return t('重置券过期时间未同步，请刷新配额');
+
+    const format = new Intl.DateTimeFormat(language, {
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    });
+    return expiresAtMs.map((expiresAt, index) => t('第 {index} 次过期时间：{date}', {
+        index: index + 1,
+        date: expiresAt === null ? t('未知') : format.format(expiresAt)
+    })).join('\n');
+}
+
 /**
  * Subscription facts on an account card: renewal date (or the unsynced marker when only a
  * stale id_token claim is available), past-due state, and available usage resets.
@@ -43,7 +56,7 @@ export default function SubscriptionBadges({ info, planLabel }) {
                 </span>
             )}
             {resetCredits && resetCredits.availableCount > 0 && (
-                <span className="reset-credits-badge" title={t('可用的 Codex 用量重置次数，请在 Codex 中使用')}>
+                <span className="reset-credits-badge" title={resetCreditsTitle(resetCredits.expiresAtMs, language, t)}>
                     {t('可重置 {count} 次', { count: resetCredits.availableCount })}
                 </span>
             )}

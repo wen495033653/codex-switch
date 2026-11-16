@@ -1,7 +1,7 @@
 use super::number::to_number;
 use crate::{
     json_util::{non_empty_string_field, string_field},
-    time_util::now_string,
+    time_util::{now_string, parse_rfc3339_millis},
 };
 use serde_json::{json, Value};
 
@@ -60,8 +60,44 @@ fn normalize_reset_credits(raw: &Value) -> Value {
     };
     json!({
         "available_count": available_count,
-        "applicable_available_count": to_count(source.get("applicable_available_count"))
+        "applicable_available_count": to_count(source.get("applicable_available_count")),
+        "expires_at_ms": source.get("expires_at_ms").and_then(Value::as_array)
     })
+}
+
+pub(crate) fn apply_reset_credit_details(
+    reset_credits: &mut Value,
+    details: &Value,
+) -> Result<(), String> {
+    let available_count = details["available_count"].as_u64().ok_or_else(|| {
+        format!(
+            "重置券明细 available_count 无效: {}",
+            details["available_count"]
+        )
+    })?;
+    let credits = details["credits"]
+        .as_array()
+        .ok_or_else(|| "重置券明细 credits 不是数组".to_string())?;
+    let mut expires_at_ms = Vec::new();
+    for (index, credit) in credits.iter().enumerate() {
+        if credit["status"] != "available" {
+            continue;
+        }
+        let raw = &credit["expires_at"];
+        let expiry =
+            if raw.is_null() {
+                None
+            } else {
+                Some(raw.as_str().and_then(parse_rfc3339_millis).ok_or_else(|| {
+                    format!("重置券明细第 {} 项 expires_at 无效: {raw}", index + 1)
+                })?)
+            };
+        expires_at_ms.push(expiry);
+    }
+    expires_at_ms.sort_by_key(|expiry| (expiry.is_none(), *expiry));
+    reset_credits["available_count"] = json!(available_count);
+    reset_credits["expires_at_ms"] = json!(expires_at_ms);
+    Ok(())
 }
 
 pub(crate) fn normalize_usage_info(value: Option<&Value>) -> Value {
@@ -114,7 +150,7 @@ mod tests {
         assert_eq!(usage["plan_type"], json!("pro"));
         assert_eq!(
             usage["reset_credits"],
-            json!({ "available_count": 3, "applicable_available_count": 0 })
+            json!({ "available_count": 3, "applicable_available_count": 0, "expires_at_ms": null })
         );
         assert_eq!(
             usage["rate_limit"]["primary_window"]["used_percent"],
@@ -124,12 +160,52 @@ mod tests {
     }
 
     #[test]
-    fn stored_usage_info_round_trips_reset_credits() {
-        let stored = normalize_usage_info(Some(&wham_usage_response()));
+    fn reset_credit_details_keep_each_available_expiry_through_storage() {
+        let mut stored = normalize_usage_info(Some(&wham_usage_response()));
+        apply_reset_credit_details(
+            &mut stored["reset_credits"],
+            &json!({
+                "available_count": 4,
+                "credits": [
+                    {"status": "available", "expires_at": "2026-12-01T22:04:48.783637Z"},
+                    {"status": "expired", "expires_at": "2026-11-17T20:28:16Z"},
+                    {"status": "available", "expires_at": null},
+                    {"status": "available", "expires_at": "2026-11-30T20:28:16.668636Z"},
+                    {"status": "redeemed", "expires_at": "2026-12-15T00:00:00Z"},
+                    {"status": "available", "expires_at": "2026-11-30T20:28:16.668636Z"}
+                ]
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            stored["reset_credits"],
+            json!({
+                "available_count": 4,
+                "applicable_available_count": 0,
+                "expires_at_ms": [1796070496668_i64, 1796070496668_i64, 1796162688783_i64, null]
+            })
+        );
 
         let again = normalize_usage_info(Some(&stored));
 
         assert_eq!(again, stored);
+    }
+
+    #[test]
+    fn malformed_reset_credit_details_leave_expiries_unsynced() {
+        let mut stored = normalize_usage_info(Some(&wham_usage_response()));
+        let reset_credits = &mut stored["reset_credits"];
+        let summary = reset_credits.clone();
+        let error = apply_reset_credit_details(
+            reset_credits,
+            &json!({
+                "available_count": 1,
+                "credits": [{"status": "available", "expires_at": "not-a-date"}]
+            }),
+        )
+        .unwrap_err();
+        assert!(error.contains("expires_at") && error.contains("not-a-date"));
+        assert_eq!(*reset_credits, summary);
     }
 
     #[test]

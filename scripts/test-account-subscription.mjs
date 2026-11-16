@@ -67,7 +67,7 @@ test('plan type prefers the fresh usage plan over the id_token claim', () => {
 });
 
 test('reset credits are exposed only when the usage payload reports a count', () => {
-  assert.deepEqual(parseAuthInfo(account()).resetCredits, { availableCount: 3, applicableAvailableCount: 0 });
+  assert.deepEqual(parseAuthInfo(account()).resetCredits, { availableCount: 3, applicableAvailableCount: 0, expiresAtMs: null });
   assert.equal(parseAuthInfo(account({ resetCredits: null })).resetCredits, null);
   assert.equal(parseAuthInfo(account({ resetCredits: { applicable_available_count: 1 } })).resetCredits, null);
   assert.equal(parseAuthInfo({ type: 'api', api: { configured: true } }).resetCredits, null);
@@ -98,12 +98,37 @@ test('account card shows the available reset count and hides it at zero', () => 
   const badge = html.match(/<span class="reset-credits-badge"[^>]*>([^<]*)<\/span>/);
   assert.ok(badge, 'reset badge must render');
   assert.equal(badge[1], '可重置 3 次');
+  assert.match(html, /title="重置券过期时间未同步，请刷新配额"/);
 
   const english = renderCard(account(), 'en');
   assert.match(english, /<span class="reset-credits-badge"[^>]*>3 resets available<\/span>/);
 
   assert.doesNotMatch(renderCard(account({ resetCredits: { available_count: 0 } })), /reset-credits-badge/);
   assert.doesNotMatch(renderCard(account({ resetCredits: null })), /reset-credits-badge/);
+});
+
+test('reset badge tooltip shows each expiry, including duplicates and unknown expiry', () => {
+  const first = Date.parse('2026-11-30T20:28:16.668Z');
+  const later = Date.parse('2026-12-01T22:04:48.783Z');
+  const acc = account({ resetCredits: {
+    available_count: 4,
+    applicable_available_count: 0,
+    expires_at_ms: [first, first, later, null]
+  } });
+  assert.deepEqual(parseAuthInfo(acc).resetCredits.expiresAtMs, [first, first, later, null]);
+  const html = renderCard(acc);
+  const title = html.match(/<span class="reset-credits-badge" title="([^"]+)">/)[1];
+  const format = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  });
+  assert.deepEqual(title.split('\n'), [
+    `第 1 次过期时间：${format.format(first)}`,
+    `第 2 次过期时间：${format.format(first)}`,
+    `第 3 次过期时间：${format.format(later)}`,
+    '第 4 次过期时间：未知'
+  ]);
+  assert.match(renderCard(acc, 'en'), /Reset 4 expires: Unknown/);
 });
 
 const SUBSCRIPTION = {
