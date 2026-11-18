@@ -9,7 +9,7 @@ const root = '/fixture/codex';
 const active = { title: 'Active fixture', id: 'official-active-id', status: 'active', relative_path: 'sessions/active.jsonl' };
 const archived = { title: 'Archived fixture', id: 'official-archived-id', status: 'archived', relative_path: 'archived_sessions/archived.jsonl' };
 
-async function fixture({ failedId } = {}) {
+async function fixture({ failedId, scanResponses = [] } = {}) {
   const values = [], calls = [], toasts = [], errors = [];
   let cursor = 0;
   let conversations = [active, archived];
@@ -33,7 +33,7 @@ async function fixture({ failedId } = {}) {
       useId: () => 'fixture-id'
     },
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: Symbol('Fragment') },
-    i18n: { useI18n: () => ({
+    i18n: { translateRuntimeText: text => text, useI18n: () => ({
       language: 'zh-CN',
       t: (key, params = {}) => key.replace(/\{(\w+)\}/g, (_, name) => params[name]),
       translateRuntimeText: text => text
@@ -42,7 +42,11 @@ async function fixture({ failedId } = {}) {
       isTauri: () => true,
       async invoke(command, args) {
         calls.push([command, JSON.parse(JSON.stringify(args))]);
-        if (command === 'session_manager_scan') return { root, conversations };
+        if (command === 'session_manager_scan') {
+          const response = scanResponses.shift();
+          if (response instanceof Error) throw response;
+          return response ?? { root, conversations };
+        }
         if (command === 'session_manager_preview') return preview.promise;
         assert.equal(command, 'session_manager_delete');
         const previousCount = conversations.length;
@@ -117,6 +121,76 @@ function button(tree, label, role) {
   assert.ok(item, `Missing ${label} button`);
   return item;
 }
+
+test('partial scans keep readable sessions and separate failures from duplicate notices', async () => {
+  const failed = '读取 Codex Desktop 会话文件失败 fixture-missing-id: File not found';
+  const duplicate = '已忽略 Codex Desktop 返回的重复会话: fixture-duplicate-id';
+  const f = await fixture({ scanResponses: [
+    { root, conversations: [active], errors: [failed], warnings: [duplicate] }
+  ] });
+  const tree = f.render();
+  assert.ok(tree.some(node => node.props['aria-label'] === active.title));
+  assert.ok(tree.some(node => node.props.children === '已列出 1 条会话，另有 1 条读取失败。'));
+  assert.ok(tree.some(node => node.props.children === '已列出 1 条'));
+  assert.ok(tree.some(node => node.props.children === '有 1 条扫描提示。'));
+  assert.ok(tree.some(node => node.type === 'summary' && node.props.children === '查看扫描详情'));
+  assert.deepEqual(tree.filter(node => node.type === 'li').map(node => node.props.children), [failed, duplicate]);
+});
+
+test('refresh failure preserves the previous partial list; later scans replace its report', async () => {
+  const previousFailure = 'fixture missing';
+  const warning = 'fixture duplicate';
+  const f = await fixture({ scanResponses: [
+    { root, conversations: [active], errors: [previousFailure] },
+    new Error('fixture unavailable'),
+    { root, conversations: [active, archived], warnings: [warning] }
+  ] });
+  await button(f.render(), '刷新').props.onClick();
+  const stale = f.render();
+  assert.ok(stale.some(node => node.props['aria-label'] === active.title));
+  assert.ok(stale.some(node => node.props.children === '刷新失败，当前显示上一次扫描结果。'));
+  assert.deepEqual(stale.filter(node => node.type === 'li').map(node => node.props.children),
+    ['fixture unavailable', previousFailure]);
+
+  await button(stale, '刷新').props.onClick();
+  const fresh = f.render();
+  assert.ok(fresh.some(node => node.props['aria-label'] === archived.title));
+  assert.equal(fresh.some(node => node.props.className === 'session-scan-refresh-error'
+    || node.props.className === 'session-scan-incomplete'), false);
+  assert.deepEqual(fresh.filter(node => node.type === 'li').map(node => node.props.children), [warning]);
+
+  await button(fresh, '刷新').props.onClick();
+  assert.equal(f.render().some(node => node.props.className === 'session-scan-report'), false);
+});
+
+test('a first scan failure does not claim to show an earlier session list', async () => {
+  const f = await fixture({ scanResponses: [new Error('fixture unavailable')] });
+  const tree = f.render();
+  assert.ok(tree.some(node => node.props.children === '扫描会话失败，未获取会话列表。'));
+  assert.ok(tree.some(node => node.type === 'li' && node.props.children === 'fixture unavailable'));
+});
+
+test('a slower scan must not overwrite the list or diagnostics from the newest request', async () => {
+  const older = Promise.withResolvers();
+  const newer = Promise.withResolvers();
+  const f = await fixture({ scanResponses: [
+    { root, conversations: [active, archived] },
+    older.promise,
+    newer.promise,
+  ] });
+  const refresh = button(f.render(), '刷新').props.onClick;
+  const first = refresh();
+  const last = refresh();
+  newer.resolve({ root, conversations: [active], errors: ['new diagnostic'] });
+  await last;
+  older.resolve({ root, conversations: [archived], errors: ['obsolete diagnostic'] });
+  await first;
+  const tree = f.render();
+  assert.ok(tree.some(node => node.props['aria-label'] === active.title));
+  assert.equal(tree.some(node => node.props['aria-label'] === archived.title), false);
+  assert.deepEqual(tree.filter(node => node.type === 'li').map(node => node.props.children), ['new diagnostic']);
+  assert.equal(button(tree, '刷新').props.disabled, false);
+});
 
 test('context menu permanently deletes only after confirmation and drops the stale preview', async () => {
   const f = await fixture();

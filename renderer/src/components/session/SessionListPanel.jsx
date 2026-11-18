@@ -22,6 +22,7 @@ export default function SessionListPanel({
   openContextMenu,
   pageItems,
   pageSize,
+  scanIncomplete,
   selected,
   selectedActivePaths,
   selectedArchivedPaths,
@@ -120,7 +121,9 @@ export default function SessionListPanel({
         )}
       </div>
       <div className="session-footer">
-        <span>{t('总计 {count} 个', { count: conversations.length })}</span>
+        <span>{scanIncomplete
+          ? t('已列出 {count} 条', { count: conversations.length })
+          : t('总计 {count} 个', { count: conversations.length })}</span>
         <span>{t('筛选 {count} 个', { count: visibleItems.length })}</span>
         <span>{t('本页 {count} 个', { count: pageItems.length })}</span>
         <span>{t('已选 {count} 个', { count: selectedCount })}</span>
