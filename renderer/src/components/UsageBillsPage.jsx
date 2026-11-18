@@ -11,7 +11,8 @@ import {
   modelQuery,
   ownerKey,
   ownerLabel,
-  ownerQuery
+  ownerQuery,
+  totalPages
 } from '../utils/usageBills';
 import BillDetailDrawer from './bills/BillDetailDrawer';
 import BillsSummary from './bills/BillsSummary';
@@ -88,7 +89,14 @@ export default function UsageBillsPage({
           throw new Error((res && res.message) || '读取 token 账单失败');
         }
         errorLog.succeeded();
-        setAnswer({ queryKey, result: res });
+        const lastPage = totalPages(res.summary.request_count, pageSize);
+        if (page > lastPage) {
+          // A rolling time window can lose pages while the user stays on the same filter.
+          setAnswer(null);
+          setPage(current => current === page ? lastPage : current);
+        } else {
+          setAnswer({ queryKey, result: res });
+        }
         setError('');
       })
       .catch(err => {

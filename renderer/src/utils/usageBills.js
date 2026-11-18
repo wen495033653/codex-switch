@@ -123,33 +123,36 @@ export function formatPercent(ratio) {
   return `${(ratio * 100).toFixed(1)}%`;
 }
 
-export function formatBillTime(value, language) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value || '');
-  const sameYear = date.getFullYear() === new Date().getFullYear();
+function billDateFormatter(language, showYear) {
   return new Intl.DateTimeFormat(language, {
-    ...(sameYear ? {} : { year: 'numeric' }),
+    ...(showYear ? { year: 'numeric' } : {}),
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: false
-  }).format(date);
+  });
+}
+
+// The table formats both visible text and tooltip text for every row. Initialize at most two
+// Intl formatters per render, so they use the current locale and system time zone.
+export function createBillTimeFormatter(language) {
+  const currentYear = new Date().getFullYear();
+  let short;
+  let full;
+  return (value, includeYear = false) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || '');
+    const formatter = includeYear || date.getFullYear() !== currentYear
+      ? (full ??= billDateFormatter(language, true))
+      : (short ??= billDateFormatter(language, false));
+    return formatter.format(date);
+  };
 }
 
 export function formatFullTime(value, language) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value || '');
-  return new Intl.DateTimeFormat(language, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  }).format(date);
+  return createBillTimeFormatter(language)(value, true);
 }
 
 // Seconds with two decimals below 10 s, one below 100 s.

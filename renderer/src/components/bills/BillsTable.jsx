@@ -2,9 +2,8 @@ import { useI18n } from '../../i18n';
 import { formatExactTokens } from '../../utils/usageStatsFormat';
 import {
   BILL_PAGE_SIZE_OPTIONS,
+  createBillTimeFormatter,
   formatBillCost,
-  formatBillTime,
-  formatFullTime,
   formatRate,
   formatSeconds,
   isPriced,
@@ -28,7 +27,8 @@ export default function BillsTable({
   onSelect
 }) {
   const { language, t } = useI18n();
-  const pages = totalPages(total || 0, pageSize);
+  const pages = total === null ? null : totalPages(total, pageSize);
+  const formatTime = createBillTimeFormatter(language);
 
   return (
     <div className="usage-bills-panel">
@@ -67,8 +67,8 @@ export default function BillsTable({
               className={`usage-bills-row ${selectedId === record.response_id ? 'active' : ''}`}
               onClick={() => onSelect(record)}
             >
-              <span title={formatFullTime(record.timestamp, language)}>
-                {formatBillTime(record.timestamp, language)}
+              <span title={formatTime(record.timestamp, true)}>
+                {formatTime(record.timestamp)}
               </span>
               <span className="usage-bills-text" title={owner}>{owner}</span>
               <span className="usage-bills-text" title={model}>{model}</span>
@@ -107,11 +107,11 @@ export default function BillsTable({
           <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
             {t('上页')}
           </button>
-          <span className="usage-bills-page-number">{page}/{pages}</span>
-          <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page + 1)} disabled={page >= pages}>
+          <span className="usage-bills-page-number">{page}/{pages ?? '—'}</span>
+          <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page + 1)} disabled={pages === null || page >= pages}>
             {t('下页')}
           </button>
-          <button type="button" className="btn btn-secondary" onClick={() => onPageChange(pages)} disabled={page >= pages}>
+          <button type="button" className="btn btn-secondary" onClick={() => onPageChange(pages)} disabled={pages === null || page >= pages}>
             {t('末页')}
           </button>
           <select

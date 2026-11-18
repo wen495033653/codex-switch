@@ -21,7 +21,7 @@ export function formatTokens(value, language) {
   const tokens = Number(value) || 0;
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M`;
   if (tokens >= 10_000) return `${Math.round(tokens / 1_000)}K`;
-  return new Intl.NumberFormat(language).format(tokens);
+  return formatExactTokens(tokens, language);
 }
 
 export function formatCost(windowStats, t) {
@@ -33,6 +33,13 @@ export function formatCost(windowStats, t) {
   return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
 }
 
+const exactTokenFormatters = new Map();
+
 export function formatExactTokens(value, language) {
-  return new Intl.NumberFormat(language).format(Number(value) || 0);
+  let formatter = exactTokenFormatters.get(language);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(language);
+    exactTokenFormatters.set(language, formatter);
+  }
+  return formatter.format(Number(value) || 0);
 }

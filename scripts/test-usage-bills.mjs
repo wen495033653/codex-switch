@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import test from 'node:test';
-import {
+import vm from 'node:vm';
+import { transformWithOxc } from 'vite';
+import * as billUtils from '../renderer/src/utils/usageBills.js';
+
+const {
   ALL_FILTER_KEY,
+  DEFAULT_BILLS_FILTER,
   billsFilterForOwner,
   cacheHitRate,
+  createBillTimeFormatter,
   formatBillCost,
-  formatBillTime,
+  formatFullTime,
   formatPercent,
   formatRate,
   formatSeconds,
@@ -17,7 +24,7 @@ import {
   ownerQuery,
   priceLabelText,
   totalPages
-} from '../renderer/src/utils/usageBills.js';
+} = billUtils;
 
 const t = (text, params = {}) => text.replace(/\{(\w+)\}/g, (_, key) => String(params[key]));
 
@@ -88,9 +95,92 @@ test('pages and times', () => {
   assert.equal(totalPages(0, 50), 1);
   assert.equal(totalPages(101, 50), 3);
   const thisYear = new Date().getFullYear();
-  assert.equal(formatBillTime(`${thisYear}-03-04T05:06:07`, 'en-GB'), '04/03, 05:06:07');
-  assert.equal(formatBillTime('2001-03-04T05:06:07', 'en-GB'), '04/03/2001, 05:06:07');
-  assert.equal(formatBillTime('not a time', 'en-GB'), 'not a time');
+  const formatTime = createBillTimeFormatter('en-GB');
+  assert.equal(formatTime(`${thisYear}-03-04T05:06:07`), '04/03, 05:06:07');
+  assert.equal(formatTime(`${thisYear}-03-04T05:06:07`, true), `04/03/${thisYear}, 05:06:07`);
+  assert.equal(formatTime('2001-03-04T05:06:07'), '04/03/2001, 05:06:07');
+  assert.equal(formatTime('not a time'), 'not a time');
+  assert.equal(formatFullTime('2001-03-04T05:06:07', 'zh-CN'), '2001/03/04 05:06:07');
+});
+
+test('a refresh that loses the current page loads the last remaining page before showing results', async () => {
+  const values = [], requests = [], effects = [];
+  let cursor = 0;
+  const jsx = (type, props) => ({ type, props });
+  const context = vm.createContext({
+    window: { api: { listUsageBills(query) {
+      const response = Promise.withResolvers();
+      requests.push({ ...response, query });
+      return response.promise;
+    } } }
+  });
+  const bindings = {
+    react: {
+      useState(initial) {
+        const index = cursor++;
+        if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial;
+        return [values[index], next => { values[index] = typeof next === 'function' ? next(values[index]) : next; }];
+      },
+      useRef(initial) { return values[cursor++] ??= { current: initial }; },
+      useMemo: compute => compute(),
+      useEffect(effect, deps) {
+        const previous = values[cursor];
+        values[cursor++] = deps;
+        if (!previous || deps.some((dep, index) => dep !== previous[index])) effects.push(effect);
+      }
+    },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    '../i18n': { useI18n: () => ({ language: 'zh-CN', t }) },
+    '../utils/auth': { getAccountId() {}, getAccountName() {}, maskAccountDisplayName() {} },
+    '../utils/errors': { getErrorMessage: err => { throw err; } },
+    '../utils/pollingErrorLog': { createPollingErrorLog: () => ({ succeeded() {}, failed: assert.fail }) },
+    '../utils/usageBills': billUtils
+  };
+  const source = new URL('../renderer/src/components/UsageBillsPage.jsx', import.meta.url);
+  const { code } = await transformWithOxc(await fs.readFile(source, 'utf8'), source.pathname, {
+    jsx: { runtime: 'automatic' }
+  });
+  const module = new vm.SourceTextModule(code, { context });
+  await module.link(specifier => {
+    const exports = specifier.startsWith('./bills/') ? { default: specifier } : bindings[specifier];
+    assert.ok(exports, `Unexpected controller import: ${specifier}`);
+    return new vm.SyntheticModule(Object.keys(exports), function () {
+      for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
+    }, { context });
+  });
+  await module.evaluate();
+  const renderTable = (refreshKey = 0) => {
+    cursor = 0;
+    const tree = module.namespace.default({ filter: DEFAULT_BILLS_FILTER, refreshKey });
+    effects.splice(0).forEach(effect => effect());
+    return tree.props.children.find(node => node?.type === './bills/BillsTable').props;
+  };
+  const reply = async (request, total, records) => {
+    request.resolve({ ok: true, summary: { request_count: total }, records });
+    await new Promise(setImmediate);
+  };
+  const row = { response_id: 'resp' };
+
+  renderTable();
+  await reply(requests[0], 51, [row]);
+  renderTable().onPageChange(2);
+  assert.equal(renderTable().total, null);
+  await reply(requests[1], 51, [row]);
+  assert.equal(renderTable().page, 2);
+
+  // Simulate midnight (Today loses yesterday's rows) without changing the selected filter.
+  renderTable(1);
+  assert.equal(requests[2].query.page, 2);
+  await reply(requests[2], 3, []);
+  const corrected = renderTable(1);
+  assert.equal(corrected.page, 1);
+  assert.equal(corrected.total, null, 'out-of-range result is not presented as empty');
+  assert.equal(requests[3].query.page, 1);
+  await reply(requests[3], 3, [row]);
+  assert.equal(renderTable(1).total, 3);
+  assert.deepEqual(renderTable(1).records, [row]);
+  renderTable(2);
+  assert.equal(requests[4].query.page, 1, 'later refreshes keep the corrected page');
 });
 
 test('durations, first token and output rate', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatCost, formatTokens, getWindow, hasUsage } from '../renderer/src/utils/usageStatsFormat.js';
+import { formatCost, formatExactTokens, formatTokens, getWindow, hasUsage } from '../renderer/src/utils/usageStatsFormat.js';
 
 const t = text => `t(${text})`;
 
@@ -19,6 +19,13 @@ test('token counts are shortened from 10K and 1M', () => {
   assert.equal(formatTokens(1_500_000, 'en'), '1.50M');
   assert.equal(formatTokens(15_000_000, 'en'), '15.0M');
   assert.equal(formatTokens(undefined, 'en'), '0');
+});
+
+test('exact tokens keep their locale-specific grouping across language switches', () => {
+  assert.equal(formatExactTokens(1234567, 'en'), '1,234,567');
+  assert.equal(formatExactTokens('1234567', 'de-DE'), '1.234.567');
+  assert.equal(formatExactTokens(1234567, 'en'), '1,234,567');
+  assert.equal(formatExactTokens(undefined, 'en'), '0');
 });
 
 test('costs show four decimals below one cent and mark unpriced windows', () => {
