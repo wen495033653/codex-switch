@@ -8,8 +8,6 @@ import { getAccountId } from '../utils/auth';
 import { runningIntelligenceProgress } from '../utils/intelligenceTests';
 import { useI18n } from '../i18n';
 
-const ACCOUNT_FILTERS = ['ALL', 'FREE', 'PLUS', 'TEAM', 'PRO'];
-
 export default function AccountsPage({
     accountGridRef,
     counts,
@@ -75,7 +73,7 @@ export default function AccountsPage({
                         />
                     </div>
                     <div className="nav-tabs account-filter-tabs">
-                        {ACCOUNT_FILTERS.map(item => (
+                        {Object.entries(counts).map(([item, count]) => (
                             <button
                                 key={item}
                                 type="button"
@@ -83,7 +81,7 @@ export default function AccountsPage({
                                 onClick={() => onFilterChange(item)}
                                 aria-pressed={filter === item}
                             >
-                                {item === 'ALL' ? t('全部') : item} <span className="account-filter-count">{counts[item]}</span>
+                                {item === 'ALL' ? t('全部') : item} <span className="account-filter-count">{count}</span>
                             </button>
                         ))}
                     </div>

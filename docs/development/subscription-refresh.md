@@ -56,6 +56,12 @@ User-Agent: codex_cli_rs/...
 5. 前端 `parseAuthInfo`：到期日优先取 `custom.subscription.active_until`，接口从未成功过才回退 id_token claim；套餐优先取 `usage_info.plan_type`，其次 `subscription.plan_type`，最后 claim。
 6. 账号卡片：到期徽标 tooltip 区分“到期后自动续费”和“到期后不再续费”；`is_delinquent` 为 true 时显示“欠费”徽标；`available_count > 0` 时显示“可重置 {count} 次”，悬停逐张显示重置券的过期时间。仅在接口从未成功、claim 已过期且 usage 套餐仍为付费时，才显示“到期时间未同步”，避免把已知错误的过期日期当成真实到期时间。
 
+## 个人套餐标签（2026-11-18）
+
+- 以前把 `prolite` 合并到 `pro`，而 `promax`、`go` 直接显示原值，没有专用样式或筛选入口。后端已保留 `plan_type`，仅调整前端：按 [官方 Codex 的 `/status` 映射](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status/helpers.rs#L186-L204)，四档显示为 PRO 100、PRO 200、PRO 500、GO。账号卡片、当前账号摘要和控制账号选项共用同一标签；PRO 筛选仍覆盖这三个 Pro 档位，GO 单独筛选。
+- 不把套餐显示成固定额度倍率：[OpenAI 的 Pro 档位说明](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers)记录了额度调整。本机只读 GET `/wham/usage` 的 pro、free、plus 样本均返回 HTTP 200，只有 `plan_type` 表示档位，额度窗口是使用比例、时长和重置时间，没有倍率。维持 usage → subscription → id_token 的优先级；本机有一个已降为 Free 但仍存有旧 `prolite` 订阅快照的账号。
+- 验证：账号 SSR 回归 10 项通过。在隔离 Chrome 页面用合成账号运行真实前端，对比修改前后的 badge 文本和明暗主题计算样式，确认 PRO 筛选覆盖三档、GO 筛选只返回 Go，当前账号摘要和控制账号选项使用同一套标签。未用真实 Go 或 Pro 500 账号操作安装版。
+
 ## 重置券过期时间（2026-11-17）
 
 - `/backend-api/wham/usage` 的 `rate_limit_reset_credits` 是计数摘要，不含逐张过期时间。官方 Codex Desktop 26.1111.2228.0 从 `GET /backend-api/wham/rate-limit-reset-credits` 读明细，按 `credits[].status === "available"` 选可用券，并读取 `credits[].expires_at`（RFC 3339 时间或 null）。

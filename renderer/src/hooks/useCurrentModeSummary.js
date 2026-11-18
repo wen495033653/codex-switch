@@ -16,7 +16,7 @@ export function useCurrentModeSummary({
       ? (maskAccountName ? maskAccountDisplayName(activeSubscriptionName) : activeSubscriptionName)
       : '未选择订阅账号';
     const activeSubscriptionPlan = activeSubscriptionAccount
-      ? parseAuthInfo(activeSubscriptionAccount).planType.toUpperCase()
+      ? parseAuthInfo(activeSubscriptionAccount).planLabel
       : '';
     const currentModeLabel = apiModeActive ? 'API 模式' : subscriptionModeActive ? '订阅模式' : '未识别';
     const currentModeDetail = apiModeActive

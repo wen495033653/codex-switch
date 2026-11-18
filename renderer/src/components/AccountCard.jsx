@@ -7,7 +7,7 @@ import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import { parseAuthInfo, getAccountName, getAccountId, getChatgptAccountId, isAuthSessionInvalid, maskAccountDisplayName } from '../utils/auth';
 import { useI18n } from '../i18n';
 
-const SINGLE_WORKSPACE_PLANS = new Set(['free', 'plus', 'pro', 'personal']);
+const SINGLE_WORKSPACE_PLANS = new Set(['free', 'go', 'plus', 'prolite', 'pro', 'promax', 'personal']);
 
 function authErrorIncludes(message, patterns) {
     const value = typeof message === 'string' ? message.toLowerCase() : '';
@@ -63,7 +63,7 @@ export default function AccountCard({ acc, isCurrent, refreshing, switching, usa
     const info = parseAuthInfo(acc);
     const authBadge = getAuthBadge(info, t, translateRuntimeText);
     const normalizedPlan = info.planType.toLowerCase();
-    const planLabel = info.planType.toUpperCase();
+    const { planLabel } = info;
     const isPersonalPlan = normalizedPlan === 'personal';
     const showAccountTag = accountId => {
         if (info.isApiMode) return false;

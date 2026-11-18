@@ -61,9 +61,20 @@ function account({ claimPlan = 'pro', activeUntil = '2026-09-04T12:29:43+00:00',
 test('plan type prefers the fresh usage plan over the id_token claim', () => {
   assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: 'pro' })).planType, 'pro');
   assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: '', subscription: SUBSCRIPTION })).planType, 'pro');
-  assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: 'prolite' })).planType, 'pro');
+  assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: 'prolite' })).planType, 'prolite');
   assert.equal(parseAuthInfo(account({ claimPlan: 'plus', usagePlan: '' })).planType, 'plus');
   assert.equal(parseAuthInfo(account({ claimPlan: 'pro', usagePlan: 'free' })).showExpiresAt, false);
+});
+
+test('plan label follows the resolved tier and never treats an unknown value as Free', () => {
+  assert.equal(parseAuthInfo(account({
+    claimPlan: 'prolite', usagePlan: 'free', subscription: { ...SUBSCRIPTION, plan_type: 'prolite' }
+  })).planLabel, 'FREE');
+  assert.equal(parseAuthInfo(account({
+    claimPlan: 'plus', usagePlan: ' UNKNOWN ', subscription: { ...SUBSCRIPTION, plan_type: ' PROMAX ' }
+  })).planLabel, 'PRO 500');
+  assert.equal(parseAuthInfo(account({ claimPlan: 'prolite', usagePlan: '' })).planLabel, 'PRO 100');
+  assert.equal(parseAuthInfo(account({ usagePlan: 'new_tier' })).planLabel, 'NEW_TIER');
 });
 
 test('reset credits are exposed only when the usage payload reports a count', () => {
@@ -201,8 +212,15 @@ test('an expired claim without endpoint data is reported as stale, not as the ex
   assert.match(renderCard(account({ activeUntil: '2099-01-01T00:00:00Z' })), /<span class="expire-date" title="订阅到期日期">到期 2099\/1\/1<\/span>/);
 });
 
-test('account card plan badge follows the usage plan type', () => {
-  const html = renderCard(account({ claimPlan: 'plus', usagePlan: 'pro' }));
-  assert.match(html, /<span class="plan-badge plan-pro">PRO<\/span>/);
-  assert.doesNotMatch(html, /plan-plus/);
+test('account cards show distinct personal subscription badges from the usage plan type', () => {
+  for (const [usagePlan, label] of [
+    ['go', 'GO'],
+    ['prolite', 'PRO 100'],
+    ['pro', 'PRO 200'],
+    ['promax', 'PRO 500']
+  ]) {
+    const html = renderCard(account({ claimPlan: 'plus', usagePlan }));
+    assert.ok(html.includes(`<span class="plan-badge plan-${usagePlan}">${label}</span>`));
+    assert.doesNotMatch(html, /plan-plus|account-id-badge/);
+  }
 });

@@ -3,15 +3,16 @@ import { safeParseJwt } from './jwt';
 import { getSubscription } from './subscription';
 import { getResetCredits, getUsageNotice, getUsageWindows, normalizeErrorState } from './usage';
 
-const PLAN_TYPE_ALIASES = {
-    prolite: 'pro',
-    self_serve_business_usage_based: 'team'
-};
+const PRO_PLAN_LABELS = new Map([
+    ['prolite', 'PRO 100'],
+    ['pro', 'PRO 200'],
+    ['promax', 'PRO 500']
+]);
 
 function normalizePlanType(value) {
-    const raw = typeof value === 'string' ? value.trim() : '';
-    if (!raw || raw === 'unknown') return '';
-    return PLAN_TYPE_ALIASES[raw.toLowerCase()] || raw;
+    const plan = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (plan === 'unknown') return '';
+    return plan === 'self_serve_business_usage_based' ? 'team' : plan;
 }
 
 export function isAuthSessionInvalid(info) {
@@ -42,6 +43,7 @@ export function isAuthSessionInvalid(info) {
 const EMPTY_AUTH_INFO = Object.freeze({
     isApiMode: false,
     planType: '',
+    planLabel: '',
     usageWindows: [],
     resetCredits: null,
     subscription: null,
@@ -66,6 +68,7 @@ export function parseAuthInfo(account, now = Date.now()) {
             ...EMPTY_AUTH_INFO,
             isApiMode: true,
             planType: 'API',
+            planLabel: 'API',
             authStatus: configured ? 'active' : 'error',
             authStatusMessage: configured ? '' : '请先在设置中填写 API Key',
             usageNotice: {
@@ -128,6 +131,7 @@ export function parseAuthInfo(account, now = Date.now()) {
 
     return {
         planType,
+        planLabel: PRO_PLAN_LABELS.get(planType) ?? planType.toUpperCase(),
         usageWindows,
         resetCredits,
         subscription,

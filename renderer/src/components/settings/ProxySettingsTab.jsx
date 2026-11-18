@@ -7,10 +7,10 @@ function formatRemoteControlAccountLabel(account, maskAccountName, t) {
     const name = getAccountName(account);
     const displayName = maskAccountName ? maskAccountDisplayName(name) : name;
     const info = parseAuthInfo(account);
-    const plan = info.planType ? info.planType.toUpperCase() : '';
+    const { planLabel } = info;
     const chatgptAccountId = getChatgptAccountId(account);
     const accountTag = chatgptAccountId ? chatgptAccountId.split('-')[0] : '';
-    const details = [isAuthSessionInvalid(info) ? t('登录已失效') : '', plan, accountTag].filter(Boolean);
+    const details = [isAuthSessionInvalid(info) ? t('登录已失效') : '', planLabel, accountTag].filter(Boolean);
     const label = displayName || accountId || t('账号数据异常');
     return details.length ? `${label} · ${details.join(' · ')}` : label;
 }

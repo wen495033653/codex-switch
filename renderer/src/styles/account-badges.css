@@ -33,13 +33,32 @@
   border-radius: 6px;
   font-weight: 600;
   text-transform: uppercase;
+  white-space: nowrap;
   letter-spacing: 0;
+}
+
+.plan-prolite {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c4b5fd;
+  border: 1px solid rgba(168, 85, 247, 0.26);
 }
 
 .plan-pro {
   background: rgba(99, 102, 241, 0.15);
   color: #818cf8;
   border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.plan-promax {
+  background: rgba(236, 72, 153, 0.15);
+  color: #f9a8d4;
+  border: 1px solid rgba(236, 72, 153, 0.26);
+}
+
+.plan-go {
+  background: rgba(20, 184, 166, 0.15);
+  color: #5eead4;
+  border: 1px solid rgba(20, 184, 166, 0.26);
 }
 
 .plan-plus {

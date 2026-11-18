@@ -72,6 +72,24 @@ html[data-theme="light"] .plan-api {
   border-color: #c7d2fe;
 }
 
+html[data-theme="light"] .plan-prolite {
+  background: #f5f3ff;
+  color: #6d28d9;
+  border-color: #ddd6fe;
+}
+
+html[data-theme="light"] .plan-promax {
+  background: #fdf2f8;
+  color: #9d174d;
+  border-color: #fbcfe8;
+}
+
+html[data-theme="light"] .plan-go {
+  background: #f0fdfa;
+  color: #0f766e;
+  border-color: #99f6e4;
+}
+
 html[data-theme="light"] .status-badge.auth-error {
   background: #fef2f2;
   color: #b91c1c;

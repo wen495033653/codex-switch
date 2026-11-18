@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { getAccountId, getAccountName, parseAuthInfo } from '../utils/auth';
 import { useGridPageSize } from './useGridPageSize';
 
+function getPlanGroup(account) {
+  const { planType } = parseAuthInfo(account);
+  return planType === 'prolite' || planType === 'promax' ? 'PRO' : planType.toUpperCase();
+}
+
 // Lives in App, so it outlives the accounts grid: useGridPageSize re-measures the grid
 // each time the accounts page mounts it again.
 export function useAccountPagination({
@@ -22,7 +27,7 @@ export function useAccountPagination({
       list = list.filter(account => getAccountName(account).toLowerCase().includes(normalizedSearch));
     }
     if (filter !== 'ALL') {
-      list = list.filter(account => parseAuthInfo(account).planType.toUpperCase() === filter);
+      list = list.filter(account => getPlanGroup(account) === filter);
     }
     list.sort((a, b) => {
       const aId = getAccountId(a);
@@ -48,10 +53,10 @@ export function useAccountPagination({
   }, [page, totalPages]);
 
   const counts = useMemo(() => {
-    const nextCounts = { ALL: accounts.length, FREE: 0, PLUS: 0, TEAM: 0, PRO: 0 };
+    const nextCounts = { ALL: accounts.length, FREE: 0, GO: 0, PLUS: 0, TEAM: 0, PRO: 0 };
     accounts.forEach(account => {
-      const type = parseAuthInfo(account).planType.toUpperCase();
-      if (nextCounts[type] !== undefined) nextCounts[type] += 1;
+      const group = getPlanGroup(account);
+      if (group !== 'ALL' && nextCounts[group] !== undefined) nextCounts[group] += 1;
     });
     return nextCounts;
   }, [accounts]);
