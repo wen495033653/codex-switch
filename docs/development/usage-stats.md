@@ -22,12 +22,15 @@
 `scan` 对每个 rollout 文件（`sessions`、`archived_sessions`，包括多开实例）保存一个读取位置（`rollout_cursors`：偏移、偏移前 64 字节、当时的 provider / 模型 / 档位）：
 
 - 文件大小和修改时间没变，就不打开。
-- 有变化时，从上次的位置接着读，只处理完整的行；最后一行还没写完就留到下次。
+- 未压缩的 `rollout-*.jsonl` 有变化时，从上次的位置接着读，只处理完整的行；最后一行还没写完就留到下次。
+- `rollout-*.jsonl.zst`（2026-11-18 起）在首次读取、文件快照有变化、或补价需要重读时，从头流式解压，不创建解压文件。与普通 rollout 重复出现的响应仍按 `response_id` 去重。
 - 偏移前的字节对不上（会话同步改写了 provider 行，或文件被截短），从头重读。已存的记录按 `response_id` 跳过。`usage_stats_rollout_reread` 只在开发日志窗口显示，不写日志文件：切换模式后的会话同步每次都会改写全部 rollout，这条事件随之大量出现。
 - 只有 `token_usage_record`、`turn_context`、`thread_settings_applied`、`session_meta` 四种行会被解析，其余行（消息、工具输出，单行可达数 MB）只做子串查找。查找用 `memchr::memmem`（2026-10-17 起；以前逐个窗口比较）：重读 282 个、2.26 GB 的真实 rollout，从 61.6 s 降到 7.8 s（release）。
 - 从没读过、且修改时间不晚于记录起点的文件不打开。这类文件里不可能有需要计入的记录，它们下次被修改时再从头读。
 
 读不了的文件记 `usage_stats_scan_file_error`，下次刷新重试。格式不对的记录行记 `usage_stats_record_line_error`，跳过该行，继续往后读。
+
+2026-11-18 Windows 定向测试（合成 rollout 和临时统计库）：压缩副本与原始文件重复的响应只计一次，未见过的响应正常入库；文件快照不变时不重读，追加压缩帧后可保留请求档位并计入新增响应。
 
 ### 计入规则
 

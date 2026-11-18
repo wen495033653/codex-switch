@@ -11,7 +11,10 @@ use super::{
     pricing::estimate_request_cost,
     records::{read_new_records, RolloutCursor, RolloutRecord},
 };
-use crate::app_log::{log_event, log_event_once};
+use crate::{
+    app_log::{log_event, log_event_once},
+    codex_sessions::lock_codex_session_io,
+};
 use rusqlite::{Connection, Transaction};
 use serde_json::json;
 use std::{
@@ -112,6 +115,7 @@ pub(super) fn scan_sources(
     };
     let counted_after_nanos = to_nanos(counted_after_seconds)?;
     let reread_since_nanos = reread_since.map(to_nanos).transpose()?;
+    let _io_guard = lock_codex_session_io("读取账单会话记录")?;
     let mut result = ScanResult::default();
     let mut present = HashSet::new();
     for source in sources {
@@ -346,16 +350,18 @@ fn collect_rollout_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Resu
             .map_err(|err| format!("读取 Codex session 条目类型失败 {}: {err}", path.display()))?;
         if file_type.is_dir() {
             collect_rollout_files_recursive(&path, files)?;
-        } else if is_rollout_jsonl(&path) {
+        } else if is_rollout_file(&path) {
             files.push(path);
         }
     }
     Ok(())
 }
 
-fn is_rollout_jsonl(path: &Path) -> bool {
+fn is_rollout_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
-        .is_some_and(|name| name.starts_with("rollout-"))
-        && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+        .is_some_and(|name| {
+            name.starts_with("rollout-")
+                && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
+        })
 }

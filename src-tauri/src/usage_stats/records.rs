@@ -87,21 +87,37 @@ pub(super) struct RolloutRead {
     pub(super) restarted: bool,
 }
 
-/// Reads the complete lines appended since `previous`. A trailing line without a newline is
-/// still being written and is left for the next read.
+/// Reads complete lines appended since `previous`, or streams a compressed rollout from the
+/// start. The scanner only opens a file when its stamp changed or it asked for a re-read.
 pub(super) fn read_new_records(
     path: &Path,
     previous: Option<&RolloutCursor>,
 ) -> io::Result<RolloutRead> {
     let mut file = fs::File::open(path)?;
-    let (mut cursor, restarted) = match previous {
+    if path.extension().is_some_and(|extension| extension == "zst") {
+        let decoder = zstd::stream::read::Decoder::new(file)?;
+        return read_record_lines(BufReader::new(decoder), RolloutCursor::default(), false);
+    }
+
+    let (cursor, restarted) = match previous {
         Some(previous) if resumes_at(&mut file, previous)? => (previous.clone(), false),
         Some(_) => (RolloutCursor::default(), true),
         None => (RolloutCursor::default(), false),
     };
     file.seek(SeekFrom::Start(cursor.offset))?;
+    let mut read = read_record_lines(BufReader::new(&mut file), cursor, restarted)?;
+    let check_len = read.cursor.offset.min(RESUME_CHECK_BYTES);
+    read.cursor.resume_check = vec![0; check_len as usize];
+    file.seek(SeekFrom::Start(read.cursor.offset - check_len))?;
+    file.read_exact(&mut read.cursor.resume_check)?;
+    Ok(read)
+}
 
-    let mut reader = BufReader::new(file);
+fn read_record_lines(
+    mut reader: impl BufRead,
+    mut cursor: RolloutCursor,
+    restarted: bool,
+) -> io::Result<RolloutRead> {
     let mut records = Vec::new();
     let mut skipped = Vec::new();
     let mut line = Vec::new();
@@ -120,11 +136,6 @@ pub(super) fn read_new_records(
         cursor.offset += read as u64;
     }
 
-    let mut file = reader.into_inner();
-    let check_len = cursor.offset.min(RESUME_CHECK_BYTES);
-    cursor.resume_check = vec![0; check_len as usize];
-    file.seek(SeekFrom::Start(cursor.offset - check_len))?;
-    file.read_exact(&mut cursor.resume_check)?;
     Ok(RolloutRead {
         cursor,
         records,

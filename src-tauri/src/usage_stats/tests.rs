@@ -395,6 +395,94 @@ fn a_response_copied_into_another_rollout_counts_once() {
 }
 
 #[test]
+fn compressed_rollouts_are_scanned_on_change_and_deduplicated_against_plain_rollouts() {
+    let root = temp_root("compressed");
+    let codex_home = root.join("codex");
+    let db_path = root.join("usage.sqlite");
+    let now = "2026-06-15T02:00:00Z";
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "owner",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    let thread_id = "thread-a";
+    let mut lines = vec![
+        session_meta_line("2026-06-15T01:00:00Z", thread_id, PROVIDER_SUBSCRIPTION),
+        thread_settings_line(
+            "2026-06-15T01:00:01Z",
+            "gpt-6-astra",
+            PROVIDER_SUBSCRIPTION,
+            json!("priority"),
+        ),
+        record_line("2026-06-15T01:00:02Z", "resp-1", thread_id, 100, 40, 10),
+    ];
+    write_rollout(&codex_home, "plain", &lines);
+    stats(&db_path, &codex_home, now);
+    assert_eq!(record_count(&db_path), 1);
+
+    // An archived compressed copy may contain some responses already read from a plain
+    // rollout and some we never saw before.
+    lines.push(record_line(
+        "2026-06-15T01:00:03Z",
+        "resp-2",
+        thread_id,
+        80,
+        30,
+        5,
+    ));
+    let archived = codex_home.join("archived_sessions");
+    fs::create_dir_all(&archived).unwrap();
+    let path = archived.join("rollout-compressed.jsonl.zst");
+    let content = lines.join("\n") + "\n";
+    fs::write(
+        &path,
+        zstd::stream::encode_all(content.as_bytes(), 0).unwrap(),
+    )
+    .unwrap();
+    let second = stats(&db_path, &codex_home, now);
+    assert_eq!(record_count(&db_path), 2);
+    assert_eq!(total_tokens(&second, "subscriptions", "owner", "all"), 195);
+
+    let connection = Connection::open(&db_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER compressed_cursor_unchanged BEFORE UPDATE ON rollout_cursors
+               WHEN OLD.source_path LIKE '%.jsonl.zst'
+               BEGIN SELECT RAISE(ABORT, 'unchanged compressed file was read again'); END;",
+        )
+        .unwrap();
+    assert_eq!(stats(&db_path, &codex_home, now), second);
+    connection
+        .execute_batch("DROP TRIGGER compressed_cursor_unchanged;")
+        .unwrap();
+
+    // If the compressed file changes, streaming from the start recovers the inherited tier
+    // for a new response in a later frame while response_id still prevents double-counting.
+    let extra = record_line("2026-06-15T01:00:04Z", "resp-3", thread_id, 20, 10, 1) + "\n";
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&zstd::stream::encode_all(extra.as_bytes(), 0).unwrap())
+        .unwrap();
+    let updated = stats(&db_path, &codex_home, now);
+    assert_eq!(record_count(&db_path), 3);
+    assert_eq!(total_tokens(&updated, "subscriptions", "owner", "all"), 216);
+    let label: String = connection
+        .query_row(
+            "SELECT price_label FROM usage_records WHERE response_id = 'resp-3'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(label, PRICE_LABEL_FAST_SHORT);
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn nothing_at_or_before_the_start_is_counted_and_untouched_old_files_stay_unopened() {
     let root = temp_root("counted-after");
     let db_path = root.join("usage.sqlite");
