@@ -13,6 +13,7 @@ export default function SessionPreviewPanel({
   loadEarlierMessages,
   loadPreview,
   messages,
+  onOpenSessionBills,
   preview,
   previewEarlierLoading,
   previewItemRef,
@@ -33,9 +34,20 @@ export default function SessionPreviewPanel({
               <h2 title={activeConversation.title}>{activeConversation.title}</h2>
               <p title={activeConversation.id}>{activeConversation.id}</p>
             </div>
-            <span className={`session-status-pill ${activeConversation.status}`}>
-              {statusLabel(activeConversation.status, t)}
-            </span>
+            <div className="session-preview-actions">
+              <span className={`session-status-pill ${activeConversation.status}`}>
+                {statusLabel(activeConversation.status, t)}
+              </span>
+              {activeConversation.id && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => onOpenSessionBills(activeConversation.id)}
+                >
+                  {t('查看此会话账单')}
+                </button>
+              )}
+            </div>
           </div>
           <div className="session-preview-meta">
             <span>

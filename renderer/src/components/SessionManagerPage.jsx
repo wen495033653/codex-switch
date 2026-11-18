@@ -9,7 +9,8 @@ import {
   formatTime,
   statusLabel,
   statusActionLabel,
-  lower,
+  filterSessions,
+  locateSession,
   previewMessageKey,
   isPreviewCancellation,
   isPreviewStale,
@@ -23,7 +24,9 @@ import SessionListPanel from './session/SessionListPanel';
 import SessionPreviewPanel from './session/SessionPreviewPanel';
 import SessionScanReport from './session/SessionScanReport';
 
-export default function SessionManagerPage({ toast, toastError, sessionState }) {
+export default function SessionManagerPage({
+  toast, toastError, sessionState, sessionTarget, onOpenSessionBills, onSessionTargetHandled
+}) {
   const { language, t } = useI18n();
   const {
     rootPath,
@@ -68,18 +71,15 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   const previewItemRef = useRef(null);
   // The preview shown now; a refresh that finishes later checks this, not the value it started with.
   const activePathRef = useRef(activePath);
+  const sessionFiltersRef = useRef({ search, statusFilter, pageSize });
+  useEffect(() => {
+    sessionFiltersRef.current = { search, statusFilter, pageSize };
+  }, [search, statusFilter, pageSize]);
 
-  const visibleItems = useMemo(() => {
-    const query = lower(search.trim());
-    return conversations.filter(item => {
-      if (statusFilter !== 'all' && item.status !== statusFilter) return false;
-      if (!query) return true;
-      return lower(item.title).includes(query)
-        || lower(item.id).includes(query)
-        || lower(item.cwd).includes(query)
-        || lower(item.relative_path).includes(query);
-    });
-  }, [conversations, search, statusFilter]);
+  const visibleItems = useMemo(
+    () => filterSessions(conversations, search, statusFilter),
+    [conversations, search, statusFilter]
+  );
 
   const totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -114,7 +114,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   };
 
   const requestPreviewPage = (item, options) => window.api.previewSession({
-    root: rootPath,
+    root: options.root ?? rootPath,
     relativePath: item.relative_path,
     beforeCursor: options.beforeCursor ?? null,
     snapshotSize: options.snapshotSize ?? null,
@@ -123,8 +123,17 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     requestId: options.requestId
   });
 
-  const loadPreview = async (item) => {
-    if (!item || !rootPath) return;
+  const resetPreview = () => {
+    previewRequestRef.current += 1;
+    previewItemRef.current = null;
+    activePathRef.current = '';
+    setActivePath('');
+    setPreview(null);
+    setPreviewLoading(false);
+  };
+
+  const loadPreview = async (item, previewRoot = rootPath) => {
+    if (!item || !previewRoot) return;
     const requestId = nextPreviewRequestId(previewRequestRef);
     previewItemRef.current = item;
     activePathRef.current = item.relative_path;
@@ -146,6 +155,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     setPreviewLoading(true);
     try {
       const res = await requestPreviewPage(item, {
+        root: previewRoot,
         beforeCursor: null,
         snapshotSize: null,
         messageSource: null,
@@ -256,16 +266,11 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
       });
       setSelected(prev => new Set(Array.from(prev).filter(path => existing.has(path))));
       if (activePathRef.current && !existing.has(activePathRef.current)) {
-        previewRequestRef.current += 1;
-        previewItemRef.current = null;
-        activePathRef.current = '';
-        setActivePath('');
-        setPreview(null);
-        setPreviewLoading(false);
+        resetPreview();
         setPreviewEarlierLoading(false);
         setPreviewTrimmedNewer(false);
       }
-      return { root: resolvedRoot, conversations: nextConversations };
+      return { root: resolvedRoot, conversations: nextConversations, incomplete: (res.errors ?? []).length > 0 };
     } catch (err) {
       if (scanRequestRef.current !== requestId) return null;
       setScanReport(current => ({ ...current, refreshError: getRawErrorMessage(err) }));
@@ -277,10 +282,43 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   };
 
   useEffect(() => {
-    if (hasAutoLoadedRef.current) return;
+    if (!sessionTarget) {
+      if (!hasAutoLoadedRef.current) {
+        hasAutoLoadedRef.current = true;
+        refreshSessions('');
+      }
+      return undefined;
+    }
     hasAutoLoadedRef.current = true;
-    refreshSessions('');
-  }, []);
+    resetPreview();
+    let current = true;
+    // An earlier visit may have cached an old path (e.g. the thread has since been archived).
+    refreshSessions().then(result => {
+      if (!current) return;
+      onSessionTargetHandled(sessionTarget);
+      if (!result) {
+        resetPreview(); // A failed scan has already surfaced its actual error.
+        return;
+      }
+      const { threadId } = sessionTarget;
+      const filters = sessionFiltersRef.current;
+      const target = locateSession(result.conversations, threadId, filters.search, filters.statusFilter, filters.pageSize);
+      if (!target) {
+        resetPreview();
+        toast(result.incomplete
+          ? t('会话读取不完整，暂未定位到会话 {id}。请查看读取失败详情。', { id: threadId })
+          : t('当前列表未找到会话 {id}。它可能已删除、是子会话，或位于其他 Codex 实例。', { id: threadId }), 8000);
+        return;
+      }
+      if (target.clearFilters) {
+        setSearch('');
+        setStatusFilter('all');
+      }
+      setPage(target.page);
+      loadPreview(target.item, result.root);
+    });
+    return () => { current = false; };
+  }, [sessionTarget]);
 
   // The page survives leaving this view, so only an actual filter change goes back to page 1.
   const changeSearch = value => {
@@ -313,12 +351,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   }, [contextMenu]);
 
   useEffect(() => () => {
-    previewRequestRef.current += 1;
-    previewItemRef.current = null;
-    activePathRef.current = '';
+    resetPreview();
     setContextMenu(null);
-    setActivePath('');
-    setPreview(null);
   }, []);
 
   const toggleSelection = (item, checked) => {
@@ -524,6 +558,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           loadEarlierMessages={loadEarlierMessages}
           loadPreview={loadPreview}
           messages={messages}
+          onOpenSessionBills={onOpenSessionBills}
           preview={preview}
           previewEarlierLoading={previewEarlierLoading}
           previewItemRef={previewItemRef}

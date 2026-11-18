@@ -5,6 +5,7 @@ export default function BillsToolbar({
   filter,
   modelOptions,
   ownerGroups,
+  onClearSession,
   onModelChange,
   onOwnerChange,
   onRangeChange
@@ -52,6 +53,15 @@ export default function BillsToolbar({
           ))}
         </select>
       </label>
+      {filter.threadId && (
+        <div className="usage-bills-thread-filter">
+          <span>{t('会话 ID')}</span>
+          <code title={filter.threadId}>{filter.threadId}</code>
+          <button type="button" className="btn btn-secondary" onClick={onClearSession}>
+            {t('清除会话筛选')}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

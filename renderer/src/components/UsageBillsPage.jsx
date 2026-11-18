@@ -39,6 +39,7 @@ export default function UsageBillsPage({
   filter,
   maskAccountName,
   onFilterChange,
+  onOpenSession,
   refreshKey
 }) {
   const { language, t } = useI18n();
@@ -68,7 +69,8 @@ export default function UsageBillsPage({
     return names;
   }, [accounts, apiProfiles, maskAccountName]);
 
-  const queryKey = JSON.stringify([filter.range, filter.ownerKey, filter.modelKey, page, pageSize]);
+  const { range, ownerKey: selectedOwnerKey, modelKey, threadId } = filter;
+  const queryKey = JSON.stringify([range, selectedOwnerKey, modelKey, threadId, page, pageSize]);
   const result = answer && answer.queryKey === queryKey ? answer.result : null;
 
   // refreshKey changes after every usage statistics refresh, which is when new records arrive.
@@ -77,9 +79,10 @@ export default function UsageBillsPage({
     latestRequestRef.current = requestId;
     setLoading(true);
     window.api.listUsageBills({
-      range: filter.range,
-      ...ownerQuery(filter.ownerKey),
-      model: modelQuery(filter.modelKey),
+      range,
+      ...ownerQuery(selectedOwnerKey),
+      model: modelQuery(modelKey),
+      ...(threadId ? { threadId } : {}),
       page,
       pageSize
     })
@@ -107,7 +110,7 @@ export default function UsageBillsPage({
       .finally(() => {
         if (latestRequestRef.current === requestId) setLoading(false);
       });
-  }, [errorLog, filter.modelKey, filter.ownerKey, filter.range, page, pageSize, queryKey, refreshKey]);
+  }, [errorLog, modelKey, selectedOwnerKey, range, threadId, page, pageSize, queryKey, refreshKey]);
 
   const ownerGroups = useMemo(() => {
     const options = (result?.owners || []).map(owner => ({
@@ -160,6 +163,7 @@ export default function UsageBillsPage({
         filter={filter}
         modelOptions={modelOptions}
         ownerGroups={ownerGroups}
+        onClearSession={() => changeFilter({ threadId: undefined })}
         onModelChange={modelKey => changeFilter({ modelKey })}
         onOwnerChange={ownerKey => changeFilter({ ownerKey, modelKey: ALL_FILTER_KEY })}
         onRangeChange={range => changeFilter({ range })}
@@ -189,6 +193,7 @@ export default function UsageBillsPage({
         ownerName={selectedOwnerName}
         record={selectedRecord}
         onClose={() => setSelectedRecord(null)}
+        onOpenSession={onOpenSession}
       />
     </div>
   );

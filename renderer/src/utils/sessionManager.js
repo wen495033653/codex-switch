@@ -54,6 +54,28 @@ export function lower(value) {
   return String(value || '').toLowerCase();
 }
 
+export function filterSessions(conversations, search, statusFilter) {
+  const query = lower(search.trim());
+  return conversations.filter(item => {
+    if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+    return !query
+      || lower(item.title).includes(query)
+      || lower(item.id).includes(query)
+      || lower(item.cwd).includes(query)
+      || lower(item.relative_path).includes(query);
+  });
+}
+
+// Bill links identify the thread, never the title, path, or fuzzy search matches.
+export function locateSession(conversations, threadId, search, statusFilter, pageSize) {
+  const item = conversations.find(conversation => conversation.id === threadId);
+  if (!item) return null;
+  const index = filterSessions(conversations, search, statusFilter).indexOf(item);
+  return index === -1
+    ? { item, page: Math.floor(conversations.indexOf(item) / pageSize) + 1, clearFilters: true }
+    : { item, page: Math.floor(index / pageSize) + 1, clearFilters: false };
+}
+
 export function previewMessageKey(message, fallbackIndex = 0) {
   if (message && message.offset !== undefined && message.offset !== null) {
     return `${message.role || 'message'}:${message.offset}`;
