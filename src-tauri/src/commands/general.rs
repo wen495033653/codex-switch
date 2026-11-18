@@ -227,7 +227,7 @@ fn open_external_url_impl(url: &str) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
-const DEFAULT_API_TEST_MODEL: &str = "gpt-6.1-sol";
+const DEFAULT_API_TEST_MODEL: &str = "gpt-6.2-sol";
 
 /// The most output one test question may ask for (the pelican SVG is the largest).
 const API_PROMPT_MAX_OUTPUT_TOKENS: u32 = 64_000;
@@ -929,9 +929,9 @@ mod api_test_model_tests {
     use super::*;
 
     #[test]
-    fn defaults_to_gpt6_without_overriding_explicit_models() {
-        assert_eq!(normalize_api_test_model(None), "gpt-6.1-sol");
-        assert_eq!(normalize_api_test_model(Some("  ".into())), "gpt-6.1-sol");
+    fn defaults_to_gpt_6_2_sol_without_overriding_explicit_models() {
+        assert_eq!(normalize_api_test_model(None), "gpt-6.2-sol");
+        assert_eq!(normalize_api_test_model(Some("  ".into())), "gpt-6.2-sol");
         assert_eq!(
             normalize_api_test_model(Some(" custom-model ".into())),
             "custom-model"

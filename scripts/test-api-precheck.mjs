@@ -54,11 +54,25 @@ test('the precheck calls the injected backend function and reports progress thro
       return { ok: true, message: 'fixture ok', stage: 'responses' };
     }
   });
-  assert.deepEqual(calls, [{ baseUrl: 'https://api.example.invalid/v1', apiKey: 'fixture-key', model: 'gpt-6.1-sol' }]);
+  assert.deepEqual(calls, [{ baseUrl: 'https://api.example.invalid/v1', apiKey: 'fixture-key', model: 'gpt-6.2-sol' }]);
   assert.deepEqual(updates, [true, false]);
   assert.equal(result.ok, true);
   assert.equal(result.message, 'fixture ok');
   assert.equal(result.loading, false);
+});
+
+test('an explicit model is still sent as selected, including the previous default', async () => {
+  let requestedModel;
+  const result = await runApiProfilePrecheck({
+    profile: { base_url: 'https://api.example.invalid/v1', api_key: 'fixture-key' },
+    model: ' gpt-6.1-sol ',
+    testApiBaseUrl: async ({ model }) => {
+      requestedModel = model;
+      return { ok: true };
+    }
+  });
+  assert.equal(requestedModel, 'gpt-6.1-sol');
+  assert.equal(result.testModel, 'gpt-6.1-sol');
 });
 
 test('a rejected backend call and an invalid URL end as failed, finished checks', async () => {
