@@ -834,13 +834,15 @@ mod tests {
                 evaluate["params"]["contextId"], 22,
                 "iframe context or retired main context must never be used"
             );
+            if case == "normal_refresh" {
+                // The probe response releases the client into its next loop check. Signal stop
+                // before replying so it cannot start polling a socket this worker is closing.
+                worker_control.stop.store(true, Ordering::Release);
+            }
             fixture_send(
                 &mut reader,
                 json!({"id":evaluate["id"],"result":{"result":{"type":"boolean","value":true}}}),
             );
-            if case == "normal_refresh" {
-                worker_control.stop.store(true, Ordering::Release);
-            }
         });
         let deadline = Instant::now() + Duration::from_millis(200);
         let connection =
