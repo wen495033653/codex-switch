@@ -1249,6 +1249,7 @@ fn bills(
         owner.map(|(owner_type, _)| owner_type),
         owner.map(|(_, owner_id)| owner_id),
         model.map(str::to_string),
+        None,
         page,
         page_size,
     )
@@ -1479,12 +1480,142 @@ fn the_bill_lists_each_response_with_what_it_was_charged() {
     );
     assert_eq!(response_ids(&window), ["resp-other", "resp-short"]);
 
-    assert!(BillsQuery::new("week", None, None, None, 1, 50).is_err());
-    assert!(BillsQuery::new("all", Some(OWNER_TYPE_SUBSCRIPTION), None, None, 1, 50).is_err());
-    assert!(BillsQuery::new("all", Some("someone"), Some("x"), None, 1, 50).is_err());
-    assert!(BillsQuery::new("all", None, None, None, 0, 50).is_err());
-    assert!(BillsQuery::new("all", None, None, None, 1, 0).is_err());
-    assert!(BillsQuery::new("all", None, None, None, 1, 201).is_err());
+    assert!(BillsQuery::new("week", None, None, None, None, 1, 50).is_err());
+    assert!(BillsQuery::new(
+        "all",
+        Some(OWNER_TYPE_SUBSCRIPTION),
+        None,
+        None,
+        None,
+        1,
+        50
+    )
+    .is_err());
+    assert!(BillsQuery::new("all", Some("someone"), Some("x"), None, None, 1, 50).is_err());
+    assert!(BillsQuery::new("all", None, None, None, None, 0, 50).is_err());
+    assert!(BillsQuery::new("all", None, None, None, None, 1, 0).is_err());
+    assert!(BillsQuery::new("all", None, None, None, None, 1, 201).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn thread_bills_include_its_archived_requests_across_accounts_and_compose_with_filters() {
+    let root = temp_root("thread-bills");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    attribute(
+        &db_path,
+        OWNER_TYPE_SUBSCRIPTION,
+        "sub-a",
+        PROVIDER_SUBSCRIPTION,
+        T0,
+    );
+    attribute(&db_path, OWNER_TYPE_API_PROFILE, "api-x", PROVIDER_API, T0);
+
+    let thread_id = "thread-a";
+    let mut archived = subscription_session("2026-06-15T01:00:00Z", thread_id, "gpt-6.1-sol");
+    archived.extend([
+        record_line(
+            "2026-06-15T01:01:00Z",
+            "before-window",
+            thread_id,
+            50,
+            0,
+            10,
+        ),
+        record_line(
+            "2026-06-15T01:03:00Z",
+            "on-subscription",
+            thread_id,
+            100,
+            10,
+            20,
+        ),
+        thread_settings_line("2026-06-15T01:04:00Z", "gpt-5.5", PROVIDER_API, Value::Null),
+        record_line("2026-06-15T01:05:00Z", "on-api", thread_id, 200, 20, 40),
+    ]);
+    let archive_dir = codex_home.join("archived_sessions");
+    fs::create_dir_all(&archive_dir).unwrap();
+    let compressed = zstd::encode_all((archived.join("\n") + "\n").as_bytes(), 1).unwrap();
+    fs::write(archive_dir.join("rollout-a.jsonl.zst"), compressed).unwrap();
+
+    let other_id = "thread-a-related";
+    let mut other = subscription_session("2026-06-15T01:00:00Z", other_id, "gpt-6.2-astra");
+    other.push(record_line(
+        "2026-06-15T01:06:00Z",
+        "another-thread",
+        other_id,
+        1_000,
+        200,
+        100,
+    ));
+    write_rollout(&codex_home, "other", &other);
+    let now = "2026-06-22T01:02:00Z";
+    stats(&db_path, &codex_home, now);
+
+    let connection = open_usage_connection(&db_path, now).unwrap();
+    let list = |range, thread_id: &str, owner: Option<(&str, &str)>, model: Option<&str>, page| {
+        let query = BillsQuery::new(
+            range,
+            owner.map(|(kind, _)| kind),
+            owner.map(|(_, id)| id),
+            model.map(str::to_string),
+            Some(thread_id.to_string()),
+            page,
+            1,
+        )
+        .unwrap();
+        list_bills(&connection, &query, parse_rfc3339_seconds(now).unwrap()).unwrap()
+    };
+
+    let current = list("days_7", thread_id, None, None, 1);
+    assert_eq!(response_ids(&current), ["on-api"]);
+    assert_eq!(current["summary"]["request_count"], 2);
+    assert_eq!(current["summary"]["total_tokens"], 360);
+    assert_eq!(current["records"][0]["thread_id"], thread_id);
+    assert_eq!(
+        current["owners"],
+        json!([
+            { "owner_type": OWNER_TYPE_API_PROFILE, "owner_id": "api-x", "request_count": 1 },
+            { "owner_type": OWNER_TYPE_SUBSCRIPTION, "owner_id": "sub-a", "request_count": 1 }
+        ])
+    );
+    assert_eq!(
+        current["models"],
+        json!([
+            { "model": "gpt-5.5", "request_count": 1 },
+            { "model": "gpt-6.1-sol", "request_count": 1 }
+        ])
+    );
+    let second = list("days_7", thread_id, None, None, 2);
+    assert_eq!(response_ids(&second), ["on-subscription"]);
+    assert_eq!(second["summary"], current["summary"]);
+    let all = list("all", thread_id, None, None, 3);
+    assert_eq!(all["summary"]["request_count"], 3);
+    assert_eq!(response_ids(&all), ["before-window"]);
+
+    let api_filter = Some((OWNER_TYPE_API_PROFILE, "api-x"));
+    let exact = list("all", thread_id, api_filter, Some("gpt-5.5"), 1);
+    assert_eq!(response_ids(&exact), ["on-api"]);
+    assert_eq!(exact["summary"]["request_count"], 1);
+    assert_eq!(
+        exact["models"],
+        json!([{ "model": "gpt-5.5", "request_count": 1 }])
+    );
+    assert_eq!(exact["owners"].as_array().unwrap().len(), 2);
+    let no_intersection = list("all", thread_id, api_filter, Some("gpt-6.1-sol"), 1);
+    assert!(response_ids(&no_intersection).is_empty());
+    assert_eq!(no_intersection["summary"]["request_count"], 0);
+    let missing = list("all", "thread", None, None, 1);
+    assert_eq!(missing["summary"]["request_count"], 0);
+    assert!(response_ids(&missing).is_empty());
+    assert_eq!(missing["owners"], json!([]));
+    assert_eq!(missing["models"], json!([]));
+    assert_eq!(
+        BillsQuery::new("all", None, None, None, Some(" ".to_string()), 1, 1),
+        Err("token 账单会话 ID 不能为空".to_string())
+    );
+    drop(connection);
     fs::remove_dir_all(root).unwrap();
 }
 

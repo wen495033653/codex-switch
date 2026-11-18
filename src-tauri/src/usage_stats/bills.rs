@@ -1,5 +1,5 @@
 //! The bill: every stored response with its tokens and the prices it was charged at, filtered by
-//! window, owner and model, newest first, one page at a time.
+//! window, thread, owner and model, newest first, one page at a time.
 
 use super::{
     db::{
@@ -65,6 +65,7 @@ pub(super) struct BillsQuery {
     owner: Option<(String, String)>,
     /// An empty model selects the records whose model was unknown.
     model: Option<String>,
+    thread_id: Option<String>,
     page: u32,
     page_size: u32,
 }
@@ -75,6 +76,7 @@ impl BillsQuery {
         owner_type: Option<&str>,
         owner_id: Option<&str>,
         model: Option<String>,
+        thread_id: Option<String>,
         page: u32,
         page_size: u32,
     ) -> Result<Self, String> {
@@ -92,6 +94,15 @@ impl BillsQuery {
             }
             Some(other) => return Err(format!("token 账单归属类型无效: {other:?}")),
         };
+        let thread_id = thread_id
+            .map(|id| {
+                let id = id.trim();
+                if id.is_empty() {
+                    return Err("token 账单会话 ID 不能为空".to_string());
+                }
+                Ok(id.to_string())
+            })
+            .transpose()?;
         if page == 0 {
             return Err("token 账单页码从 1 开始".to_string());
         }
@@ -104,6 +115,7 @@ impl BillsQuery {
             range: BillsRange::parse(range)?,
             owner,
             model,
+            thread_id,
             page,
             page_size,
         })
@@ -116,12 +128,21 @@ struct Filter {
     values: Vec<SqlValue>,
 }
 
-fn filter(since: Option<i64>, owner: Option<&(String, String)>, model: Option<&str>) -> Filter {
+fn filter(
+    since: Option<i64>,
+    thread_id: Option<&str>,
+    owner: Option<&(String, String)>,
+    model: Option<&str>,
+) -> Filter {
     let mut clauses = Vec::new();
     let mut values = Vec::new();
     if let Some(since) = since {
         clauses.push("timestamp_seconds >= ?");
         values.push(SqlValue::Integer(since));
+    }
+    if let Some(thread_id) = thread_id {
+        clauses.push("thread_id = ?");
+        values.push(SqlValue::Text(thread_id.to_string()));
     }
     if let Some((owner_type, owner_id)) = owner {
         clauses.push("owner_type = ? AND owner_id = ?");
@@ -146,12 +167,21 @@ pub(super) fn list_bills(
     now_seconds: i64,
 ) -> Result<Value, String> {
     let since = query.range.start(now_seconds);
-    let selected = filter(since, query.owner.as_ref(), query.model.as_deref());
+    let thread_id = query.thread_id.as_deref();
+    let selected = filter(
+        since,
+        thread_id,
+        query.owner.as_ref(),
+        query.model.as_deref(),
+    );
     let summary = read_summary(connection, &selected)?;
     // The owner list ignores the model filter so picking a model never hides the owners; the
     // model list follows the owner filter.
-    let owners = read_owners(connection, &filter(since, None, None))?;
-    let models = read_models(connection, &filter(since, query.owner.as_ref(), None))?;
+    let owners = read_owners(connection, &filter(since, thread_id, None, None))?;
+    let models = read_models(
+        connection,
+        &filter(since, thread_id, query.owner.as_ref(), None),
+    )?;
     let records = read_page(connection, &selected, query.page, query.page_size)?;
     Ok(json!({
         "ok": true,

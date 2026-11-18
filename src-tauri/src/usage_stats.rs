@@ -69,20 +69,23 @@ pub(crate) async fn usage_stats_get() -> Result<Value, String> {
 }
 
 /// One page of the bill: the stored responses of a window, optionally of one owner and one
-/// model, newest first. It reads what the refreshes stored; it does not scan the rollouts.
+/// model and thread, newest first. It reads what the refreshes stored; it does not scan rollouts.
 #[tauri::command]
 pub(crate) async fn usage_bills_list(
     range: String,
     owner_type: Option<String>,
     owner_id: Option<String>,
     model: Option<String>,
+    thread_id: Option<String>,
     page: u32,
     page_size: u32,
 ) -> Result<Value, String> {
     // The bills page asks again after every statistics refresh (every 30 s while it shows).
     run_blocking("读取 token 账单", move || {
-        usage_bills_list_impl(&range, owner_type, owner_id, model, page, page_size)
-            .inspect_err(|err| log_event_once("usage_bills_list_error", json!({ "error": err })))
+        usage_bills_list_impl(
+            &range, owner_type, owner_id, model, thread_id, page, page_size,
+        )
+        .inspect_err(|err| log_event_once("usage_bills_list_error", json!({ "error": err })))
     })
     .await
 }
@@ -92,6 +95,7 @@ fn usage_bills_list_impl(
     owner_type: Option<String>,
     owner_id: Option<String>,
     model: Option<String>,
+    thread_id: Option<String>,
     page: u32,
     page_size: u32,
 ) -> Result<Value, String> {
@@ -100,6 +104,7 @@ fn usage_bills_list_impl(
         owner_type.as_deref(),
         owner_id.as_deref(),
         model,
+        thread_id,
         page,
         page_size,
     )?;

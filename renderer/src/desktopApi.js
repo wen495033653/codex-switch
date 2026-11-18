@@ -57,6 +57,7 @@ const COMMAND_BINDINGS = {
     ownerType: query.ownerType,
     ownerId: query.ownerId,
     model: query.model,
+    threadId: query.threadId,
     page: query.page,
     pageSize: query.pageSize
   })],
