@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useI18n } from '../../i18n';
 import {
   PAGE_SIZE_OPTIONS,
@@ -36,6 +37,10 @@ export default function SessionListPanel({
   visibleItems,
 }) {
   const { language, t } = useI18n();
+  const activeRow = useRef(null);
+  useEffect(() => {
+    activeRow.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activePath, currentPage]);
   return (
     <div className="session-list-panel">
       <div className="session-list-header">
@@ -59,6 +64,7 @@ export default function SessionListPanel({
             return (
               <div
                 key={path}
+                ref={activePath === path ? activeRow : null}
                 role="button"
                 tabIndex={0}
                 aria-label={item.title}

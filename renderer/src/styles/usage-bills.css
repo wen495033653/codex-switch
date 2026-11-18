@@ -50,6 +50,32 @@
   font-size: 12px;
 }
 
+.usage-bills-thread-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.usage-bills-thread-filter span,
+.usage-bills-thread-filter button {
+  flex-shrink: 0;
+}
+
+.usage-bills-thread-filter code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-bills-thread-filter .btn {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+}
+
 .usage-bills-error {
   padding: 8px 12px;
   border: 1px solid rgba(255, 123, 138, 0.34);

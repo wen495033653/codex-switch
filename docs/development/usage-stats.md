@@ -70,15 +70,17 @@
 
 ### 逐条账单（2026-10-17）
 
-命令 `usage_bills_list(range, ownerType, ownerId, model, page, pageSize)`（`bills.rs`）只读库里已存的记录，不扫描文件：
+命令 `usage_bills_list(range, ownerType, ownerId, model, threadId, page, pageSize)`（`bills.rs`）只读库里已存的记录，不扫描文件：
 
-- **筛选。** `range` 为 `today`、`days_7`、`days_30`、`all`，窗口起点与卡片相同。归属为 `subscription` / `api_profile` 加 ID，或 `unattributed`（没有匹配到归属的记录），不传为全部。`model` 为空字符串表示模型未知的记录，不传为全部。页码从 1 开始，每页 1 到 200 条。参数不合法时返回错误，前端记 `usage_bills_list_error`。
-- **结果。** `summary` 是整个筛选结果的合计（请求数、各类 token、新增输入、费用、未定价条数）；`owners` 只按时间范围统计（选了模型也不会隐藏其他归属）；`models` 按时间范围和归属统计；`records` 按时间倒序、同一秒按 `response_id` 倒序分页。
+- **筛选。** `range` 为 `today`、`days_7`、`days_30`、`all`，窗口起点与卡片相同。归属为 `subscription` / `api_profile` 加 ID，或 `unattributed`（没有匹配到归属的记录），不传为全部。`model` 为空字符串表示模型未知的记录，不传为全部。`threadId` 不传为所有会话，传入时按 `thread_id` 精确匹配，可与时间、归属、模型组合；没有匹配记录时返回空结果。使用 `usage_records_thread_time_idx`，避免从会话进入「全部」账单时扫描整张表。页码从 1 开始，每页 1 到 200 条。参数不合法时返回错误，后端记 `usage_bills_list_error`。
+- **结果。** `summary` 是整个筛选结果的合计（请求数、各类 token、新增输入、费用、未定价条数）；`owners` 按时间范围和会话统计（选了模型也不会隐藏其他归属）；`models` 按时间范围、会话和归属统计；`records` 按时间倒序、同一秒按 `response_id` 倒序分页。
 - **每条记录。** 带 `fresh_input_tokens`（输入减缓存命中和缓存写入）、`legacy`（旧统计迁移来的按会话事件记录）和 `charges`：新增输入、缓存命中、缓存写入、输出四项，各自的 token 数、单价和费用，四项之和等于记录费用。未定价的记录，以及已定价但没能回填单价的记录，`charges` 为 `null`。
 - **单价回填。** 加单价列之前存下的已定价记录，在第一次打开库时由模型和计价标签取出单价；只有按这组单价重算的费用与已存费用完全相等时才写入，所以不会显示没有按它收费的单价。结果记 `usage_stats_prices_backfilled`（`filled`、`unmatched`）；有对不上的再记 `usage_stats_price_backfill_error`（条数和前 5 条的 `responseId`、模型、标签、已存费用），这些记录只显示合计。
 - **"全部"与卡片的差别。** 从旧统计迁移来的库（`has_session_statistics`），卡片的"全部"含旧版按会话累计、没有逐条记录的部分；账单只有逐条记录（加上迁移时写入的最后 30 天按事件记录），合计会少于卡片。页面在"全部"下用一行说明提示。今天、7 天、30 天与卡片一致。
 
 前端见 [renderer.md](renderer.md) 的"逐条账单页"。
+
+2026-11-18 定向验证：隔离库内同一个压缩归档会话含订阅和 API 两种归属，既可查全部，也能与时间、模型、归属组合筛选；汇总和下拉计数不包含 ID 前缀相同的其他会话。分页、无匹配、非法空 ID 和未传 `threadId` 的调用已测。`EXPLAIN QUERY PLAN` 用 6 万条合成记录确认按会话汇总和排序分页使用新索引，而不是遍历全量或仅使用时间索引。不涉及正式账单库。
 
 ### 价格表更新后的补价（2026-10-17）
 

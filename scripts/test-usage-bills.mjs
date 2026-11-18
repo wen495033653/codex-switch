@@ -4,11 +4,13 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { transformWithOxc } from 'vite';
 import * as billUtils from '../renderer/src/utils/usageBills.js';
+import { locateSession } from '../renderer/src/utils/sessionManager.js';
 
 const {
   ALL_FILTER_KEY,
   DEFAULT_BILLS_FILTER,
   billsFilterForOwner,
+  billsFilterForSession,
   cacheHitRate,
   createBillTimeFormatter,
   formatBillCost,
@@ -53,6 +55,32 @@ test('the drawer link opens the bills of its owner, window and model', () => {
   });
   assert.equal(billsFilterForOwner('api_profile', 'p1', 'all', 'unknown').modelKey, '');
   assert.equal(billsFilterForOwner('api_profile', 'p1', 'all', 'gpt-5.5').modelKey, 'gpt-5.5');
+});
+
+test('a session opens bills across all owners, models and history', () => {
+  const sessionFilter = billsFilterForSession('thread-archived');
+  assert.deepEqual(sessionFilter, {
+    range: 'all',
+    ownerKey: ALL_FILTER_KEY,
+    modelKey: ALL_FILTER_KEY,
+    threadId: 'thread-archived'
+  });
+  assert.equal(billsFilterForOwner('api_profile', 'p1', 'today', null).threadId, undefined);
+});
+
+test('a bill locates an exact session and finds its page even when hidden by filters', () => {
+  const threadId = 'target-id';
+  const decoy = { id: 'other-id', title: threadId, status: 'active' };
+  const filler = { id: 'archived-filler', title: 'Historical session', status: 'archived' };
+  const target = { id: threadId, title: 'Historical session', status: 'archived', relative_path: 'archived_sessions/target.jsonl' };
+  const conversations = [decoy, filler, target];
+
+  assert.deepEqual(locateSession(conversations, threadId, 'Historical', 'archived', 1),
+    { item: target, page: 2, clearFilters: false });
+  assert.deepEqual(locateSession(conversations, threadId, 'does not match', 'active', 2),
+    { item: target, page: 2, clearFilters: true });
+  assert.equal(locateSession([decoy], threadId, '', 'all', 1), null, 'a matching title is not a matching ID');
+  assert.equal(locateSession(conversations, 'target', '', 'all', 1), null, 'a partial ID is not a matching ID');
 });
 
 test('owners without a current name are shown by type and short id', () => {
@@ -104,8 +132,9 @@ test('pages and times', () => {
   assert.equal(formatFullTime('2001-03-04T05:06:07', 'zh-CN'), '2001/03/04 05:06:07');
 });
 
-test('a refresh that loses the current page loads the last remaining page before showing results', async () => {
+async function billsPageFixture(initialFilter = DEFAULT_BILLS_FILTER) {
   const values = [], requests = [], effects = [];
+  let filter = initialFilter;
   let cursor = 0;
   const jsx = (type, props) => ({ type, props });
   const context = vm.createContext({
@@ -150,16 +179,23 @@ test('a refresh that loses the current page loads the last remaining page before
     }, { context });
   });
   await module.evaluate();
-  const renderTable = (refreshKey = 0) => {
+  const render = (refreshKey = 0) => {
     cursor = 0;
-    const tree = module.namespace.default({ filter: DEFAULT_BILLS_FILTER, refreshKey });
+    const tree = module.namespace.default({ filter, onFilterChange: next => { filter = next; }, refreshKey });
     effects.splice(0).forEach(effect => effect());
-    return tree.props.children.find(node => node?.type === './bills/BillsTable').props;
+    const props = path => tree.props.children.find(node => node?.type === `./bills/${path}`).props;
+    return { table: props('BillsTable'), toolbar: props('BillsToolbar') };
   };
   const reply = async (request, total, records) => {
     request.resolve({ ok: true, summary: { request_count: total }, records });
     await new Promise(setImmediate);
   };
+  return { requests, render, reply };
+}
+
+test('a refresh that loses the current page loads the last remaining page before showing results', async () => {
+  const { requests, render, reply } = await billsPageFixture();
+  const renderTable = refreshKey => render(refreshKey).table;
   const row = { response_id: 'resp' };
 
   renderTable();
@@ -182,6 +218,26 @@ test('a refresh that loses the current page loads the last remaining page before
   assert.deepEqual(renderTable(1).records, [row]);
   renderTable(2);
   assert.equal(requests[4].query.page, 1, 'later refreshes keep the corrected page');
+});
+
+test('clearing a session filter on a later page omits the thread ID and returns to page 1', async () => {
+  const { requests, render, reply } = await billsPageFixture(billsFilterForSession('thread-archived'));
+  render();
+  assert.equal(requests[0].query.range, 'all');
+  assert.equal(requests[0].query.threadId, 'thread-archived');
+  assert.equal(requests[0].query.ownerType, null);
+  assert.equal(requests[0].query.model, null);
+  await reply(requests[0], 51, []);
+
+  render().table.onPageChange(2);
+  const { toolbar } = render();
+  assert.equal(requests[1].query.page, 2);
+  assert.equal(requests[1].query.threadId, 'thread-archived');
+  toolbar.onClearSession();
+
+  render();
+  assert.equal(requests[2].query.page, 1);
+  assert.equal('threadId' in requests[2].query, false);
 });
 
 test('durations, first token and output rate', () => {

@@ -122,6 +122,8 @@ fn ensure_database(connection: &mut Connection, now: &str) -> Result<(), String>
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS usage_records_time_idx
                 ON usage_records(timestamp_seconds);
+            CREATE INDEX IF NOT EXISTS usage_records_thread_time_idx
+                ON usage_records(thread_id, timestamp_seconds, response_id);
             CREATE TABLE IF NOT EXISTS usage_hourly (
                 hour_start INTEGER NOT NULL,
                 owner_type TEXT NOT NULL,

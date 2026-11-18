@@ -363,6 +363,24 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
 }
 
+.session-preview-head > div:first-child {
+  min-width: 0;
+}
+
+.session-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.session-preview-actions .btn {
+  height: 28px;
+  padding: 0 8px;
+}
+
 .session-preview-head h2 {
   max-width: 100%;
   margin: 0;

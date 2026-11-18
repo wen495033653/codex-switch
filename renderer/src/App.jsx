@@ -9,7 +9,7 @@ import {
   normalizeApiProfiles
 } from './utils/appState';
 import { createPollingErrorLog } from './utils/pollingErrorLog';
-import { DEFAULT_BILLS_FILTER, billsFilterForOwner } from './utils/usageBills';
+import { DEFAULT_BILLS_FILTER, billsFilterForOwner, billsFilterForSession } from './utils/usageBills';
 import {
   useAddAccountFlow,
   useAccountOperations,
@@ -93,6 +93,7 @@ function MainApp() {
   const [usageStats, setUsageStats] = useState({ subscriptions: {}, api_profiles: {}, warnings: [] });
   const [usageStatsDetail, setUsageStatsDetail] = useState(null);
   const [usageBillsFilter, setUsageBillsFilter] = useState(DEFAULT_BILLS_FILTER);
+  const [sessionTarget, setSessionTarget] = useState(null);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [storedLanguagePreference] = useState(getStoredLanguagePreference);
@@ -516,6 +517,17 @@ function MainApp() {
     setUsageStatsDetail(null);
     setViewMode('bills');
   };
+  const openSessionForBill = threadId => {
+    setSessionTarget({ threadId });
+    setViewMode('sessions');
+  };
+  const openBillsForSession = threadId => {
+    setUsageBillsFilter(billsFilterForSession(threadId));
+    setViewMode('bills');
+  };
+  useEffect(() => {
+    if (viewMode !== 'sessions') setSessionTarget(null);
+  }, [viewMode]);
 
   const apiProfileBusy = savingApiMode || savingApiProfile;
   // Until settings load, DEFAULT_SETTINGS would show (and store) zh-CN for everyone.
@@ -612,8 +624,11 @@ function MainApp() {
             usageStatsByApiProfile: usageStats.api_profiles || {}
           }}
           sessionManagerPageProps={{
+            sessionTarget,
             toast,
-            toastError
+            toastError,
+            onOpenSessionBills: openBillsForSession,
+            onSessionTargetHandled: target => setSessionTarget(current => current === target ? null : current)
           }}
           usageBillsPageProps={{
             accounts: store.accounts,
@@ -621,6 +636,7 @@ function MainApp() {
             filter: usageBillsFilter,
             maskAccountName,
             onFilterChange: setUsageBillsFilter,
+            onOpenSession: openSessionForBill,
             refreshKey: usageStats
           }}
           accountsPageProps={{

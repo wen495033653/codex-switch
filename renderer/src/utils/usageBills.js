@@ -63,6 +63,10 @@ export function billsFilterForOwner(ownerType, ownerId, range, statsModel) {
   };
 }
 
+export function billsFilterForSession(threadId) {
+  return { ...DEFAULT_BILLS_FILTER, range: 'all', threadId };
+}
+
 export function ownerLabel(ownerType, ownerId, namesByKey, t) {
   if (!ownerType) return t('未归属');
   const name = namesByKey.get(ownerKey(ownerType, ownerId));

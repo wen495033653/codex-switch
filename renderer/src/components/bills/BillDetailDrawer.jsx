@@ -35,7 +35,7 @@ function Section({ title, children }) {
   );
 }
 
-export default function BillDetailDrawer({ ownerName, record, onClose }) {
+export default function BillDetailDrawer({ ownerName, record, onClose, onOpenSession }) {
   const { language, t } = useI18n();
   const isOpen = Boolean(record);
 
@@ -127,6 +127,15 @@ export default function BillDetailDrawer({ ownerName, record, onClose }) {
           <Section title={t('标识')}>
             <Row label="response_id" value={record.response_id} mono />
             <Row label={t('会话 ID')} value={record.thread_id} mono />
+            {record.thread_id && (
+              <button
+                type="button"
+                className="btn btn-secondary usage-detail-bills-link"
+                onClick={() => onOpenSession(record.thread_id)}
+              >
+                {t('查看会话')}
+              </button>
+            )}
           </Section>
         </div>
       </aside>
