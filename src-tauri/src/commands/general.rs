@@ -488,26 +488,44 @@ fn subscription_models(profile_id: &str) -> Result<Value, String> {
     if access_token.is_empty() {
         return Err("账号缺少 access_token".to_string());
     }
-    let listed = codex_desktop_cli_version().and_then(|client_version| {
-        get_codex_models(
-            &access_token,
-            &account_id,
-            &client_version,
-            INTERACTIVE_REQUEST_TIMEOUT_MS,
-        )
-        .map(|models| (client_version, models))
-    });
-    let (client_version, models) = listed.map_err(|error| {
+    let log_failure = |stage: &str, error: &str| {
         log_event_once(
             "subscription_models_error",
             json!({
                 "account": account_label(profile_id),
+                "stage": stage,
                 "error": error,
                 "handling": "shown_in_dialog"
             }),
         );
-        error
-    })?;
+    };
+    let client_version = match codex_desktop_cli_version() {
+        Ok(version) => version,
+        Err(error) => {
+            log_failure("codex_desktop_cli_version", &error);
+            return Ok(json!({
+                "ok": false,
+                "cliUnavailable": true,
+                "error": error
+            }));
+        }
+    };
+    let models = match get_codex_models(
+        &access_token,
+        &account_id,
+        &client_version,
+        INTERACTIVE_REQUEST_TIMEOUT_MS,
+    ) {
+        Ok(models) => models,
+        Err(error) => {
+            log_failure("get_codex_models", &error);
+            return Ok(json!({
+                "ok": false,
+                "clientVersion": client_version,
+                "error": error
+            }));
+        }
+    };
     let mut visible = models
         .iter()
         .filter(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
@@ -522,6 +540,7 @@ fn subscription_models(profile_id: &str) -> Result<Value, String> {
         .collect::<Vec<_>>();
     visible.sort();
     Ok(json!({
+        "ok": true,
         "clientVersion": client_version,
         "models": visible.into_iter().map(|(_, slug)| slug).collect::<Vec<_>>()
     }))

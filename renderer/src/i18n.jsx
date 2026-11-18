@@ -219,6 +219,7 @@ const EN_TRANSLATIONS = {
   '{name} · 降智测试': '{name} · Downgrade test',
   '正在获取模型列表': 'Loading the model list',
   '模型列表获取失败': 'Could not load the model list',
+  'Codex Desktop 自带的 CLI 不可用，请安装或更新 Codex Desktop 后重试。': 'The bundled CLI is unavailable. Install or update Codex Desktop, then try again.',
   '{count} 个可用模型（Codex {version}）': '{count} models available (Codex {version})',
   '勾选的题会同时发出，推理题可能要几分钟': 'Ticked questions are sent at once; reasoning ones may take a few minutes',
   '测试中…（{finished}/{tested}）': 'Testing… ({finished}/{tested})',
