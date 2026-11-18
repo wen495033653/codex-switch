@@ -19,16 +19,17 @@ use crate::{
     settings::read_settings_value,
     time_util::{now_string, parse_rfc3339_seconds},
 };
+use rusqlite::{Transaction, TransactionBehavior};
 use serde_json::{json, Value};
 use std::{path::Path, sync::Mutex, thread, time::Duration};
 use {
     aggregate::aggregate_usage,
     bills::{list_bills, BillsQuery},
     db::{
-        count_unpriced_with_model_price, db_error, mark_service_tier_unknown, mark_timings_filled,
-        mark_unpriced_checked, open_usage_connection, pending_reprice, pending_timing_fill,
-        record_attribution_at, records_counted_after_seconds, reprice_waived_auto_reviews,
-        usage_db_path,
+        count_unpriced_with_model_price, db_error, insert_attribution, mark_service_tier_unknown,
+        mark_timings_filled, mark_unpriced_checked, open_usage_connection, pending_reprice,
+        pending_timing_fill, record_attribution_at, records_counted_after_seconds,
+        reprice_waived_auto_reviews, usage_db_path,
     },
     model::{
         UsageScanSource, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API,
@@ -130,6 +131,40 @@ pub(crate) fn record_attribution(
     let started_at = now_string();
     let db_path = usage_db_path()?;
     record_attribution_at(&db_path, owner_type, owner_id, provider, &started_at)
+}
+
+pub(crate) struct ApiSwitchAttribution<'a>(Transaction<'a>);
+
+impl ApiSwitchAttribution<'_> {
+    pub(crate) fn commit(self) -> Result<(), String> {
+        self.0
+            .commit()
+            .map_err(|error| db_error("提交 API 账单归属失败", error))
+    }
+}
+
+/// Hold the scan lock until the API config and the corresponding attribution are committed
+/// (or rolled back). A concurrent refresh must not use the old owner for a new response.
+/// Only the short local file update belongs in the callback, never runtime sync or restart.
+pub(crate) fn with_api_switch_attribution<T>(
+    owner_id: &str,
+    apply: impl FnOnce(ApiSwitchAttribution<'_>) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = USAGE_STATS_SCAN_LOCK
+        .lock()
+        .map_err(|_| "token 统计扫描锁异常".to_string())?;
+    let mut connection = open_usage_connection(&usage_db_path()?, &now_string())?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| db_error("开启 API 账单归属事务失败", error))?;
+    insert_attribution(
+        &transaction,
+        OWNER_TYPE_API_PROFILE,
+        owner_id,
+        PROVIDER_API,
+        &now_string(),
+    )?;
+    apply(ApiSwitchAttribution(transaction))
 }
 
 pub(crate) fn record_current_attribution_if_available() -> Result<(), String> {

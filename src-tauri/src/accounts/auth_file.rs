@@ -29,28 +29,32 @@ pub(crate) fn write_auth_value(auth: &Value) -> Result<(), String> {
     write_json_file(&path, "auth.json", &data)
 }
 
-pub(crate) fn write_api_auth(api_key: &str) -> Result<(), String> {
+pub(super) fn api_auth_value(api_key: &str) -> Result<Value, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("API Key 不能为空".to_string());
     }
-    write_auth_value(&json!({
+    Ok(json!({
         "auth_mode": "apikey",
         "OPENAI_API_KEY": key
     }))
 }
 
-pub(crate) fn write_account_auth(account: &Value) -> Result<(), String> {
+pub(super) fn account_auth_value(account: &Value) -> Result<Value, String> {
     let tokens = account
         .get("tokens")
         .cloned()
         .ok_or_else(|| "账号缺少 tokens".to_string())?;
-    write_auth_value(&json!({
+    Ok(json!({
         "auth_mode": "chatgpt",
         "OPENAI_API_KEY": Value::Null,
         "tokens": tokens,
         "last_refresh": now_string()
     }))
+}
+
+pub(crate) fn write_account_auth(account: &Value) -> Result<(), String> {
+    write_auth_value(&account_auth_value(account)?)
 }
 
 pub(crate) fn auth_to_account(auth: &Value) -> Result<Value, String> {

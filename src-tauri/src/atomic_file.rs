@@ -60,6 +60,61 @@ pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), Str
     }
 }
 
+/// A planned replacement with the exact before/after bytes, for the API switch which
+/// updates several files and a SQLite row as one operation.
+pub(crate) struct FileEdit {
+    path: PathBuf,
+    before: Option<Vec<u8>>,
+    after: Vec<u8>,
+    written: bool,
+}
+
+impl FileEdit {
+    pub(crate) fn new(path: PathBuf, before: Option<Vec<u8>>, after: Vec<u8>) -> Self {
+        Self {
+            path,
+            before,
+            after,
+            written: false,
+        }
+    }
+
+    pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
+        match fs::read(path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(format!("读取 {} 失败: {err}", path.display())),
+        }
+    }
+
+    pub(crate) fn apply(&mut self) -> Result<bool, String> {
+        if Self::read(&self.path)? != self.before {
+            return Err(format!("{} 已变更，请重试", self.path.display()));
+        }
+        if self.before.as_deref() == Some(self.after.as_slice()) {
+            return Ok(false);
+        }
+        crate::paths::ensure_parent_dir(&self.path)?;
+        write_file_atomically(&self.path, &self.after)?;
+        self.written = true;
+        Ok(true)
+    }
+
+    pub(crate) fn rollback(&self) -> Result<(), String> {
+        if !self.written {
+            return Ok(());
+        }
+        if Self::read(&self.path)?.as_deref() != Some(self.after.as_slice()) {
+            return Err(format!("{} 已被其他进程修改，未覆盖", self.path.display()));
+        }
+        match &self.before {
+            Some(bytes) => write_file_atomically(&self.path, bytes),
+            None => fs::remove_file(&self.path)
+                .map_err(|err| format!("撤销创建 {} 失败: {err}", self.path.display())),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

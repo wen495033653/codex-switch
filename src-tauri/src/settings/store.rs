@@ -14,18 +14,27 @@ use std::sync::Mutex;
 static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn update_settings_value(patch: &Value) -> Result<Value, String> {
+    update_settings_value_checked(patch, |_, _| Ok(()))
+}
+
+pub(crate) fn update_settings_value_checked(
+    patch: &Value,
+    validate: impl FnOnce(&Value, &Value) -> Result<(), String>,
+) -> Result<Value, String> {
     // The lock guards the file, which is replaced atomically; a poisoned lock carries no
     // half-written state.
     let _guard = SETTINGS_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut settings = read_settings_value()?;
+    let current = read_settings_value()?;
+    let mut settings = current.clone();
     let object = settings
         .as_object_mut()
         .ok_or_else(|| "settings 数据结构无效".to_string())?;
     apply_settings_patch(object, patch)?;
 
     let normalized = normalize_settings(&settings);
+    validate(&current, &normalized)?;
     write_settings_value(&normalized)?;
     Ok(normalized)
 }

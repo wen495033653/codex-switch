@@ -24,8 +24,9 @@ pub(crate) use account_builders::{
     account_from_exchange_preserve_usage, account_from_exchange_syncing,
 };
 pub(crate) use api_mode::{
-    get_codex_state_value, read_api_key_from_auth, read_api_key_from_provider_config,
-    restore_api_mode_if_selected, set_api_mode, set_subscription_mode,
+    get_codex_state_value, prepare_api_mode, read_api_key_from_auth,
+    read_api_key_from_provider_config, restore_api_mode_if_selected, set_api_mode,
+    set_api_mode_with_control_account, set_subscription_mode,
 };
 pub(crate) use auth_file::{auth_to_account, read_auth_value, write_account_auth};
 pub(crate) use import_export::{

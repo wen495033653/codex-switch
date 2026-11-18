@@ -1,15 +1,8 @@
 import { useState } from 'react';
 import { API_MODE_ACCOUNT_ID } from '../utils/auth';
-import {
-  buildApiSettingsPayload,
-  getActiveApiProfile,
-  normalizeApiProfiles
-} from '../utils/appState';
 
 export function useModeSwitching({
   activeApiProfileId,
-  apiDraft,
-  apiProfiles,
   applySettings,
   handleRes,
   onUsageStatsRefresh,
@@ -31,26 +24,13 @@ export function useModeSwitching({
     setSavingApiMode(true);
     setSwitching(true);
     try {
-      const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
-      const activeProfile = profiles.find(profile => profile.id === profileId)
-        || getActiveApiProfile({
-          active_api_profile_id: activeApiProfileId,
-          api_profiles: profiles,
-          api_mode: apiDraft
-        });
-
-      const settingsPatch = buildApiSettingsPayload({
-        activeId: activeProfile.id,
-        activeProfile,
-        profiles
-      });
-      const saveRes = await window.api.updateSettings(settingsPatch);
-      applySettings(saveRes);
-
-      const res = await window.api.switchApiMode(activeProfile.id);
+      const res = await window.api.switchApiMode(profileId);
       handleModeSwitchResponse(res);
       if (typeof onUsageStatsRefresh === 'function') onUsageStatsRefresh();
       showIdeReopen(res && res.ide_reopen ? res.ide_reopen : null);
+      if (res?.api_switch_runtime_error) {
+        toastError(new Error(res.api_switch_runtime_error), 'API 配置和账单归属已切换，但远程控制同步失败');
+      }
     } catch (err) {
       toastError(err, '切换 API 模式失败');
     } finally {

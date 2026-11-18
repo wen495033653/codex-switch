@@ -8,6 +8,6 @@ pub(crate) use parse::{
     root_assignment, ConfigSnapshot,
 };
 pub(crate) use write::{
-    format_toml_string, remove_config_values, remove_remote_control_config, remove_table_config,
-    set_config_values, set_table_config, table_bounds,
+    format_toml_string, prepare_api_provider_config, remove_config_values,
+    remove_remote_control_config, remove_table_config, set_config_values, table_bounds,
 };

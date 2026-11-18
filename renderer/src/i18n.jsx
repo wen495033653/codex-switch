@@ -263,6 +263,9 @@ const EN_TRANSLATIONS = {
   '自动判定通过 {passed}/{total}': 'Auto-graded: {passed}/{total} passed',
   '结果来自 {model}': 'Results from {model}',
   '至少保留一个 API': 'Keep at least one API configuration',
+  '请先切换到其他 API 配置，再删除当前配置': 'Switch to another API configuration before deleting the current one.',
+  '请使用切换按钮切换 API 配置': 'Use the switch button to change the active API configuration.',
+  'API 配置和账单归属已切换，但远程控制同步失败': 'The API configuration and billing owner were switched, but remote control did not sync.',
   '删除配置': 'Delete configuration',
   '更多操作': 'More actions',
   '编辑': 'Edit',
@@ -691,6 +694,8 @@ const EN_TRANSLATIONS = {
 const localizeIdeTargets = targets => targets.replace(/ 或 /g, ' or ').replace(/、/g, ', ');
 
 const RUNTIME_PATTERNS = [
+  [/^API 配置和账单归属已切换，但远程控制同步失败：([\s\S]+)$/, (match, language) =>
+    `${translate('API 配置和账单归属已切换，但远程控制同步失败', {}, language)}: ${translateRuntimeText(match[1], language)}`],
   [/^下载中\s+(\d+)%$/, (match, language) => translate('下载中 {progress}%', { progress: match[1] }, language)],
   [/^还有\s+(\d+)\s+个冲突$/, (match, language) => translate('还有 {count} 个冲突', { count: match[1] }, language)],
   [/^已选\s+(\d+)$/, (match, language) => translate('已选 {count}', { count: match[1] }, language)],

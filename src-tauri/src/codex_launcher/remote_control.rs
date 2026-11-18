@@ -6,14 +6,13 @@ use crate::{
         account_login_expired, get_codex_state_value, lookup_store_account,
         mark_account_auth_error, profile_id_from_account, profile_id_from_tokens_value,
         read_api_key_from_auth, read_api_key_from_provider_config, read_auth_value,
-        read_store_value, set_api_mode, set_subscription_mode, write_account_auth,
+        read_store_value, set_api_mode, set_api_mode_with_control_account, set_subscription_mode,
     },
     api_config::API_PROVIDER_ID,
     app_log::{account_label, log_event, log_event_once},
     blocking_task::run_blocking,
     codex_config::{
-        read_root_config, read_table_config, remove_config_values, remove_remote_control_config,
-        remove_table_config, set_config_values, set_table_config,
+        read_root_config, read_table_config, remove_remote_control_config, remove_table_config,
     },
     json_util::string_field,
     paths::{app_data_dir, auth_path},
@@ -244,21 +243,10 @@ fn apply_remote_control_mixed_config(settings: &Value) -> Result<(), String> {
     let account = remote_control_account(&account_id)?;
     let (api_base_url, api_key) = remote_control_api_session_profile_from_settings(settings)?;
 
-    write_account_auth(&account)?;
-    set_config_values(vec![
-        ("model_provider", API_PROVIDER_ID.to_string()),
-        ("cli_auth_credentials_store", "file".to_string()),
-    ])?;
-    remove_config_values(&[
-        "preferred_auth_method",
-        "forced_login_method",
-        "openai_base_url",
-    ])?;
-    set_table_config(
-        &format!("model_providers.{API_PROVIDER_ID}"),
+    set_api_mode_with_control_account(
+        &account,
         remote_control_mixed_provider_config(&api_base_url, &api_key),
     )?;
-    remove_remote_control_config()?;
     log_event(
         "codex_remote_control_runtime_applied",
         json!({

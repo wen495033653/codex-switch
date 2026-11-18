@@ -1,5 +1,5 @@
 use super::{
-    io::update_config_lines,
+    io::{prepare_config_line_edit, update_config_lines},
     parse::{find_root_table_index, root_assignment, table_header},
 };
 use serde_json::Value;
@@ -74,10 +74,6 @@ fn with_table(lines: &[String], table_name: &str, values: Vec<(&str, Value)>) ->
     table_lines.push(String::new());
     lines.splice(insert_at..insert_at, table_lines);
     lines
-}
-
-pub(crate) fn set_table_config(table_name: &str, values: Vec<(&str, Value)>) -> Result<(), String> {
-    update_config_lines(|lines| with_table(lines, table_name, values)).map(|_| ())
 }
 
 pub(crate) fn remove_table_config(table_name: &str) -> Result<(), String> {
@@ -188,6 +184,42 @@ fn without_root_values(lines: &[String], keys: &[&str]) -> Vec<String> {
 
 pub(crate) fn remove_config_values(keys: &[&str]) -> Result<(), String> {
     update_config_lines(|lines| without_root_values(lines, keys)).map(|_| ())
+}
+
+pub(crate) fn prepare_api_provider_config(
+    provider: &str,
+    values: Vec<(&str, Value)>,
+    remove_legacy_remote_control: bool,
+) -> Result<crate::atomic_file::FileEdit, String> {
+    prepare_config_line_edit(|lines| {
+        let lines = without_root_values(
+            lines,
+            &[
+                "preferred_auth_method",
+                "forced_login_method",
+                "openai_base_url",
+            ],
+        );
+        let lines = upsert_root_config_entries(
+            &lines,
+            vec![
+                (
+                    "model_provider".to_string(),
+                    Value::String(provider.to_string()),
+                ),
+                (
+                    "cli_auth_credentials_store".to_string(),
+                    Value::String("file".to_string()),
+                ),
+            ],
+        );
+        let lines = with_table(&lines, &format!("model_providers.{provider}"), values);
+        if remove_legacy_remote_control {
+            remove_table_config_entries(&lines, FEATURES_TABLE, REMOTE_CONTROL_CONFIG_KEYS)
+        } else {
+            lines
+        }
+    })
 }
 
 #[cfg(test)]

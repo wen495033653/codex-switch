@@ -247,9 +247,21 @@ function MainApp() {
   };
 
   const {
+    apiModeActive,
+    currentAccountId,
+    currentModeDetail,
+    currentModeLabel,
+    maskAccountName,
+    subscriptionModeActive
+  } = useCurrentModeSummary({
+    codexState,
+    settings,
+    store
+  });
+
+  const {
     activeApiProfileId,
     addApiProfile,
-    apiDraft,
     apiProfileDeleteModal,
     apiProfileModal,
     apiProfiles,
@@ -265,6 +277,7 @@ function MainApp() {
     setApiProfiles,
     updateApiProfileModalDraft
   } = useApiModeDraft({
+    apiModeActive,
     applySettings,
     toastError
   });
@@ -284,19 +297,6 @@ function MainApp() {
     activeId: store.active_id,
     filter,
     search
-  });
-
-  const {
-    apiModeActive,
-    currentAccountId,
-    currentModeDetail,
-    currentModeLabel,
-    maskAccountName,
-    subscriptionModeActive
-  } = useCurrentModeSummary({
-    codexState,
-    settings,
-    store
   });
 
   const {
@@ -334,8 +334,6 @@ function MainApp() {
     switchToApiModeFromPage
   } = useModeSwitching({
     activeApiProfileId,
-    apiDraft,
-    apiProfiles,
     applySettings,
     handleRes,
     onUsageStatsRefresh: () => refreshUsageStats(),

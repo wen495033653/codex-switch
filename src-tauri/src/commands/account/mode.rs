@@ -2,8 +2,8 @@ use crate::{
     accounts::{
         account_from_exchange_syncing, add_account_to_store, auth_to_account,
         exchange_refresh_token, find_store_account, get_codex_state_value, lookup_store_account,
-        mark_store_account_used, profile_id_from_account, read_api_key_from_auth,
-        read_api_key_from_provider_config, read_auth_value, remove_store_account, set_api_mode,
+        mark_store_account_used, prepare_api_mode, profile_id_from_account, read_api_key_from_auth,
+        read_api_key_from_provider_config, read_auth_value, read_store_value, remove_store_account,
         set_subscription_mode, store_payload, store_payload_from_store, sync_auth_file_if_active,
         write_account_auth,
     },
@@ -11,9 +11,11 @@ use crate::{
         attach_ide_reopen, build_ide_reopen_payload, stop_codex_api_quota_hooks,
         sync_remote_control_runtime_for_current_settings, IdeRuntime,
     },
+    commands::lock_api_profile_operation,
     json_util::{bool_field, raw_string_field, string_field},
     quota::{refresh_active_account_usage_in_background, sync_account_usage_in_background},
-    settings::{default_api_mode, read_settings_value, update_settings_value},
+    settings::{read_settings_value, update_settings_value, update_settings_value_checked},
+    usage_stats::with_api_switch_attribution,
 };
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -228,69 +230,144 @@ pub(super) fn switch_api_mode_impl(
     runtime: &IdeRuntime,
     profile_id: Option<String>,
 ) -> Result<Value, String> {
-    let requested_profile_id = profile_id.unwrap_or_default().trim().to_string();
-    let mut settings = read_settings_value()?;
-    if !requested_profile_id.is_empty() {
-        let exists = settings
-            .get("api_profiles")
-            .and_then(Value::as_array)
-            .is_some_and(|profiles| {
-                profiles
-                    .iter()
-                    .any(|profile| string_field(profile, "id") == requested_profile_id)
-            });
-        if !exists {
-            return Err("API 配置不存在".to_string());
-        }
-        settings = update_settings_value(&json!({
-            "active_api_profile_id": requested_profile_id
-        }))?;
-    }
-    let profile = settings
-        .get("api_mode")
-        .cloned()
-        .unwrap_or_else(default_api_mode);
-    if string_field(&profile, "base_url").is_empty() {
-        return Err("API Base URL 不能为空".to_string());
-    }
-    let active_profile_id = string_field(&profile, "id");
-    set_api_mode(&profile)?;
-    let state = get_codex_state_value();
-    if raw_string_field(&state, "mode") != "api" {
-        return Err("切换失败：Codex 未进入 API 模式".to_string());
-    }
-    let settings_before_sync = update_settings_value(&json!({ "codex_active_mode": "api" }))?;
+    let _guard = lock_api_profile_operation()?;
+    let (active_profile_id, store, settings_before_sync) =
+        apply_api_profile_switch(profile_id.as_deref()).inspect_err(|error| {
+            crate::app_log::log_event(
+                "api_mode_switch_error",
+                json!({
+                    "profileId": profile_id.as_deref().map(crate::app_log::account_label), "error": error
+                }),
+            );
+        })?;
+
+    // At this point the plain provider and its bookkeeping are committed. Remote control uses
+    // the same provider; if its separate sync fails, report the failure without hiding the
+    // applied API profile or pretending that it was never switched.
+    let mut settings = settings_before_sync.clone();
+    let mut sync_errors = Vec::new();
     if bool_field(&settings_before_sync, "codex_remote_control_enabled") {
-        sync_remote_control_runtime_for_current_settings("switch_api_mode")?;
+        if let Err(error) = sync_remote_control_runtime_for_current_settings("switch_api_mode") {
+            sync_errors.push(error);
+        }
+        match read_settings_value() {
+            Ok(current) => settings = current,
+            Err(error) => sync_errors.push(error),
+        }
     }
-    let settings = read_settings_value()?;
     let fallback_applied =
         missing_remote_control_account_fallback_applied(&settings_before_sync, &settings);
-    if let Err(err) =
-        crate::usage_stats::record_attribution("api_profile", &active_profile_id, "api")
-    {
-        log_attribution_error("api_profile", err);
-    }
     let session_sync_enabled = codex_session_sync_enabled(&settings);
     let ide_reopen = build_ide_reopen_payload(
         runtime,
-        active_profile_id.clone(),
+        active_profile_id,
         true,
         session_sync_enabled.then(|| "api".to_string()),
     );
-    let message = if fallback_applied && session_sync_enabled && ide_reopen.is_some() {
-        "远程控制账号不存在，已关闭远程控制并切换到 API 模式；重新打开 IDE 前会同步会话".to_string()
+    let message = if !sync_errors.is_empty() {
+        "API 配置和账单归属已切换，但远程控制同步失败"
+    } else if fallback_applied && session_sync_enabled && ide_reopen.is_some() {
+        "远程控制账号不存在，已关闭远程控制并切换到 API 模式；重新打开 IDE 前会同步会话"
     } else if fallback_applied {
-        "远程控制账号不存在，已关闭远程控制并切换到 API 模式".to_string()
+        "远程控制账号不存在，已关闭远程控制并切换到 API 模式"
     } else if session_sync_enabled && ide_reopen.is_some() {
-        "已切换到 API 模式；重新打开 IDE 前会同步会话".to_string()
+        "已切换到 API 模式；重新打开 IDE 前会同步会话"
     } else {
-        "已切换到 API 模式".to_string()
+        "已切换到 API 模式"
     };
-    Ok(attach_settings(
-        attach_ide_reopen(store_payload(Some(&message))?, ide_reopen),
+    let mut response = attach_settings(
+        attach_ide_reopen(store_payload_from_store(store, Some(message)), ide_reopen),
         settings,
-    ))
+    );
+    if !sync_errors.is_empty() {
+        let error = sync_errors.join("；");
+        let control_account =
+            string_field(&settings_before_sync, "codex_remote_control_account_id");
+        let log_error = if control_account.is_empty() {
+            error.clone()
+        } else {
+            error.replace(
+                &control_account,
+                &crate::app_log::account_label(&control_account),
+            )
+        };
+        crate::app_log::log_event(
+            "codex_remote_control_runtime_sync_error",
+            json!({ "context": "switch_api_mode", "handling": "api_profile_applied", "error": log_error }),
+        );
+        response["api_switch_runtime_error"] = Value::String(format!("{message}：{error}"));
+    }
+    Ok(response)
+}
+
+fn api_profile_for_switch<'a>(
+    settings: &'a Value,
+    requested_id: Option<&str>,
+) -> Result<&'a Value, String> {
+    let id = requested_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| string_field(settings, "active_api_profile_id"));
+    let profile = settings
+        .get("api_profiles")
+        .and_then(Value::as_array)
+        .and_then(|profiles| {
+            profiles
+                .iter()
+                .find(|profile| string_field(profile, "id") == id)
+        })
+        .ok_or_else(|| "API 配置不存在".to_string())?;
+    if string_field(profile, "base_url").is_empty() {
+        return Err("API Base URL 不能为空".to_string());
+    }
+    if string_field(profile, "api_key").is_empty() {
+        return Err("API Key 不能为空".to_string());
+    }
+    Ok(profile)
+}
+
+fn apply_api_profile_switch(requested_id: Option<&str>) -> Result<(String, Value, Value), String> {
+    let before = read_settings_value()?;
+    let profile = api_profile_for_switch(&before, requested_id)?;
+    let profile_id = string_field(profile, "id");
+    let edit = prepare_api_mode(profile)?;
+    let store = read_store_value()?;
+    let settings = with_api_switch_attribution(&profile_id, |attribution| {
+        edit.apply_then(|| {
+            let state = get_codex_state_value();
+            if string_field(&state, "mode") != "api"
+                || string_field(&state, "openai_base_url") != string_field(profile, "base_url")
+            {
+                return Err("切换失败：Codex 未进入 API 模式".to_string());
+            }
+            let applied = update_settings_value(&json!({
+                "active_api_profile_id": profile_id, "codex_active_mode": "api"
+            }))?;
+            if let Err(error) = attribution.commit() {
+                let restoration = update_settings_value_checked(
+                    &json!({
+                        "active_api_profile_id": before["active_api_profile_id"],
+                        "codex_active_mode": before["codex_active_mode"]
+                    }),
+                    |current, _| {
+                        if current["active_api_profile_id"] != applied["active_api_profile_id"]
+                            || current["codex_active_mode"] != applied["codex_active_mode"]
+                        {
+                            return Err("当前选择已被其他操作修改，未覆盖".to_string());
+                        }
+                        Ok(())
+                    },
+                );
+                return Err(match restoration {
+                    Ok(_) => error,
+                    Err(rollback_error) => format!("{error}；恢复 API 选择失败：{rollback_error}"),
+                });
+            }
+            Ok(applied)
+        })
+    })?;
+    Ok((profile_id, store, settings))
 }
 
 #[cfg(test)]
@@ -330,5 +407,156 @@ mod tests {
             |_| Ok(Some(selected_account))
         )
         .unwrap());
+    }
+
+    #[test]
+    fn explicit_switch_uses_only_the_requested_complete_profile() {
+        let settings = json!({
+            "active_api_profile_id": "a",
+            "api_profiles": [
+                { "id": "a", "base_url": "https://a.example/v1", "api_key": "fixture-a" },
+                { "id": "b", "base_url": "https://b.example/v1", "api_key": "fixture-b" },
+                { "id": "without-key", "base_url": "https://bad.example/v1" },
+                { "id": "without-url", "api_key": "fixture-bad" }
+            ]
+        });
+        assert_eq!(api_profile_for_switch(&settings, None).unwrap()["id"], "a");
+        assert_eq!(
+            api_profile_for_switch(&settings, Some("b")).unwrap()["id"],
+            "b"
+        );
+        for (id, error) in [
+            ("removed", "API 配置不存在"),
+            ("without-key", "API Key 不能为空"),
+            ("without-url", "API Base URL 不能为空"),
+        ] {
+            assert_eq!(
+                api_profile_for_switch(&settings, Some(id)).unwrap_err(),
+                error
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "writes fixture files; run with CODEX_SWITCH_API_TEST_ROOT, HOME, USERPROFILE and APPDATA isolated"]
+    fn isolated_api_switch_keeps_files_and_usage_attribution_in_sync() {
+        use crate::{
+            commands::update_command_settings,
+            paths::{app_data_dir, auth_path, config_path, home_dir},
+        };
+        use rusqlite::Connection;
+        use std::{env, fs, path::PathBuf};
+
+        let root = PathBuf::from(env::var_os("CODEX_SWITCH_API_TEST_ROOT").unwrap());
+        assert!(root.is_absolute() && root.is_dir());
+        assert_eq!(home_dir().unwrap(), root.join("home"));
+        let app_data = app_data_dir().unwrap();
+        assert!(app_data.starts_with(&root) && app_data != root);
+        assert!(!app_data.exists());
+        assert!(!auth_path().unwrap().exists());
+        assert!(!config_path().unwrap().exists());
+
+        let a = json!({ "id": "a", "name": "A", "base_url": "https://a.example/v1", "api_key": "fixture-a" });
+        let b = json!({ "id": "b", "name": "B", "base_url": "https://b.example/v1", "api_key": "fixture-b" });
+        update_settings_value(&json!({ "api_profiles": [&a, &b] })).unwrap();
+        apply_api_profile_switch(Some("a")).unwrap();
+        let auth_before = fs::read(auth_path().unwrap()).unwrap();
+        let config_before = fs::read(config_path().unwrap()).unwrap();
+        let conn = Connection::open(app_data.join("usage-stats.sqlite")).unwrap();
+        let owners = || {
+            conn.prepare("SELECT owner_id FROM attribution WHERE provider = 'api' ORDER BY id")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let assert_unchanged = || {
+            assert_eq!(owners(), ["a"]);
+            assert_eq!(read_settings_value().unwrap()["active_api_profile_id"], "a");
+            assert_eq!(fs::read(auth_path().unwrap()).unwrap(), auth_before);
+            assert_eq!(fs::read(config_path().unwrap()).unwrap(), config_before);
+        };
+
+        let deleting_a = update_command_settings(&json!({ "api_profiles": [&b] })).unwrap_err();
+        assert!(deleting_a.contains("先切换"));
+        assert!(update_command_settings(&json!({ "active_api_profile_id": "b" })).is_err());
+        assert!(apply_api_profile_switch(Some("missing")).is_err());
+        assert_eq!(
+            update_command_settings(&json!({ "api_profiles": [&a] })).unwrap()["api_profiles"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        update_command_settings(&json!({ "api_profiles": [&a, &b] })).unwrap();
+        let mut edited_b = b.clone();
+        edited_b["api_key"] = json!("fixture-edited-b");
+        update_command_settings(&json!({ "api_profiles": [&a, &edited_b] })).unwrap();
+        assert_unchanged();
+
+        conn.execute_batch("CREATE TRIGGER reject_owner BEFORE INSERT ON attribution WHEN NEW.owner_id = 'b' BEGIN SELECT RAISE(ABORT, 'fixture reject attribution'); END;").unwrap();
+        assert!(apply_api_profile_switch(Some("b"))
+            .unwrap_err()
+            .contains("fixture reject attribution"));
+        assert_unchanged();
+        conn.execute_batch("DROP TRIGGER reject_owner;").unwrap();
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let deny_replace = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(auth_path().unwrap())
+                .unwrap();
+            assert!(apply_api_profile_switch(Some("b"))
+                .unwrap_err()
+                .contains("auth.json"));
+            drop(deny_replace);
+            assert_unchanged();
+
+            let deny_replace = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(app_data.join("settings.json"))
+                .unwrap();
+            assert!(apply_api_profile_switch(Some("b"))
+                .unwrap_err()
+                .contains("settings.json"));
+            drop(deny_replace);
+            assert_unchanged();
+        }
+
+        let (_, _, applied) = apply_api_profile_switch(Some("b")).unwrap();
+        assert_eq!(applied["active_api_profile_id"], "b");
+        assert_eq!(
+            read_auth_value().unwrap()["OPENAI_API_KEY"],
+            "fixture-edited-b"
+        );
+        assert_eq!(
+            get_codex_state_value()["openai_base_url"],
+            "https://b.example/v1"
+        );
+        assert_eq!(owners(), ["a", "b"]);
+        let removed = update_command_settings(&json!({ "api_profiles": [&edited_b] })).unwrap();
+        assert_eq!(removed["active_api_profile_id"], "b");
+        edited_b["api_key"] = json!("fixture-new-b");
+        update_command_settings(&json!({ "api_profiles": [&edited_b] })).unwrap();
+        assert_eq!(
+            read_auth_value().unwrap()["OPENAI_API_KEY"],
+            "fixture-new-b"
+        );
+        assert_eq!(owners(), ["a", "b"]);
+
+        crate::accounts::write_account_auth(&json!({ "tokens": { "account_id": "fixture" } }))
+            .unwrap();
+        set_subscription_mode().unwrap();
+        update_settings_value(&json!({ "codex_active_mode": "chatgpt" })).unwrap();
+        let removed_current_default =
+            update_command_settings(&json!({ "api_profiles": [&a] })).unwrap();
+        assert_eq!(removed_current_default["active_api_profile_id"], "a");
+        assert_eq!(get_codex_state_value()["mode"], "chatgpt");
+        assert_eq!(owners(), ["a", "b"]);
     }
 }

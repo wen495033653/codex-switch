@@ -1,5 +1,5 @@
 use crate::{
-    atomic_file::write_file_atomically,
+    atomic_file::{write_file_atomically, FileEdit},
     paths::{config_path, ensure_parent_dir},
 };
 use std::{fs, io::ErrorKind, path::PathBuf};
@@ -35,6 +35,26 @@ fn read_config_text() -> Result<ConfigText, String> {
 
 pub(super) fn read_config_lines() -> Result<Vec<String>, String> {
     Ok(read_config_text()?.lines)
+}
+
+pub(super) fn prepare_config_line_edit(
+    edit: impl FnOnce(&[String]) -> Vec<String>,
+) -> Result<FileEdit, String> {
+    let path = config_path()?;
+    let before = FileEdit::read(&path)?;
+    let raw = std::str::from_utf8(before.as_deref().unwrap_or_default())
+        .map_err(|err| format!("读取 config.toml 失败: {err}"))?;
+    let lines: Vec<String> = raw.lines().map(str::to_owned).collect();
+    let next = edit(&lines);
+    let after = if next == lines {
+        raw.as_bytes().to_vec()
+    } else {
+        let line_ending = if raw.contains("\r\n") { "\r\n" } else { "\n" };
+        let mut updated = next.join(line_ending);
+        updated.push_str(line_ending);
+        updated.into_bytes()
+    };
+    Ok(FileEdit::new(path, before, after))
 }
 
 /// Applies `edit` to config.toml and writes the result only when a line changed, with the line

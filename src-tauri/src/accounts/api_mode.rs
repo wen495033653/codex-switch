@@ -1,18 +1,20 @@
 use super::{
-    auth_file::{read_auth_value_if_exists, write_api_auth},
+    auth_file::{account_auth_value, api_auth_value, read_auth_value_if_exists},
     store::profile_id_from_tokens_value,
 };
 use crate::{
     api_config::normalize_api_base_url,
     app_log::log_event_once,
+    atomic_file::FileEdit,
     json_util::string_field,
+    paths::auth_path,
     settings::{default_api_mode, read_settings_value},
 };
 use crate::{
     api_config::API_PROVIDER_ID,
     codex_config::{
-        read_config_snapshot, remove_config_values, remove_table_config, set_config_values,
-        set_table_config, ConfigSnapshot,
+        prepare_api_provider_config, read_config_snapshot, remove_config_values,
+        remove_table_config, set_config_values, ConfigSnapshot,
     },
     json_util::raw_string_field,
 };
@@ -124,24 +126,75 @@ fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Valu
     ]
 }
 
-pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
+pub(crate) struct ApiProviderEdit {
+    auth: FileEdit,
+    config: FileEdit,
+}
+
+impl ApiProviderEdit {
+    /// Undo just the writes made by this edit if applying the runtime or the caller's
+    /// settings/attribution commit fails.
+    pub(crate) fn apply_then<T>(
+        mut self,
+        finish: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let result = (|| {
+            self.config.apply()?;
+            self.auth.apply()?;
+            finish()
+        })();
+        result.map_err(|error| {
+            let failures: Vec<_> = [self.auth.rollback(), self.config.rollback()]
+                .into_iter()
+                .filter_map(Result::err)
+                .collect();
+            if failures.is_empty() {
+                error
+            } else {
+                format!("{error}；恢复 Codex 配置失败：{}", failures.join("；"))
+            }
+        })
+    }
+}
+
+fn prepare_api_provider_edit(
+    auth: &Value,
+    provider_config: Vec<(&str, Value)>,
+    remove_legacy_remote_control: bool,
+) -> Result<ApiProviderEdit, String> {
+    let path = auth_path()?;
+    let before = FileEdit::read(&path)?;
+    let after =
+        serde_json::to_vec_pretty(auth).map_err(|err| format!("序列化 auth.json 失败: {err}"))?;
+    Ok(ApiProviderEdit {
+        auth: FileEdit::new(path, before, after),
+        config: prepare_api_provider_config(
+            API_PROVIDER_ID,
+            provider_config,
+            remove_legacy_remote_control,
+        )?,
+    })
+}
+
+pub(crate) fn prepare_api_mode(profile: &Value) -> Result<ApiProviderEdit, String> {
     let profile = ApiModeProfile::from_value(profile)?;
-    let api_key = profile.api_key_or_auth_file().trim().to_string();
-    write_api_auth(&api_key)?;
-    set_config_values(vec![
-        ("model_provider", API_PROVIDER_ID.to_string()),
-        ("cli_auth_credentials_store", "file".to_string()),
-    ])?;
-    remove_config_values(&[
-        "preferred_auth_method",
-        "forced_login_method",
-        "openai_base_url",
-    ])?;
-    set_table_config(
-        &format!("model_providers.{API_PROVIDER_ID}"),
+    prepare_api_provider_edit(
+        &api_auth_value(&profile.api_key_or_auth_file())?,
         api_mode_provider_config(&profile),
-    )?;
-    Ok(())
+        false,
+    )
+}
+
+pub(crate) fn set_api_mode(profile: &Value) -> Result<(), String> {
+    prepare_api_mode(profile)?.apply_then(|| Ok(()))
+}
+
+pub(crate) fn set_api_mode_with_control_account(
+    account: &Value,
+    provider_config: Vec<(&str, Value)>,
+) -> Result<(), String> {
+    prepare_api_provider_edit(&account_auth_value(account)?, provider_config, true)?
+        .apply_then(|| Ok(()))
 }
 
 pub(crate) fn restore_api_mode_if_selected() -> Result<bool, String> {

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   buildApiProfilePayload,
-  buildApiSettingsPayload,
+  ACTIVE_API_PROFILE_DELETE_MESSAGE,
   DEFAULT_SETTINGS,
   normalizeApiBaseUrlInput,
   normalizeApiProfiles,
@@ -40,6 +40,7 @@ function createEmptyApiProfileDeleteModal() {
 }
 
 export function useApiModeDraft({
+  apiModeActive,
   applySettings,
   toastError
 }) {
@@ -50,13 +51,8 @@ export function useApiModeDraft({
   const [apiProfileDeleteModal, setApiProfileDeleteModal] = useState(createEmptyApiProfileDeleteModal);
   const [savingApiProfile, setSavingApiProfile] = useState(false);
 
-  const persistApiSettings = async ({ activeId, activeProfile, profiles }) => {
-    const patch = buildApiSettingsPayload({
-      activeId,
-      activeProfile,
-      profiles
-    });
-    const res = await window.api.updateSettings(patch);
+  const persistApiProfiles = async profiles => {
+    const res = await window.api.updateSettings({ api_profiles: profiles });
     applySettings(res);
     return res;
   };
@@ -151,17 +147,10 @@ export function useApiModeDraft({
 
     const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
     const nextProfiles = upsertApiProfile(profiles, profile);
-    const nextActive = profile.id === activeApiProfileId
-      ? profile
-      : getProfileById(nextProfiles, activeApiProfileId);
 
     setSavingApiProfile(true);
     try {
-      await persistApiSettings({
-        activeId: nextActive.id,
-        activeProfile: nextActive,
-        profiles: nextProfiles
-      });
+      await persistApiProfiles(nextProfiles);
       closeApiProfileModal();
     } catch (err) {
       setApiProfileModal(prev => ({
@@ -174,6 +163,11 @@ export function useApiModeDraft({
   };
 
   const removeApiProfile = async (id) => {
+    if (apiModeActive && id === activeApiProfileId) {
+      closeDeleteApiProfileModal();
+      toastError(new Error(ACTIVE_API_PROFILE_DELETE_MESSAGE), '删除 API 配置失败');
+      return;
+    }
     const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
     if (profiles.length <= 1) {
       closeDeleteApiProfileModal();
@@ -181,15 +175,10 @@ export function useApiModeDraft({
     }
 
     const nextProfiles = profiles.filter(profile => profile.id !== id);
-    const nextActive = getProfileById(nextProfiles, activeApiProfileId);
 
     setApiProfileDeleteModal(prev => ({ ...prev, loading: true }));
     try {
-      await persistApiSettings({
-        activeId: nextActive.id,
-        activeProfile: nextActive,
-        profiles: nextProfiles
-      });
+      await persistApiProfiles(nextProfiles);
       setApiProfileModal(prev => (
         prev.visible && prev.profileId === id
           ? createEmptyApiProfileModal()
@@ -203,8 +192,12 @@ export function useApiModeDraft({
   };
 
   const openDeleteApiProfileModal = (id) => {
+    if (apiModeActive && id === activeApiProfileId) {
+      toastError(new Error(ACTIVE_API_PROFILE_DELETE_MESSAGE), '删除 API 配置失败');
+      return;
+    }
     const profiles = normalizeApiProfiles(apiProfiles, apiDraft);
-    const profile = getProfileById(profiles, id);
+    const profile = profiles.find(item => item.id === id);
     if (!profile || profiles.length <= 1) return;
     setApiProfileDeleteModal({
       visible: true,
@@ -226,7 +219,6 @@ export function useApiModeDraft({
   return {
     activeApiProfileId,
     addApiProfile,
-    apiDraft,
     apiProfileDeleteModal,
     apiProfileModal,
     apiProfiles,
