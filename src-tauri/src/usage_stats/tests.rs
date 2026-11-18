@@ -992,6 +992,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &short,
             ServiceTier::Standard,
             OWNER_TYPE_API_PROFILE,
+            0,
         ),
         0.8 + 0.0288 + 0.02,
         PRICE_LABEL_STANDARD_SHORT,
@@ -1003,6 +1004,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &long,
             ServiceTier::Standard,
             OWNER_TYPE_API_PROFILE,
+            0,
         ),
         272_001.0 * 8.0 / 1e6,
         PRICE_LABEL_STANDARD_LONG,
@@ -1015,6 +1017,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &long,
             ServiceTier::Standard,
             OWNER_TYPE_SUBSCRIPTION,
+            0,
         ),
         272_001.0 * 4.0 / 1e6,
         PRICE_LABEL_STANDARD_SHORT,
@@ -1025,6 +1028,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &usage(1_000_000, 0, 0, 0),
             ServiceTier::Fast,
             OWNER_TYPE_SUBSCRIPTION,
+            0,
         ),
         20.0,
         PRICE_LABEL_FAST_SHORT,
@@ -1035,6 +1039,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &long,
             ServiceTier::Standard,
             OWNER_TYPE_UNATTRIBUTED,
+            0,
         ),
         272_001.0 * 8.0 / 1e6,
         PRICE_LABEL_STANDARD_LONG,
@@ -1045,6 +1050,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &usage(1_000_000, 0, 0, 0),
             ServiceTier::Fast,
             OWNER_TYPE_API_PROFILE,
+            0,
         ),
         40.0,
         PRICE_LABEL_FAST_LONG,
@@ -1055,6 +1061,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &usage(100, 0, 0, 10),
             ServiceTier::Fast,
             OWNER_TYPE_API_PROFILE,
+            0,
         ),
         (100.0 * 20.0 + 10.0 * 100.0) / 1e6,
         PRICE_LABEL_FAST_SHORT,
@@ -1066,6 +1073,7 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &usage(1_000, 200, 300, 0),
             ServiceTier::Standard,
             OWNER_TYPE_API_PROFILE,
+            0,
         ),
         (500.0 * 2.0 + 200.0 * 0.2 + 300.0 * 2.5) / 1e6,
         PRICE_LABEL_STANDARD_SHORT,
@@ -1077,10 +1085,106 @@ fn request_cost_uses_the_tier_and_this_requests_context_length() {
             &long,
             ServiceTier::Standard,
             OWNER_TYPE_API_PROFILE,
+            0,
         ),
         272_001.0 * 0.75 / 1e6,
         PRICE_LABEL_STANDARD_SHORT,
     );
+}
+
+#[test]
+fn new_model_prices_match_openai_standard_and_fast_rates() {
+    // USD per million: input, cached input, 30-minute cache write, output.
+    let cases = [
+        (
+            "gpt-6.2-astra",
+            [
+                [8.0, 0.4, 10.0, 40.0],
+                [16.0, 0.8, 20.0, 60.0],
+                [16.0, 0.8, 20.0, 80.0],
+                [32.0, 1.6, 40.0, 120.0],
+            ],
+        ),
+        (
+            "gpt-6.2-sol",
+            [
+                [2.0, 0.1, 2.5, 10.0],
+                [4.0, 0.2, 5.0, 15.0],
+                [4.0, 0.2, 5.0, 20.0],
+                [8.0, 0.4, 10.0, 30.0],
+            ],
+        ),
+        (
+            "gpt-6.1-terra",
+            [
+                [1.0, 0.05, 1.25, 5.0],
+                [2.0, 0.1, 2.5, 7.5],
+                [2.0, 0.1, 2.5, 10.0],
+                [4.0, 0.2, 5.0, 15.0],
+            ],
+        ),
+    ];
+    let forms = [
+        (ServiceTier::Standard, 272_000, PRICE_LABEL_STANDARD_SHORT),
+        (ServiceTier::Standard, 272_001, PRICE_LABEL_STANDARD_LONG),
+        (ServiceTier::Fast, 272_000, PRICE_LABEL_FAST_SHORT),
+        (ServiceTier::Fast, 272_001, PRICE_LABEL_FAST_LONG),
+    ];
+    for (model, rates) in cases {
+        for ((tier, input, label), [fresh, cached, write, output]) in forms.into_iter().zip(rates) {
+            let cost = estimate_request_cost(
+                model,
+                &usage(input, 100_000, 20_000, 10_000),
+                tier,
+                OWNER_TYPE_API_PROFILE,
+                0,
+            );
+            assert_cost(
+                &cost,
+                ((input - 120_000) as f64 * fresh
+                    + 100_000.0 * cached
+                    + 20_000.0 * write
+                    + 10_000.0 * output)
+                    / 1e6,
+                label,
+            );
+        }
+    }
+    // ChatGPT sign-in: a long request is still priced at short-context rates, and a cache
+    // write is an ordinary non-cached input token.
+    let subscription = estimate_request_cost(
+        "gpt-6.2-astra",
+        &usage(320_000, 100_000, 20_000, 10_000),
+        ServiceTier::Standard,
+        OWNER_TYPE_SUBSCRIPTION,
+        0,
+    );
+    assert_cost(&subscription, 2.2, PRICE_LABEL_STANDARD_SHORT);
+    assert_eq!(subscription.prices.unwrap().cache_write, Some(8.0));
+}
+
+#[test]
+fn auto_review_waiver_requires_chatgpt_sign_in_and_known_effective_date() {
+    let usage = usage(50, 10, 3, 5);
+    let cutoff = parse_rfc3339_seconds("2026-10-07T00:00:00Z").unwrap();
+    let estimate = |owner, when| {
+        estimate_request_cost(AUTO_REVIEW_MODEL, &usage, ServiceTier::Other, owner, when)
+    };
+    assert_cost(
+        &estimate(OWNER_TYPE_SUBSCRIPTION, cutoff),
+        0.0,
+        PRICE_LABEL_AUTO_REVIEW_FREE,
+    );
+    for (owner, when) in [
+        (OWNER_TYPE_SUBSCRIPTION, cutoff - 1),
+        (OWNER_TYPE_API_PROFILE, cutoff),
+        (OWNER_TYPE_UNATTRIBUTED, cutoff),
+    ] {
+        assert_eq!(
+            estimate(owner, when).price_label,
+            UNPRICED_MISSING_MODEL_PRICE
+        );
+    }
 }
 
 #[test]
@@ -1113,7 +1217,7 @@ fn missing_prices_leave_the_request_unpriced_with_the_reason() {
         ),
     ];
     for (model, usage, tier, reason) in cases {
-        let cost = estimate_request_cost(model, &usage, tier, OWNER_TYPE_API_PROFILE);
+        let cost = estimate_request_cost(model, &usage, tier, OWNER_TYPE_API_PROFILE, 0);
         assert_eq!(
             cost,
             EstimatedCost {
@@ -1267,6 +1371,7 @@ fn the_bill_lists_each_response_with_what_it_was_charged() {
         },
         ServiceTier::Fast,
         OWNER_TYPE_SUBSCRIPTION,
+        0,
     );
     assert_eq!(long_cost.price_label, PRICE_LABEL_FAST_SHORT);
     let long = &all["records"][3];
@@ -1282,12 +1387,12 @@ fn the_bill_lists_each_response_with_what_it_was_charged() {
         .collect::<Vec<_>>();
     assert_eq!(kinds, ["input", "cached_input", "cache_write", "output"]);
     // 300K input on a subscription is still Fast mode at the short-context rate:
-    // gpt-6.1-sol $4 / $0.20 / $5 / $20 per 1M.
+    // gpt-6.1-sol $4 / $0.20 / $4 / $20 per 1M (no cache-write premium).
     let prices = charges
         .iter()
         .map(|charge| charge["price_per_million"].as_f64().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(prices, [4.0, 0.2, 5.0, 20.0]);
+    assert_eq!(prices, [4.0, 0.2, 4.0, 20.0]);
     assert_eq!(charges[0]["tokens"], 100_000);
     assert_eq!(charges[1]["tokens"], 200_000);
     let charged = charges
@@ -1394,6 +1499,7 @@ fn prices_are_backfilled_only_where_they_reproduce_the_stored_cost() {
         &matching,
         ServiceTier::Standard,
         OWNER_TYPE_SUBSCRIPTION,
+        0,
     );
     {
         let connection = Connection::open(&db_path).unwrap();
@@ -1608,6 +1714,7 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
             usage,
             ServiceTier::Fast,
             OWNER_TYPE_SUBSCRIPTION,
+            0,
         )
         .cost_usd
         .unwrap()
@@ -1680,6 +1787,102 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
     // Checked once: the next refresh reads nothing again and changes nothing.
     let again = stats(&db_path, &codex_home, "2026-06-15T03:01:00Z");
     assert_eq!(window(&again, "subscriptions", "sub-a", "all"), all);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn historical_free_auto_reviews_are_priced_without_rollouts() {
+    let root = temp_root("auto-review-waiver");
+    let db_path = root.join("usage.sqlite");
+    let codex_home = root.join("codex");
+    let now = "2026-11-18T00:00:00Z";
+    let cutoff = parse_rfc3339_seconds("2026-10-07T00:00:00Z").unwrap();
+    {
+        let mut connection = open_usage_connection(&db_path, T0).unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute(
+                "INSERT INTO meta VALUES ('unpriced_records_checked_for', '2026-10-17')",
+                [],
+            )
+            .unwrap();
+        for (response_id, owner_type, timestamp_seconds) in [
+            ("waived", OWNER_TYPE_SUBSCRIPTION, cutoff),
+            ("before", OWNER_TYPE_SUBSCRIPTION, cutoff - 1),
+            ("api", OWNER_TYPE_API_PROFILE, cutoff),
+            ("legacy:unknown", OWNER_TYPE_SUBSCRIPTION, cutoff),
+        ] {
+            insert_record(
+                &transaction,
+                &UsageRecord {
+                    response_id: response_id.to_string(),
+                    thread_id: "same-thread".to_string(),
+                    timestamp_seconds,
+                    owner: OwnerAttribution {
+                        owner_type: owner_type.to_string(),
+                        owner_id: "owner-id".to_string(),
+                    },
+                    model: AUTO_REVIEW_MODEL.to_string(),
+                    usage: usage(50, 10, 0, 5),
+                    service_tier: ServiceTier::Other,
+                    cost: EstimatedCost {
+                        cost_usd: None,
+                        price_label: UNPRICED_MISSING_MODEL_PRICE,
+                        prices: None,
+                    },
+                    timing: RequestTiming::default(),
+                },
+                !response_id.starts_with("legacy:"),
+            )
+            .unwrap();
+        }
+        transaction.commit().unwrap();
+    }
+    let summary = stats(&db_path, &codex_home, now);
+    let all = window(&summary, "subscriptions", "owner-id", "all");
+    assert_eq!(all["total_tokens"], 110);
+    assert_eq!(
+        all["pricing_contexts"],
+        json!({ PRICE_LABEL_AUTO_REVIEW_FREE: 1 })
+    );
+    assert_eq!(
+        all["unpriced_reasons"],
+        json!({ UNPRICED_MISSING_MODEL_PRICE: 1 })
+    );
+
+    let page = bills(&db_path, "all", None, None, 1, 50, now);
+    let waived = page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["response_id"] == "waived")
+        .unwrap();
+    assert_eq!(waived["estimated_cost_usd"], 0.0);
+    assert_eq!(waived["price_label"], PRICE_LABEL_AUTO_REVIEW_FREE);
+    assert!(waived["charges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|charge| charge["price_per_million"] == 0.0 && charge["cost_usd"] == 0.0));
+    assert_eq!(page["summary"]["unpriced_count"], 3);
+
+    let connection = Connection::open(&db_path).unwrap();
+    for table in ["usage_hourly", "usage_totals"] {
+        let (count, cost): (i64, f64) = connection
+            .query_row(
+                &format!(
+                    "SELECT record_count, estimated_cost_usd FROM {table} WHERE price_label = ?1"
+                ),
+                [PRICE_LABEL_AUTO_REVIEW_FREE],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((count, cost), (1, 0.0));
+    }
+    assert!(pending_reprice(&connection).unwrap().is_none());
+    drop(connection);
+    assert_eq!(stats(&db_path, &codex_home, now), summary);
+    assert_eq!(bills(&db_path, "all", None, None, 1, 50, now), page);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -2118,6 +2321,7 @@ fn records_stored_before_durations_get_them_from_one_reread() {
                 &record.usage,
                 ServiceTier::Standard,
                 &owner.owner_type,
+                record.timestamp_seconds,
             );
             let stored = UsageRecord {
                 response_id: record.response_id.clone(),

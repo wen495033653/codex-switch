@@ -23,7 +23,8 @@ const PRICE_LABEL_TEXT = {
   standard_short_context: '标准',
   standard_long_context: '标准 · 长上下文',
   fast_short_context: '快速',
-  fast_long_context: '快速 · 长上下文'
+  fast_long_context: '快速 · 长上下文',
+  auto_review_free: '免费 · Auto-review'
 };
 
 const CHARGE_LABELS = {

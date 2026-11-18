@@ -5,7 +5,8 @@ use super::{
         PROVIDER_SUBSCRIPTION,
     },
     pricing::{
-        cost_parts, estimate_request_cost, estimate_summed_cost, has_model_price, prices_for_label,
+        auto_review_waived_cost, cost_parts, estimate_request_cost, estimate_summed_cost,
+        has_model_price, prices_for_label, AUTO_REVIEW_FREE_SINCE, AUTO_REVIEW_MODEL,
         PRICING_UPDATED_AT, UNPRICED_MISSING_MODEL_PRICE, UNPRICED_MISSING_SERVICE_TIER,
     },
     records::RolloutCursor,
@@ -942,6 +943,7 @@ pub(super) fn reprice_stored_record(
         &stored.usage,
         record.service_tier,
         &stored.owner.owner_type,
+        stored.timestamp_seconds,
     );
     if cost.price_label == stored_label {
         return Ok(false);
@@ -949,6 +951,38 @@ pub(super) fn reprice_stored_record(
     stored.cost = cost;
     relabel_unpriced_record(transaction, &stored, &stored_label)?;
     Ok(stored.cost.cost_usd.is_some())
+}
+
+/// ChatGPT Auto-review after the waiver is free regardless of service tier, so existing
+/// per-response records can be priced from their stored model, owner and time alone.
+pub(super) fn reprice_waived_auto_reviews(transaction: &Transaction<'_>) -> Result<usize, String> {
+    let candidates = {
+        let mut statement = transaction
+            .prepare(&format!(
+                "SELECT {STORED_RECORD_COLUMNS} FROM usage_records \
+                 WHERE estimated_cost_usd IS NULL AND model = ?1 AND owner_type = ?2 \
+                 AND timestamp_seconds >= ?3 AND response_id NOT LIKE 'legacy:%'"
+            ))
+            .map_err(|err| db_error("读取免计费 Auto-review 记录失败", err))?;
+        let rows = statement
+            .query_map(
+                params![
+                    AUTO_REVIEW_MODEL,
+                    OWNER_TYPE_SUBSCRIPTION,
+                    AUTO_REVIEW_FREE_SINCE
+                ],
+                |row| stored_record(row, ServiceTier::Other),
+            )
+            .map_err(|err| db_error("读取免计费 Auto-review 记录失败", err))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| db_error("读取免计费 Auto-review 记录失败", err))?
+    };
+    let count = candidates.len();
+    for (mut record, label, _) in candidates {
+        record.cost = auto_review_waived_cost();
+        relabel_unpriced_record(transaction, &record, &label)?;
+    }
+    Ok(count)
 }
 
 /// After the rollouts were read again for a new price table, the records still waiting for a

@@ -191,6 +191,7 @@ pub(super) fn scan_sources(
                     &record.usage,
                     service_tier,
                     &owner.owner_type,
+                    record.timestamp_seconds,
                 );
                 let timing = request_timing(
                     &record,

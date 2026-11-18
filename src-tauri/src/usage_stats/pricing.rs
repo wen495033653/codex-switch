@@ -5,7 +5,7 @@ pub(super) const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/
 /// The day the table below was copied from `PRICING_SOURCE`. Costs are fixed when a record is
 /// stored, so a later table change leaves priced records as they are; records stored without a
 /// price are priced once against each new table (`db::pending_reprice`).
-pub(super) const PRICING_UPDATED_AT: &str = "2026-10-17";
+pub(super) const PRICING_UPDATED_AT: &str = "2026-11-18";
 
 /// "Short context: ≤272K input tokens, long context: >272K input tokens", judged per request.
 pub(super) const LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 272_000;
@@ -17,6 +17,14 @@ pub(super) const PRICE_LABEL_STANDARD_LONG: &str = "standard_long_context";
 pub(super) const PRICE_LABEL_FAST_SHORT: &str = "fast_short_context";
 
 pub(super) const PRICE_LABEL_FAST_LONG: &str = "fast_long_context";
+
+pub(super) const PRICE_LABEL_AUTO_REVIEW_FREE: &str = "auto_review_free";
+
+pub(super) const AUTO_REVIEW_MODEL: &str = "codex-auto-review";
+
+/// Start of the UTC day after the waiver was announced on October 6, 2026. Do not assume
+/// it applied before the announcement or at any particular time on the rollout day.
+pub(super) const AUTO_REVIEW_FREE_SINCE: i64 = 1_791_331_200;
 
 pub(super) const UNPRICED_MISSING_MODEL_PRICE: &str = "missing_model_price";
 
@@ -35,6 +43,7 @@ const PRICED_LABELS: &[&str] = &[
     PRICE_LABEL_STANDARD_LONG,
     PRICE_LABEL_FAST_SHORT,
     PRICE_LABEL_FAST_LONG,
+    PRICE_LABEL_AUTO_REVIEW_FREE,
 ];
 
 #[derive(Clone, Copy)]
@@ -68,8 +77,32 @@ const fn prices(
     }
 }
 
-/// Standard and Fast mode tables of `PRICING_SOURCE`, USD per 1M tokens.
+/// Standard and Fast mode tables of `PRICING_SOURCE`, USD per 1M tokens, with 30-minute cache writes.
 const MODEL_PRICES: &[ModelPrice] = &[
+    ModelPrice {
+        model: "gpt-6.2-astra",
+        long_context_priced: true,
+        standard: TierPrices {
+            short_context: prices(8.0, 0.4, Some(10.0), 40.0),
+            long_context: Some(prices(16.0, 0.8, Some(20.0), 60.0)),
+        },
+        fast: TierPrices {
+            short_context: prices(16.0, 0.8, Some(20.0), 80.0),
+            long_context: Some(prices(32.0, 1.6, Some(40.0), 120.0)),
+        },
+    },
+    ModelPrice {
+        model: "gpt-6.2-sol",
+        long_context_priced: true,
+        standard: TierPrices {
+            short_context: prices(2.0, 0.1, Some(2.5), 10.0),
+            long_context: Some(prices(4.0, 0.2, Some(5.0), 15.0)),
+        },
+        fast: TierPrices {
+            short_context: prices(4.0, 0.2, Some(5.0), 20.0),
+            long_context: Some(prices(8.0, 0.4, Some(10.0), 30.0)),
+        },
+    },
     ModelPrice {
         model: "gpt-6-astra",
         long_context_priced: true,
@@ -92,6 +125,18 @@ const MODEL_PRICES: &[ModelPrice] = &[
         fast: TierPrices {
             short_context: prices(4.0, 0.2, Some(5.0), 20.0),
             long_context: Some(prices(8.0, 0.4, Some(10.0), 30.0)),
+        },
+    },
+    ModelPrice {
+        model: "gpt-6.1-terra",
+        long_context_priced: true,
+        standard: TierPrices {
+            short_context: prices(1.0, 0.05, Some(1.25), 5.0),
+            long_context: Some(prices(2.0, 0.1, Some(2.5), 7.5)),
+        },
+        fast: TierPrices {
+            short_context: prices(2.0, 0.1, Some(2.5), 10.0),
+            long_context: Some(prices(4.0, 0.2, Some(5.0), 15.0)),
         },
     },
     ModelPrice {
@@ -197,24 +242,36 @@ pub(super) fn is_priced_label(label: &str) -> bool {
 }
 
 /// Prices one API response: the tier it ran on and, outside a subscription, long context when
-/// this request's input is above the threshold. Codex on a ChatGPT subscription has only the
-/// standard and Fast rates, so its requests are never priced as long context; responses no
-/// owner matched are priced as API requests.
+/// this request's input is above the threshold. A ChatGPT subscription has no long-context
+/// surcharge or separate cache-write premium; responses no owner matched use API rates.
 pub(super) fn estimate_request_cost(
     model: &str,
     usage: &TokenUsage,
     tier: ServiceTier,
     owner_type: &str,
+    timestamp_seconds: i64,
 ) -> EstimatedCost {
-    let long_context =
-        owner_type != OWNER_TYPE_SUBSCRIPTION && usage.input_tokens > LONG_CONTEXT_THRESHOLD_TOKENS;
-    price_tokens(model, usage, tier, long_context)
+    let subscription = owner_type == OWNER_TYPE_SUBSCRIPTION;
+    if model == AUTO_REVIEW_MODEL && subscription && timestamp_seconds >= AUTO_REVIEW_FREE_SINCE {
+        return auto_review_waived_cost();
+    }
+    let long_context = !subscription && usage.input_tokens > LONG_CONTEXT_THRESHOLD_TOKENS;
+    price_tokens(model, usage, tier, long_context, subscription)
+}
+
+/// Auto-review requires a ChatGPT sign-in for the waiver and has no public API model price.
+pub(super) fn auto_review_waived_cost() -> EstimatedCost {
+    EstimatedCost {
+        cost_usd: Some(0.0),
+        price_label: PRICE_LABEL_AUTO_REVIEW_FREE,
+        prices: Some(prices(0.0, 0.0, Some(0.0), 0.0)),
+    }
 }
 
 /// Prices usage summed over several requests whose sizes are unknown (the statistics kept
 /// before per-response records): standard processing, short context.
 pub(super) fn estimate_summed_cost(model: &str, usage: &TokenUsage) -> EstimatedCost {
-    price_tokens(model, usage, ServiceTier::Standard, false)
+    price_tokens(model, usage, ServiceTier::Standard, false, false)
 }
 
 fn price_tokens(
@@ -222,6 +279,7 @@ fn price_tokens(
     usage: &TokenUsage,
     tier: ServiceTier,
     long_context: bool,
+    subscription: bool,
 ) -> EstimatedCost {
     let Some(price) = find_model_price(model) else {
         return unpriced(UNPRICED_MISSING_MODEL_PRICE);
@@ -235,20 +293,23 @@ fn price_tokens(
         ServiceTier::Fast => (&price.fast, PRICE_LABEL_FAST_SHORT, PRICE_LABEL_FAST_LONG),
         ServiceTier::Other => return unpriced(UNPRICED_MISSING_TIER_PRICE),
     };
-    let (token_prices, label) = if long_context && price.long_context_priced {
-        match tier_prices.long_context.as_ref() {
+    let (mut token_prices, label) = if long_context && price.long_context_priced {
+        match tier_prices.long_context {
             Some(long_prices) => (long_prices, long_label),
             None => return unpriced(UNPRICED_MISSING_TIER_PRICE),
         }
     } else {
-        (&tier_prices.short_context, short_label)
+        (tier_prices.short_context, short_label)
     };
+    if subscription {
+        token_prices.cache_write = Some(token_prices.input);
+    }
 
-    match cost_parts(usage, token_prices) {
+    match cost_parts(usage, &token_prices) {
         Ok(parts) => EstimatedCost {
             cost_usd: Some(parts.total()),
             price_label: label,
-            prices: Some(*token_prices),
+            prices: Some(token_prices),
         },
         Err(reason) => unpriced(reason),
     }

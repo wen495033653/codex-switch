@@ -142,6 +142,7 @@ const EN_TRANSLATIONS = {
   '标准 · 长上下文': 'Standard · Long context',
   '快速': 'Fast',
   '快速 · 长上下文': 'Fast · Long context',
+  '免费 · Auto-review': 'Free · Auto-review',
   '旧版': 'Legacy',
   '这个范围内没有请求记录': 'No requests in this range',
   '共 {count} 条': '{count} total',

@@ -37,9 +37,9 @@
 - **起点。** 时间早于或等于 `meta.records_counted_after` 的记录不计入。新建的库以建库时间为起点；从旧版迁移来的库以旧统计最后一次扫描的时间为起点（见下文"旧统计的迁移"）。
 - **归属。** 按每次响应发生的时间和当时的 provider，在 `attribution` 表里找当时选中的账号或 API 配置。会话中途切换账号或模式后，后面的响应算到新的归属下。多开实例的记录固定归到实例标记里的账号。找不到归属的记录照样存下，但不计入任何卡片，只计入提示"N 个 session 缺少 Codex Switch 归属记录"。
 - **计价。** 每条记录单独计价：
-  - **档位。** `service_tier` 为空或 `default` 按标准档；`priority` 或 `fast` 按快速模式（官方已把 Priority processing 改名为 Fast mode，两种写法都接受）。其他档位没有价格，计为未定价。
+  - **档位。** `service_tier` 为空或 `default` 按标准档；`priority` 或 `fast` 按快速模式（官方已把 Priority processing 改名为 Fast mode，两种写法都接受）。本程序尚未建模的档位仍标为未定价。
   - **长上下文。** API 配置的请求（以及没有归属的记录），这一次请求的 `input_tokens` 超过 272,000 时，按长上下文价格计。官方页面对短上下文的说明是 "≤272K input tokens"。是否长上下文由本程序按 `input_tokens` 判断，API 响应里没有长上下文或实际计费档位的字段。
-  - **订阅账号不分长上下文。** ChatGPT 订阅下的 Codex 只有标准和快速两档（2026-10-17 用户确认），订阅账号的请求不论多长都按短上下文价格计。此前同一天的版本曾把订阅账号 4,433 条输入超过 272K 的 gpt-6.1-sol 记录按长上下文计价，已用更新前的备份库按新规则重新迁移。
+  - **订阅账号不收取长上下文和缓存写入溢价。** 按 [Codex 官方价目说明](https://learn.chatgpt.com/docs/pricing)，使用 ChatGPT 登录时不区分长短上下文；写缓存的 token 计普通输入单价，不加 API 缓存写入溢价。API 缓存写入仍取 30 分钟单价做估算，rollout 没有存保留时长，无法反推出 12 小时实际用价。美元数值是用量估算，不是 ChatGPT credits 实际扣费。
   - **公式。** 未命中缓存的输入 × 输入单价 + 缓存命中 × 缓存单价 + 缓存写入 × 缓存写入单价 + 输出（含推理）× 输出单价。
   - **没有价格时。** 缺哪一项价格，就记对应的未定价原因：`missing_model_price`、`missing_tier_price`、`missing_cached_input_price`、`missing_cache_write_price`；补价时找不到会话文件的记录为 `missing_service_tier`（见"价格表更新后的补价"）。
   - **已定价的费用在写入时就固定。** 价格表以后再改，已定价记录不回溯重算；只有未定价的记录会在新价格表下补价一次。
@@ -88,11 +88,15 @@
 2. 两者不同时（`db::pending_reprice`），这次刷新把修改时间不早于"最早一条、模型在新表里有价格的未定价记录"的 rollout 全部从头重读（标为 `missing_service_tier` 的记录不算，见第 4 步）。
 3. 重读到的记录按 `response_id` 已经存在，`db::reprice_stored_record` 用 rollout 里的档位和库里存的模型、token 重新计价：能定价就写入费用和单价；仍不能定价但原因变了（例如档位没有价格），就改成新的原因。小时和全部时间汇总里的那一份跟着从旧标签移到新标签。旧统计迁移来的记录不动。
 4. 重读后仍然是 `missing_model_price`、而模型已经有价格的记录，说明哪个 rollout 里都没有它（会话文件已删除，或这次读失败，读失败另有 `usage_stats_scan_file_error`）。它们改标为 `missing_service_tier`（界面显示"档位未知"），以后的价格表更新不再为它们重读。
-5. 同一个事务里写 `meta`，提交后记 `usage_stats_unpriced_rechecked`：`pricingUpdatedAt`、`rereadSince`、`rereadFiles`、`repriced`、`markedTierUnknown`、`stillUnpricedWithModelPrice`。
+5. 同一个事务里补价免收费的 Auto-review（见下文）并写 `meta`，提交后记 `usage_stats_unpriced_rechecked`：`pricingUpdatedAt`、`rereadSince`、`rereadFiles`、`repriced`、`autoReviewWaivedWithoutRollout`、`markedTierUnknown`、`stillUnpricedWithModelPrice`。
 
 此外，任何时候重读到一条未定价的已存记录（分叉副本、被改写的文件），都会按当前价格表走第 3 步。
 
-本次价格表加入 gpt-6.1-sol（标准档短上下文 $2 / $0.1 / 缓存写入 $2.5 / 输出 $10，长上下文 $4 / $0.2 / $5 / $15；快速模式短上下文 $4 / $0.2 / $5 / $20，长上下文 $8 / $0.4 / $10 / $30，每百万 token）。
+**2026-11-18 价格表。** 补入 [OpenAI API 官方价](https://developers.openai.com/api/docs/pricing#flagship-models)的 GPT-6.2 Astra、GPT-6.2 Sol、GPT-6.1 Terra，支持已有的 Standard / Fast 档位及 API 长上下文。标准档短上下文（美元 / 百万 token，顺序为输入、缓存读取、30 分钟缓存写入、输出）分别是 `8 / 0.40 / 10 / 40`、`2 / 0.10 / 2.50 / 10`、`1 / 0.05 / 1.25 / 5`。
+
+**Auto-review。** [OpenAI 帮助中心](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_34e1b497e6)明确 ChatGPT 登录后的安全检查免费、也不消耗额度。历史补价只把归属为订阅、模型为 `codex-auto-review`、响应时间不早于 2026-10-07 00:00 UTC（[10 月 6 日公告](https://x.com/thsottiaux/status/2107368734981517634)后的完整 UTC 日）的逐条记录标为免费 $0。此规则不需要服务档位，即使没有会话文件也可以精确补价；该日前、API 模式、未归属及旧统计迁移记录没有可确认的官方单价，保持未定价。
+
+**定向验证。** `cargo test usage_stats::tests` 通过：三模型的 Standard / Fast、272,000 与 272,001 输入边界、订阅不收缓存写入溢价、免费日期和归属边界、缺 rollout 仍可为符合条件的历史 Auto-review 补零价（逐条、小时和全部汇总一致、第二次刷新结果不变）。`node --test scripts/test-usage-bills.mjs` 通过：零费用及免费标签正确。正式库只读盘点，未写入。
 
 ### 请求耗时、首 Token 与输出速率（2026-10-17）
 
@@ -132,7 +136,7 @@ Codex Switch 不在请求路径上（订阅模式 Codex 直连 chatgpt.com，API
 - **起点所在的那一次响应。** 旧版最后一次扫描时，如果某个响应的 `token_usage_record` 已经写下、但它的 `token_count` 还没写，这次响应两边都不会计入；时间精度按整秒，同一秒内的响应也可能出现同样的情况。每个活动会话最多涉及一次响应。
 - **服务档位来自线程设置。** 取的是请求发出时线程设置里的 `service_tier`，不是服务端实际执行的档位（记录里没有这个字段）。
 - **模型取自之前最近的设置行。** 压缩请求用的是它之前的模型设置。如果恰好在这次压缩前切换了模型，而切换只写进了之后的 `turn_context`，这一次会记成旧模型。
-- **档位未知的记录。** 2026-10-17 本机有 30,561 条 gpt-6.1-sol 记录（178 个会话，2026-09-30 至 10-07）的 rollout 已不在 `sessions`、`archived_sessions`、多开实例和会话管理的回收区里，无法补价，标为 `missing_service_tier`，费用不计入合计（界面显示"另有 N 条未定价"）。会话文件如果以后恢复并被重读，会按第 3 步补价。
+- **档位未知的记录。** 2026-10-17 本机有 30,561 条 gpt-6.1-sol 记录（178 个会话）没有匹配到当时支持的 rollout，因而标为 `missing_service_tier`，费用不计入合计。2026-11-18 只读核对时这 178 个会话已有对应的 `.jsonl.zst` 文件，其中按会话 ID 同名源文件逐条匹配到至少 28,294 条响应；后续扫描读到压缩文件时可以按其中的实际档位补价。仍没有读到的记录不猜档位。
 - **耗时数据的覆盖面。** 2026-10-17 真实库副本：重读后 33,572 条记录有总耗时，1,406 条有首 Token（Codex 日志当时还在的）。没有耗时的非旧版记录里，7,839 条的会话文件已不在，331 条（约 1%）在记录之前没有输出项。总耗时 p10 / p50 / p90 为 5.1 / 12.7 / 47.1 s，首 Token 1.49 / 1.98 / 3.53 s，输出速率 41.5 / 54.8 / 74.6 tok/s；首 Token 和速率与事先用 Python 独立算出的分布一致（1.46 / 1.97 / 3.44 s，41.3 / 55.0 / 74.3 tok/s），没有首 Token 大于总耗时或负数的记录。
 - **首 Token 的覆盖面（2026-10-21）。** 真实库副本加真实 rollout 跑一次新版的刷新（一次性重读用了 37 s）：有首 Token 的记录从 9,852 条增加到 27,622 条，10-14 之后有总耗时的 29,314 条里 25,990 条（89%）有首 Token；原有的 9,852 个首 Token 一个都没变；没有首 Token 落在 (0, 总耗时] 之外的记录。按 CC Switch 的门槛算，26,504 条有输出速率，p10 / p50 / p90 为 26.2 / 44.8 / 63.7 tok/s，首 Token 1.64 / 2.37 / 4.72 s。
 - **账单查询耗时。** 本机 14.3 万条记录（release）：今天 12 ms，7 天约 0.2 s，30 天和全部约 0.6 s，主要花在合计和归属、模型列表的全表聚合上。前端每 30 秒随统计刷新重新查询一次。

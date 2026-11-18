@@ -27,7 +27,8 @@ use {
     db::{
         count_unpriced_with_model_price, db_error, mark_service_tier_unknown, mark_timings_filled,
         mark_unpriced_checked, open_usage_connection, pending_reprice, pending_timing_fill,
-        record_attribution_at, records_counted_after_seconds, usage_db_path,
+        record_attribution_at, records_counted_after_seconds, reprice_waived_auto_reviews,
+        usage_db_path,
     },
     model::{
         UsageScanSource, OWNER_TYPE_API_PROFILE, OWNER_TYPE_SUBSCRIPTION, PROVIDER_API,
@@ -199,9 +200,14 @@ fn usage_stats_get_for_scan_sources(
     let written = write_scan(&transaction, &scan)?;
     let recheck = match reprice {
         Some(_) => {
+            let waived_without_rollout = reprice_waived_auto_reviews(&transaction)?;
             let tier_unknown = mark_service_tier_unknown(&transaction)?;
             mark_unpriced_checked(&transaction)?;
-            Some((tier_unknown, count_unpriced_with_model_price(&transaction)?))
+            Some((
+                waived_without_rollout,
+                tier_unknown,
+                count_unpriced_with_model_price(&transaction)?,
+            ))
         }
         None => None,
     };
@@ -212,14 +218,15 @@ fn usage_stats_get_for_scan_sources(
     transaction
         .commit()
         .map_err(|err| db_error("提交 token 统计写入失败", err))?;
-    if let Some((tier_unknown, still_unpriced)) = recheck {
+    if let Some((waived_without_rollout, tier_unknown, still_unpriced)) = recheck {
         log_event(
             "usage_stats_unpriced_rechecked",
             json!({
                 "pricingUpdatedAt": PRICING_UPDATED_AT,
                 "rereadSince": reread_since,
                 "rereadFiles": scan.reread_files,
-                "repriced": written.repriced,
+                "repriced": written.repriced + waived_without_rollout,
+                "autoReviewWaivedWithoutRollout": waived_without_rollout,
                 "markedTierUnknown": tier_unknown,
                 "stillUnpricedWithModelPrice": still_unpriced
             }),

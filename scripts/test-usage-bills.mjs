@@ -63,9 +63,10 @@ test('owners without a current name are shown by type and short id', () => {
   assert.equal(ownerLabel('', '', names, t), '未归属');
 });
 
-test('price labels name the tier and context, anything else is unpriced', () => {
+test('price labels name the tier and context or the Auto-review waiver', () => {
   assert.equal(priceLabelText('standard_short_context', t), '标准');
   assert.equal(priceLabelText('fast_long_context', t), '快速 · 长上下文');
+  assert.equal(priceLabelText('auto_review_free', t), '免费 · Auto-review');
   assert.equal(priceLabelText('missing_model_price', t), '未定价');
 });
 
