@@ -681,6 +681,17 @@ pub(super) fn record_attribution_at(
     provider: &str,
     started_at: &str,
 ) -> Result<(), String> {
+    let connection = open_usage_connection(db_path, started_at)?;
+    insert_attribution(&connection, owner_type, owner_id, provider, started_at)
+}
+
+pub(super) fn insert_attribution(
+    connection: &Connection,
+    owner_type: &str,
+    owner_id: &str,
+    provider: &str,
+    started_at: &str,
+) -> Result<(), String> {
     let owner_type = owner_type.trim();
     let owner_id = owner_id.trim();
     let provider = provider.trim();
@@ -695,7 +706,6 @@ pub(super) fn record_attribution_at(
     }
     let started_at_seconds =
         parse_rfc3339_seconds(started_at).ok_or_else(|| "token 统计归属时间无效".to_string())?;
-    let connection = open_usage_connection(db_path, started_at)?;
     connection
         .execute(
             r#"

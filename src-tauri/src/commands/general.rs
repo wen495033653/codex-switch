@@ -1,4 +1,4 @@
-use super::apply_complete_api_mode_profile_if_active;
+use super::update_command_settings;
 use crate::{
     accounts::{
         access_token_from_account, account_id_from_account, find_store_account, get_codex_models,
@@ -87,7 +87,6 @@ pub(crate) async fn update_settings(app: AppHandle, patch: Value) -> Result<Valu
 fn update_settings_impl(app: &AppHandle, patch: &Value) -> Result<Value, String> {
     let should_sync_auto_start =
         has_key(patch, "auto_start") || has_key(patch, "auto_start_launch_mode");
-    let should_apply_api_mode = has_key(patch, "api_mode");
     let desired_auto_start = if should_sync_auto_start {
         Some(if has_key(patch, "auto_start") {
             bool_field(patch, "auto_start")
@@ -100,12 +99,7 @@ fn update_settings_impl(app: &AppHandle, patch: &Value) -> Result<Value, String>
     if let Some(enabled) = desired_auto_start {
         validate_system_auto_start(enabled)?;
     }
-    let mut settings = apply_codex_proxy_env_state_to_settings(update_settings_value(patch)?)?;
-    if should_apply_api_mode {
-        apply_complete_api_mode_profile_if_active(&settings)?;
-        // The remote-control sync may have turned remote control off (its account is gone).
-        settings = apply_codex_proxy_env_state_to_settings(read_settings_value()?)?;
-    }
+    let settings = apply_codex_proxy_env_state_to_settings(update_command_settings(patch)?)?;
     if let Some(enabled) = desired_auto_start {
         sync_system_auto_start(app, enabled)?;
     }

@@ -165,13 +165,4 @@ export const upsertApiProfile = (profiles, profile) => {
   return [...normalized, nextProfile];
 };
 
-export const buildApiSettingsPayload = ({ activeId, activeProfile, profiles }) => {
-  const profile = buildApiProfilePayload(activeProfile, activeId || DEFAULT_API_PROFILE_ID);
-  const profileList = upsertApiProfile(profiles, profile);
-  const resolvedActiveId = profile.id || activeId || DEFAULT_API_PROFILE_ID;
-  return {
-    active_api_profile_id: resolvedActiveId,
-    api_profiles: profileList,
-    api_mode: profile
-  };
-};
+export const ACTIVE_API_PROFILE_DELETE_MESSAGE = '请先切换到其他 API 配置，再删除当前配置';

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApiProfilePagination } from '../hooks';
+import { ACTIVE_API_PROFILE_DELETE_MESSAGE } from '../utils/appState';
 import { runningIntelligenceProgress } from '../utils/intelligenceTests';
 import { getCodexAppInstanceKey } from '../utils/codexAppInstances';
 import {
@@ -243,9 +244,9 @@ export default function ApiModePage({
                             : t('使用 {model} 预检 API', { model: normalizedTestModel })));
                   const testDisabled = !baseUrl || !apiKey || testLoading;
                   const testActionText = testLoading ? t('预检中') : t('预检');
-                  const deleteTitle = profiles.length <= 1
-                    ? t('至少保留一个 API')
-                    : t('删除配置');
+                  const deleteTitle = active
+                    ? t(ACTIVE_API_PROFILE_DELETE_MESSAGE)
+                    : profiles.length <= 1 ? t('至少保留一个 API') : t('删除配置');
                   const usageStats = usageStatsByApiProfile
                     ? usageStatsByApiProfile[profileId]
                     : null;
@@ -349,7 +350,7 @@ export default function ApiModePage({
                                 key: 'delete',
                                 label: t('删除'),
                                 danger: true,
-                                disabled: profiles.length <= 1 || savingApiMode || switching,
+                                disabled: active || profiles.length <= 1 || savingApiMode || switching,
                                 title: deleteTitle,
                                 onSelect: () => onDeleteApiProfile(profileId)
                               }

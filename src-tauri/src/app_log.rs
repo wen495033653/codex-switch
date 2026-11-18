@@ -89,6 +89,11 @@ const DEV_ONLY_EVENTS: &[&str] = &[
 /// The dev log's one-line description; events not listed fall back to a generic text.
 const EVENT_MESSAGES: &[(&str, &str)] = &[
     ("app_start", "应用启动"),
+    ("api_mode_switch_error", "API 配置切换失败"),
+    (
+        "codex_remote_control_runtime_sync_error",
+        "远程控制运行配置同步失败",
+    ),
     ("codex_desktop_support_status", "Codex Desktop 兼容状态"),
     ("codex_app_restart_command_finish", "“重启 Codex”完成"),
     ("codex_app_relaunch_processes_start", "开始结束并重开 Codex"),

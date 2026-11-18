@@ -12,4 +12,4 @@ pub(crate) use remote_control::{
     remote_control_config_enabled_from_settings, remote_control_enabled_from_settings,
     remote_control_suspended_by_subscription, REMOTE_CONTROL_ENABLED_SETTING_KEY,
 };
-pub(crate) use store::{read_settings_value, update_settings_value};
+pub(crate) use store::{read_settings_value, update_settings_value, update_settings_value_checked};
