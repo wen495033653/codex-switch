@@ -764,7 +764,9 @@ fn state_sync_reads_only_what_the_row_still_needs() {
     let state_db = temp_dir.join("state_5.sqlite");
     let recorded = temp_dir.join("sessions").join("rollout-recorded.jsonl");
     let pending = temp_dir.join("sessions").join("rollout-pending.jsonl");
+    let compressed = temp_dir.join("archived_sessions/rollout-compressed.jsonl.zst");
     fs::create_dir_all(recorded.parent().unwrap()).unwrap();
+    fs::create_dir_all(compressed.parent().unwrap()).unwrap();
     // Everything after line 1 is not UTF-8. The old whole-file read_to_string failed the whole
     // sync on it; a row whose user event is already recorded now only needs line 1.
     let mut bytes = format!(
@@ -775,6 +777,12 @@ fn state_sync_reads_only_what_the_row_still_needs() {
     bytes.extend_from_slice(b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\n");
     fs::write(&recorded, bytes).unwrap();
     write_rollout_file_with_user_event(&pending, "openai", "D:\\pending");
+    // This short, valid frame stores the marker literally. The old raw scan mistakes it for
+    // an event rather than compressed history.
+    let marker = b"\"user_message\"";
+    let encoded = zstd::encode_all(marker.as_slice(), 0).unwrap();
+    assert!(encoded.windows(marker.len()).any(|bytes| bytes == marker));
+    fs::write(&compressed, &encoded).unwrap();
 
     let connection = Connection::open(&state_db).unwrap();
     connection
@@ -800,39 +808,56 @@ fn state_sync_reads_only_what_the_row_still_needs() {
             )
             .unwrap();
     }
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, model_provider, cwd, has_user_event)
+             VALUES ('thread-compressed', ?1, 'openai', 'keep', 0)",
+            [compressed.to_string_lossy().to_string()],
+        )
+        .unwrap();
     drop(connection);
 
     let updated = sync_codex_state_threads_to_provider(&state_db, "api").unwrap();
     let connection = Connection::open(&state_db).unwrap();
     let rows = connection
-        .prepare("SELECT id, cwd, has_user_event FROM threads ORDER BY id")
+        .prepare("SELECT id, cwd, has_user_event, model_provider FROM threads ORDER BY id")
         .unwrap()
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     drop(connection);
+    assert_eq!(fs::read(compressed).unwrap(), encoded);
     fs::remove_dir_all(&temp_dir).unwrap();
 
-    assert_eq!(updated, 3);
+    assert_eq!(updated, 4);
     assert_eq!(
         rows,
         vec![
             (
+                "thread-compressed".to_string(),
+                "keep".to_string(),
+                Some(0),
+                "api".to_string()
+            ),
+            (
                 "thread-pending".to_string(),
                 "D:\\pending".to_string(),
-                Some(1)
+                Some(1),
+                "api".to_string()
             ),
             (
                 "thread-recorded".to_string(),
                 "C:/recorded".to_string(),
-                Some(1)
+                Some(1),
+                "api".to_string()
             ),
         ]
     );

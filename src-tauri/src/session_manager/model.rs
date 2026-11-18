@@ -108,8 +108,9 @@ pub(super) struct StatusMove {
     pub(super) source_path: PathBuf,
     pub(super) target_path: PathBuf,
     pub(super) rewrite_id: Option<(String, String)>,
-    /// Planned against a target that existed; only such a target is ever replaced.
-    pub(super) overwrite: bool,
+    /// The existing physical file selected for replacement. Its format may differ from the
+    /// incoming rollout's format.
+    pub(super) overwritten_path: Option<PathBuf>,
     pub(super) overwritten_id: Option<String>,
 }
 

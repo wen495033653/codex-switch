@@ -2,13 +2,13 @@ use super::{
     catalog::{conversation_from_path, read_current_state_conversations},
     codex_home::{
         conversation_path_key, ensure_session_relative_path, normalize_relative_path,
-        normalize_status, read_session_index, resolve_codex_root, status_from_relative_path,
-        validate_codex_root,
+        normalize_status, read_session_index, resolve_codex_root, resolve_rollout_file,
+        status_from_relative_path, validate_codex_root, validate_session_file_path,
     },
     model::ManifestSession,
-    rollout::parse_session_file_for_list,
+    rollout::{open_rollout, parse_session_file_for_list},
     state_db::{backup_state_database_file, thread_metadata_from_manifest, upsert_state_threads},
-    util::{backup_stamp, sha256_bytes, sha256_file},
+    util::{backup_stamp, sha256_bytes, sha256_reader},
     zip::{write_zip_store, ZipArchiveLite},
 };
 use crate::{
@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{ErrorKind, Write},
+    io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
 use tauri::AppHandle;
@@ -128,9 +128,8 @@ pub(super) struct ExportBundle {
     pub(super) total_size: u64,
 }
 
-/// Reads the selected sessions under the session I/O lock. Each file is read exactly once and that
-/// one buffer provides the zip entry, its SHA-256 and its size, so the manifest always matches
-/// the stored bytes even while Codex keeps appending to the file.
+/// One JSONL snapshot provides the ZIP entry, its SHA-256 and its size. Compressed rollouts
+/// are decoded into that snapshot, never rewritten on disk.
 pub(super) fn collect_export_bundle(
     root: &Path,
     relative_paths: Vec<String>,
@@ -143,7 +142,7 @@ pub(super) fn collect_export_bundle(
     let state_by_path = catalog
         .conversations
         .into_iter()
-        .map(|item| (conversation_path_key(Path::new(&item.source_path)), item))
+        .map(|item| (conversation_path_key(&root.join(&item.relative_path)), item))
         .collect::<HashMap<_, _>>();
     let mut seen = HashSet::new();
     let mut bundle = ExportBundle {
@@ -168,7 +167,21 @@ pub(super) fn collect_export_bundle(
                 continue;
             }
         };
-        let path = root.join(&relative);
+        let logical_path = root.join(&relative);
+        let path = match resolve_rollout_file(&logical_path) {
+            Ok((path, _)) => path,
+            Err(err) => {
+                bundle.errors.push(format!(
+                    "读取会话文件失败 {}: {err}",
+                    logical_path.display()
+                ));
+                continue;
+            }
+        };
+        if let Err(err) = validate_session_file_path(root, &path) {
+            bundle.errors.push(err);
+            continue;
+        }
         let status = match status_from_relative_path(&relative) {
             Ok(status) => status,
             Err(err) => {
@@ -176,7 +189,7 @@ pub(super) fn collect_export_bundle(
                 continue;
             }
         };
-        let item = match state_by_path.get(&conversation_path_key(&path)) {
+        let item = match state_by_path.get(&conversation_path_key(&logical_path)) {
             Some(item) => item.clone(),
             None => match conversation_from_path(root, &path, &status, &session_index) {
                 Ok(item) => item,
@@ -186,15 +199,13 @@ pub(super) fn collect_export_bundle(
                 }
             },
         };
-        let data = match fs::read(&path) {
-            Ok(data) => data,
-            Err(err) => {
-                bundle
-                    .errors
-                    .push(format!("读取会话文件失败 {}: {err}", path.display()));
-                continue;
-            }
-        };
+        let mut data = Vec::new();
+        if let Err(err) = open_rollout(&path).and_then(|mut reader| reader.read_to_end(&mut data)) {
+            bundle
+                .errors
+                .push(format!("读取会话文件失败 {}: {err}", path.display()));
+            continue;
+        }
         let size_bytes = data.len() as u64;
         bundle.total_size += size_bytes;
         bundle.sessions.push(ManifestSession {
@@ -386,7 +397,7 @@ pub(super) fn apply_import_candidates(
             ImportAction::Import => match write_new_import_file(candidate) {
                 Ok(()) => {
                     outcome.imported += 1;
-                    indexed.push(candidate);
+                    indexed.push((candidate, candidate.target_path.clone()));
                 }
                 Err(ImportWriteError::AlreadyExists) => {
                     outcome.conflicts.push(import_conflict_json(
@@ -398,10 +409,10 @@ pub(super) fn apply_import_candidates(
                     .errors
                     .push(format!("{}: {err}", candidate.manifest.relative_path)),
             },
-            ImportAction::SkipSame => match sha256_file(&candidate.target_path) {
-                Ok(sha) if sha == candidate.manifest.sha256 => {
+            ImportAction::SkipSame => match existing_import_file(root, &candidate.target_path) {
+                Ok(Some((path, sha))) if sha == candidate.manifest.sha256 => {
                     outcome.skipped += 1;
-                    indexed.push(candidate);
+                    indexed.push((candidate, path));
                 }
                 Ok(_) => outcome.conflicts.push(import_conflict_json(
                     candidate,
@@ -419,10 +430,9 @@ pub(super) fn apply_import_candidates(
     if state_db.exists() && !indexed.is_empty() {
         let thread_metadata = indexed
             .iter()
-            .map(|candidate| {
-                let summary =
-                    parse_session_file_for_list(&candidate.target_path).unwrap_or_default();
-                thread_metadata_from_manifest(&candidate.manifest, &candidate.target_path, &summary)
+            .map(|(candidate, path)| {
+                let summary = parse_session_file_for_list(path).unwrap_or_default();
+                thread_metadata_from_manifest(&candidate.manifest, path, &summary)
             })
             .collect::<Vec<_>>();
         match upsert_state_threads(root, &thread_metadata) {
@@ -456,6 +466,18 @@ enum ImportWriteError {
 
 fn write_new_import_file(candidate: &ImportCandidate) -> Result<(), ImportWriteError> {
     let path = &candidate.target_path;
+    // Compression can create the sibling after the confirmation dialog. create_new also
+    // protects the plain path if that one appears after this check.
+    match resolve_rollout_file(path) {
+        Ok(_) => return Err(ImportWriteError::AlreadyExists),
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(ImportWriteError::Failed(format!(
+                "复核导入目标失败 {}: {err}",
+                path.display()
+            )))
+        }
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             ImportWriteError::Failed(format!("创建导入目录失败 {}: {err}", parent.display()))
@@ -498,6 +520,27 @@ fn import_conflict_json(candidate: &ImportCandidate, reason: &str) -> Value {
     })
 }
 
+fn existing_import_file(
+    root: &Path,
+    logical_path: &Path,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let path = match resolve_rollout_file(logical_path) {
+        Ok((path, _)) => path,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "读取会话文件失败 {}: {err}",
+                logical_path.display()
+            ))
+        }
+    };
+    validate_session_file_path(root, &path)?;
+    let sha = open_rollout(&path)
+        .and_then(sha256_reader)
+        .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
+    Ok(Some((path, sha)))
+}
+
 pub(super) fn build_import_candidate(
     root: &Path,
     archive: &ZipArchiveLite,
@@ -517,15 +560,11 @@ pub(super) fn build_import_candidate(
         return Err("文件大小与 manifest 不一致".to_string());
     }
     let target_path = root.join(relative);
-    let action = if target_path.exists() {
-        let current_sha = sha256_file(&target_path)?;
-        if current_sha == session.sha256 {
-            ImportAction::SkipSame
-        } else {
-            ImportAction::Conflict
-        }
-    } else {
-        ImportAction::Import
+    let _io_guard = lock_codex_session_io("检查会话导入冲突")?;
+    let action = match existing_import_file(root, &target_path)? {
+        Some((_, sha)) if sha == session.sha256 => ImportAction::SkipSame,
+        Some(_) => ImportAction::Conflict,
+        None => ImportAction::Import,
     };
     Ok(ImportCandidate {
         manifest: session.clone(),

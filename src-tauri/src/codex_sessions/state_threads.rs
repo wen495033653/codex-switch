@@ -207,6 +207,16 @@ pub(super) fn collect_state_thread_sync_metadata(
             continue;
         }
         let rollout_path = state_thread_rollout_path(&root, &rollout_path);
+        // Codex stores the physical .jsonl.zst path after archive/unarchive. Provider sync
+        // works on plain rollouts only: do not scan compressed bytes as JSONL now that the
+        // archived row no longer points to a missing .jsonl file.
+        if rollout_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".jsonl.zst"))
+        {
+            continue;
+        }
         let rollout_metadata =
             match read_rollout_thread_metadata(&rollout_path, scan_user_event, wants_cwd)? {
                 RolloutMetadataRead::Read(rollout_metadata) => rollout_metadata,

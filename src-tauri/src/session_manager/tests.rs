@@ -97,33 +97,41 @@ fn create_current_state_db(root: &Path) -> Connection {
 fn write_test_session(root: &Path, relative: &Path, id: &str, label: &str) -> PathBuf {
     let path = root.join(relative);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(
-        &path,
-        format!(
-            "{}\n{}\n{}\n",
-            json!({
-                "timestamp": "2026-07-13T00:00:00Z",
-                "type": "session_meta",
-                "payload": {
-                    "id": id,
-                    "cwd": "C:\\work",
-                    "originator": "codex-switch-test"
-                }
-            }),
-            json!({
-                "timestamp": "2026-07-13T00:00:01Z",
-                "type": "event_msg",
-                "payload": {"type": "user_message", "message": label}
-            }),
-            json!({
-                "timestamp": "2026-07-13T00:00:02Z",
-                "type": "event_msg",
-                "payload": {"type": "agent_message", "message": format!("reply-{label}")}
-            })
-        ),
-    )
-    .unwrap();
+    fs::write(&path, test_session_content(id, label)).unwrap();
     path
+}
+
+fn write_compressed_test_session(root: &Path, relative: &Path, id: &str, label: &str) -> PathBuf {
+    let path = compressed_rollout_path(&root.join(relative));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let bytes = zstd::encode_all(test_session_content(id, label).as_bytes(), 0).unwrap();
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+fn test_session_content(id: &str, label: &str) -> String {
+    format!(
+        "{}\n{}\n{}\n",
+        json!({
+            "timestamp": "2026-07-13T00:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": id,
+                "cwd": "C:\\work",
+                "originator": "codex-switch-test"
+            }
+        }),
+        json!({
+            "timestamp": "2026-07-13T00:00:01Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": label}
+        }),
+        json!({
+            "timestamp": "2026-07-13T00:00:02Z",
+            "type": "event_msg",
+            "payload": {"type": "agent_message", "message": format!("reply-{label}")}
+        })
+    )
 }
 
 #[test]
@@ -1462,10 +1470,28 @@ fn count_files(dir: &Path) -> usize {
 
 #[test]
 fn status_db_failure_moves_files_back_and_reports_reason() {
+    assert_status_db_failure_moves_files_back(false);
+}
+
+#[test]
+fn status_cross_format_overwrite_rolls_back_both_files_on_db_failure() {
+    assert_status_db_failure_moves_files_back(true);
+}
+
+fn assert_status_db_failure_moves_files_back(with_compressed_overwrite: bool) {
     let root = temp_path("status-db-failure-rollback");
     let session_id = "019e20f9-34b7-7a82-a95b-fe461de89801";
     let active_relative = PathBuf::from("sessions/2026/05/13").join(session_file_name(session_id));
-    let active_path = write_test_session(&root, &active_relative, session_id, "rollback me");
+    let archived_relative = PathBuf::from("archived_sessions").join(session_file_name(session_id));
+    let active_path = if with_compressed_overwrite {
+        write_compressed_test_session(&root, &active_relative, session_id, "rollback me")
+    } else {
+        write_test_session(&root, &active_relative, session_id, "rollback me")
+    };
+    let overwritten_bytes = with_compressed_overwrite.then(|| {
+        let path = write_test_session(&root, &archived_relative, session_id, "original target");
+        fs::read(path).unwrap()
+    });
     let original = fs::read(&active_path).unwrap();
     // A threads table without archived_at cannot record the new status.
     Connection::open(root.join("state_5.sqlite"))
@@ -1479,14 +1505,13 @@ fn status_db_failure_moves_files_back_and_reports_reason() {
         root.to_string_lossy().to_string(),
         vec![path_to_slash(&active_relative)],
         "archived".to_string(),
-        None,
+        with_compressed_overwrite.then(|| "overwrite".to_string()),
     )
     .unwrap();
-    let archived_path = root
-        .join("archived_sessions")
-        .join(session_file_name(session_id));
+    let archived_path = root.join(&archived_relative);
     let active_after = fs::read(&active_path).ok();
-    let archived_exists = archived_path.exists();
+    let archived_after = fs::read(&archived_path).ok();
+    let archive_files = count_files(archived_path.parent().unwrap());
     fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(result["ok"], false, "{result}");
@@ -1495,16 +1520,81 @@ fn status_db_failure_moves_files_back_and_reports_reason() {
     assert!(message.contains("archived_at"), "{message}");
     assert!(message.contains("已撤销 1 个文件移动"), "{message}");
     assert_eq!(active_after, Some(original));
-    assert!(!archived_exists);
+    assert_eq!(archived_after, overwritten_bytes);
+    assert_eq!(archive_files, usize::from(with_compressed_overwrite));
+}
+
+#[test]
+fn status_round_trip_preserves_the_compressed_rollout() {
+    let root = temp_path("status-compressed-round-trip");
+    let id = "019e20f9-34b7-7a82-a95b-fe461de89806";
+    let file_name = session_file_name(id);
+    let active_relative = PathBuf::from("sessions/2026/05/13").join(&file_name);
+    let archived_relative = PathBuf::from("archived_sessions").join(&file_name);
+    let active_path = write_compressed_test_session(&root, &active_relative, id, "preserve bytes");
+    let archive_path = compressed_rollout_path(&root.join(&archived_relative));
+    let original = fs::read(&active_path).unwrap();
+    let connection = create_current_state_db(&root);
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path) VALUES (?1, ?2)",
+            params![id, root.join(&active_relative).to_string_lossy()],
+        )
+        .unwrap();
+    drop(connection);
+    for (relative, status, moved, from) in [
+        (&active_relative, "archived", &archive_path, &active_path),
+        (&archived_relative, "active", &active_path, &archive_path),
+    ] {
+        let result = set_conversation_status_impl(
+            root.to_string_lossy().to_string(),
+            vec![path_to_slash(relative)],
+            status.to_string(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["report"]["changed"], 1);
+        assert_eq!(fs::read(moved).unwrap(), original);
+        assert!(!from.exists());
+        assert!(!logical_rollout_path(moved).exists());
+        let row = Connection::open(root.join("state_5.sqlite"))
+            .unwrap()
+            .query_row(
+                "SELECT archived, rollout_path FROM threads WHERE id = ?1",
+                [id],
+                |row| Ok((row.get::<_, bool>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, status == "archived");
+        assert_eq!(
+            conversation_path_key(Path::new(&row.1)),
+            conversation_path_key(moved)
+        );
+    }
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn status_modify_id_moves_child_rows_with_the_renamed_thread() {
+    assert_status_modify_id_moves_child_rows(false);
+}
+
+#[test]
+fn status_modify_id_rewrites_and_keeps_compression() {
+    assert_status_modify_id_moves_child_rows(true);
+}
+
+fn assert_status_modify_id_moves_child_rows(compressed: bool) {
     let root = temp_path("status-modify-id-children");
     let session_id = "019e20f9-34b7-7a82-a95b-fe461de89802";
     let file_name = session_file_name(session_id);
     let active_relative = PathBuf::from("sessions/2026/05/13").join(&file_name);
-    let active_path = write_test_session(&root, &active_relative, session_id, "modify id");
+    let active_path = if compressed {
+        write_compressed_test_session(&root, &active_relative, session_id, "modify id")
+    } else {
+        write_test_session(&root, &active_relative, session_id, "modify id")
+    };
     let existing_archived = write_test_session(
         &root,
         &PathBuf::from("archived_sessions").join(&file_name),
@@ -1603,6 +1693,7 @@ fn status_modify_id_moves_child_rows_with_the_renamed_thread() {
     assert_eq!(result["report"]["changed"], 1);
     assert_ne!(new_id, session_id);
     assert_eq!(archived, 1);
+    assert_eq!(is_compressed_rollout(Path::new(&rollout_path)), compressed);
     assert_eq!(moved_summary.id.as_deref(), Some(new_id.as_str()));
     assert_eq!(tool_owner, new_id);
     assert_eq!(edge_child, new_id);
@@ -1790,12 +1881,13 @@ fn export_bundle_manifest_matches_exported_bytes_and_imports_cleanly() {
         "019f0000-0000-7000-8000-000000000021",
         "indexed",
     );
-    write_test_session(
+    let compressed = write_compressed_test_session(
         &source_root,
         &unindexed_relative,
         "019f0000-0000-7000-8000-000000000022",
         "unindexed",
     );
+    let original_compressed = fs::read(&compressed).unwrap();
     let connection = create_current_state_db(&source_root);
     connection
         .execute(
@@ -1822,8 +1914,15 @@ fn export_bundle_manifest_matches_exported_bytes_and_imports_cleanly() {
     let candidates = bundle
         .sessions
         .iter()
-        .map(|session| build_import_candidate(&target_root, &archive, session))
+        .map(|session| build_import_candidate(&target_root, &archive, session).unwrap())
         .collect::<Vec<_>>();
+    let repeat = build_import_candidate(&source_root, &archive, &bundle.sessions[1]).unwrap();
+    let repeat_action = repeat.action;
+    let outcome = apply_import_candidates(&target_root, &candidates).unwrap();
+    let repeat_outcome = apply_import_candidates(&source_root, &[repeat]).unwrap();
+    let compressed_after = fs::read(&compressed).unwrap();
+    let source_has_plain = source_root.join(&unindexed_relative).exists();
+    let restored = fs::read(target_root.join(&unindexed_relative)).unwrap();
     fs::remove_dir_all(&base).unwrap();
 
     assert_eq!(bundle.sessions.len(), 2);
@@ -1842,8 +1941,22 @@ fn export_bundle_manifest_matches_exported_bytes_and_imports_cleanly() {
             .sum::<u64>()
     );
     for candidate in candidates {
-        assert_eq!(candidate.unwrap().action, ImportAction::Import);
+        assert_eq!(candidate.action, ImportAction::Import);
     }
+    assert_eq!(outcome.imported, 2, "{:?}", outcome.errors);
+    assert_eq!(
+        restored,
+        test_session_content("019f0000-0000-7000-8000-000000000022", "unindexed").into_bytes()
+    );
+    assert_eq!(repeat_action, ImportAction::SkipSame);
+    assert_eq!(repeat_outcome.skipped, 1, "{:?}", repeat_outcome.errors);
+    assert!(
+        repeat_outcome.sqlite_error.is_none(),
+        "{:?}",
+        repeat_outcome.sqlite_error
+    );
+    assert!(!source_has_plain);
+    assert_eq!(compressed_after, original_compressed);
 }
 
 fn import_candidate(
@@ -1893,6 +2006,12 @@ fn import_apply_never_overwrites_late_files_and_indexes_what_was_written() {
         "import-late",
         ImportAction::Import,
     );
+    let late_compressed = import_candidate(
+        &root,
+        "sessions/2026/07/13/rollout-late-compressed.jsonl",
+        "import-late-compressed",
+        ImportAction::Import,
+    );
     let blocked = import_candidate(
         &root,
         "sessions/2026/07/blocked/rollout-blocked.jsonl",
@@ -1908,16 +2027,28 @@ fn import_apply_never_overwrites_late_files_and_indexes_what_was_written() {
     fs::create_dir_all(late.target_path.parent().unwrap()).unwrap();
     // Appeared after the dialog classified it as new.
     fs::write(&late.target_path, b"written by someone else\n").unwrap();
+    let compressed = compressed_rollout_path(&late_compressed.target_path);
+    let late_compressed_bytes =
+        zstd::encode_all(b"compressed by someone else\n".as_slice(), 0).unwrap();
+    fs::write(&compressed, &late_compressed_bytes).unwrap();
     // A file where the parent directory should be makes the write fail.
     fs::write(root.join("sessions/2026/07/blocked"), b"not a directory").unwrap();
     fs::write(&same.target_path, &same.data).unwrap();
 
     let outcome = apply_import_candidates(
         &root,
-        &[written.clone(), late.clone(), blocked.clone(), same.clone()],
+        &[
+            written.clone(),
+            late.clone(),
+            late_compressed.clone(),
+            blocked.clone(),
+            same.clone(),
+        ],
     )
     .unwrap();
     let late_bytes = fs::read(&late.target_path).unwrap();
+    assert!(!late_compressed.target_path.exists());
+    assert_eq!(fs::read(compressed).unwrap(), late_compressed_bytes);
     let written_bytes = fs::read(&written.target_path).unwrap();
     let backup_exists = outcome
         .state_backup_path
@@ -1937,7 +2068,7 @@ fn import_apply_never_overwrites_late_files_and_indexes_what_was_written() {
 
     assert_eq!(outcome.imported, 1);
     assert_eq!(outcome.skipped, 1);
-    assert_eq!(outcome.conflicts.len(), 1);
+    assert_eq!(outcome.conflicts.len(), 2);
     assert_eq!(
         outcome.conflicts[0]["relative_path"],
         late.manifest.relative_path

@@ -1,5 +1,9 @@
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, fs, io::Read, path::Path, time::SystemTime};
+use std::{
+    collections::HashSet,
+    io::{self, Read},
+    time::SystemTime,
+};
 use time::OffsetDateTime;
 
 pub(super) fn dedupe_strings(items: &mut Vec<String>) {
@@ -39,15 +43,11 @@ pub(super) fn truncate_text(text: &str, max_chars: usize) -> String {
     result
 }
 
-pub(super) fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file =
-        fs::File::open(path).map_err(|err| format!("读取文件失败 {}: {err}", path.display()))?;
+pub(super) fn sha256_reader(mut reader: impl Read) -> io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        let len = file
-            .read(&mut buffer)
-            .map_err(|err| format!("读取文件失败 {}: {err}", path.display()))?;
+        let len = reader.read(&mut buffer)?;
         if len == 0 {
             break;
         }

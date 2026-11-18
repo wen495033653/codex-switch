@@ -1,9 +1,10 @@
 use super::{
     backup::status_overwrite_backup_path,
     codex_home::{
-        conversation_path_key, ensure_session_relative_path, extract_uuid_like,
-        normalize_relative_path, normalize_status, path_to_slash, reassigned_relative_path,
-        remove_empty_parent_dirs, remove_from_global_state, resolve_codex_root,
+        compressed_rollout_path, conversation_path_key, ensure_session_relative_path,
+        extract_uuid_like, is_compressed_rollout, logical_rollout_path, normalize_relative_path,
+        normalize_status, path_to_slash, reassigned_relative_path, remove_empty_parent_dirs,
+        remove_from_global_state, resolve_codex_root, resolve_rollout_file,
         status_from_relative_path, validate_codex_root, validate_session_file_path,
     },
     model::{parse_conflict_strategy, ConflictStrategy, SessionSummary, StatusMove},
@@ -19,6 +20,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 use time::OffsetDateTime;
@@ -65,22 +67,27 @@ pub(super) fn set_conversation_status_impl(
                 continue;
             }
         };
-        let source_path = root.join(&relative);
-        if !source_path.exists() {
-            errors.push(format!("会话文件不存在: {}", relative.display()));
-            continue;
-        }
-        if let Err(err) = validate_session_file_path(&root, &source_path) {
-            errors.push(err);
-            continue;
-        }
-        let summary = parse_session_file_for_list(&source_path).unwrap_or_default();
+        let logical_source = root.join(&relative);
+        let source_path = match resolve_status_source(&root, &logical_source) {
+            Ok(path) => path,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        let summary = match parse_session_file_for_list(&source_path) {
+            Ok(summary) => summary,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
         let id = summary
             .id
             .clone()
             .or_else(|| extract_uuid_like(&relative.to_string_lossy()))
             .unwrap_or_else(|| path_to_slash(&relative));
-        let Some(file_name) = source_path.file_name().map(|value| value.to_owned()) else {
+        let Some(file_name) = relative.file_name() else {
             errors.push(format!("会话文件名无效: {}", relative.display()));
             continue;
         };
@@ -102,11 +109,17 @@ pub(super) fn set_conversation_status_impl(
         let mut target_id = id.clone();
         let mut final_target_path = target_path.clone();
         let mut rewrite_id = None;
-        let mut overwrite = false;
+        let mut overwritten_path = None;
         let mut overwritten_id = None;
         let reserved = |path: &Path| reserved_targets.contains(&conversation_path_key(path));
-        let target_taken = |path: &Path| path.exists() || reserved(path);
-        if target_taken(&target_path) {
+        let occupied = match rollout_slot_entry(&target_path) {
+            Ok(occupied) => occupied,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        if occupied.is_some() || reserved(&target_path) {
             match conflict_strategy {
                 ConflictStrategy::Ask => {
                     conflicts.push(json!({
@@ -121,45 +134,56 @@ pub(super) fn set_conversation_status_impl(
                     continue;
                 }
                 ConflictStrategy::Overwrite => {
-                    if reserved(&target_path) {
+                    let Some(existing) = occupied.filter(|_| !reserved(&target_path)) else {
                         errors.push(format!(
                             "同一批包含重复目标，已跳过以避免覆盖刚移动的会话: {}",
                             path_to_slash(&target_relative)
                         ));
                         continue;
-                    }
-                    overwrite = true;
-                    overwritten_id = parse_session_file_for_list(&target_path)
-                        .ok()
-                        .and_then(|summary| summary.id)
+                    };
+                    let summary =
+                        match resolve_status_source(&root, &target_path).and_then(|path| {
+                            if path != existing {
+                                return Err(format!("待覆盖的目标会话已变化: {}", path.display()));
+                            }
+                            parse_session_file_for_list(&path)
+                        }) {
+                            Ok(summary) => summary,
+                            Err(err) => {
+                                errors.push(err);
+                                continue;
+                            }
+                        };
+                    overwritten_id = summary
+                        .id
                         .or_else(|| extract_uuid_like(&target_relative.to_string_lossy()));
+                    overwritten_path = Some(existing);
                 }
-                ConflictStrategy::ModifyId => {
+                ConflictStrategy::ModifyId => loop {
                     let new_id = new_session_id(&id);
                     let reassigned = reassigned_relative_path(&target_relative, &id, &new_id)?;
                     final_target_path = root.join(&reassigned);
-                    while target_taken(&final_target_path) {
-                        let next_id = new_session_id(&new_id);
-                        let next = reassigned_relative_path(&target_relative, &id, &next_id)?;
-                        final_target_path = root.join(&next);
-                        target_id = next_id.clone();
-                        rewrite_id = Some((id.clone(), next_id));
-                    }
-                    if rewrite_id.is_none() {
+                    if !reserved(&final_target_path)
+                        && rollout_slot_entry(&final_target_path)?.is_none()
+                    {
                         target_id = new_id.clone();
                         rewrite_id = Some((id.clone(), new_id));
+                        break;
                     }
-                }
+                },
             }
         }
         reserved_targets.insert(conversation_path_key(&final_target_path));
+        if is_compressed_rollout(&source_path) {
+            final_target_path = compressed_rollout_path(&final_target_path);
+        }
         moves.push(StatusMove {
             id,
             target_id,
             source_path,
             target_path: final_target_path,
             rewrite_id,
-            overwrite,
+            overwritten_path,
             overwritten_id,
         });
     }
@@ -308,34 +332,108 @@ pub(super) fn set_conversation_status_impl(
 
 struct AppliedStatusMove {
     status_move: StatusMove,
-    overwrite_backup: Option<PathBuf>,
+    overwrite_backup: Option<OverwriteBackup>,
+}
+
+struct OverwriteBackup {
+    original: PathBuf,
+    backup: PathBuf,
+}
+
+fn resolve_status_source(root: &Path, logical: &Path) -> Result<PathBuf, String> {
+    let (path, _) = resolve_rollout_file(logical)
+        .map_err(|err| format!("读取会话文件失败 {}: {err}", logical.display()))?;
+    validate_session_file_path(root, &path)?;
+    ensure_single_rollout(logical, &path)?;
+    Ok(path)
+}
+
+fn path_entry_present(path: &Path) -> Result<bool, String> {
+    match path.symlink_metadata() {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("复核会话文件失败 {}: {err}", path.display())),
+    }
+}
+
+/// Unlike the rollout reader, a destination check must treat dangling links as occupied.
+fn rollout_slot_entry(logical: &Path) -> Result<Option<PathBuf>, String> {
+    if path_entry_present(logical)? {
+        return Ok(Some(logical.to_path_buf()));
+    }
+    let compressed = compressed_rollout_path(logical);
+    Ok(path_entry_present(&compressed)?.then_some(compressed))
+}
+
+/// A logical rollout is safe to move or replace only if its other representation does not
+/// exist. Otherwise renaming only one file could make Codex load the stale one.
+fn ensure_single_rollout(logical: &Path, physical: &Path) -> Result<(), String> {
+    let sibling = if is_compressed_rollout(physical) {
+        logical.to_path_buf()
+    } else {
+        compressed_rollout_path(logical)
+    };
+    if path_entry_present(&sibling)? {
+        Err(format!(
+            "同一会话同时存在明文和压缩文件，未移动或覆盖: {}",
+            logical.display()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn restore_overwrite_backup(backup: &OverwriteBackup) -> Result<(), String> {
+    let occupied = rollout_slot_entry(&logical_rollout_path(&backup.original))
+        .map_err(|err| format!("{err}（备份保留于 {}）", backup.backup.display()))?;
+    if occupied.is_some() {
+        return Err(format!(
+            "原目标已被占用，未覆盖 {}（备份保留于 {}）",
+            backup.original.display(),
+            backup.backup.display()
+        ));
+    }
+    fs::rename(&backup.backup, &backup.original).map_err(|err| {
+        format!(
+            "恢复原目标会话失败 {}: {err}（备份保留于 {}）",
+            backup.original.display(),
+            backup.backup.display()
+        )
+    })
 }
 
 fn apply_status_move_file(
     root: &Path,
     status_move: &StatusMove,
 ) -> Result<AppliedStatusMove, String> {
-    let target_relative = status_move
-        .target_path
+    let logical_source = logical_rollout_path(&status_move.source_path);
+    ensure_single_rollout(&logical_source, &status_move.source_path)?;
+    let logical_target = logical_rollout_path(&status_move.target_path);
+    let target_relative = logical_target
         .strip_prefix(root)
         .map(path_to_slash)
-        .unwrap_or_else(|_| status_move.target_path.to_string_lossy().to_string());
+        .unwrap_or_else(|_| logical_target.to_string_lossy().to_string());
     if let Some(parent) = status_move.target_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("创建目标目录失败 {}: {err}", parent.display()))?;
     }
-    let overwrite_backup = if status_move.overwrite && status_move.target_path.exists() {
-        let backup_path = status_overwrite_backup_path(&status_move.target_path, &status_move.id);
-        fs::rename(&status_move.target_path, &backup_path)
-            .map_err(|err| format!("备份覆盖目标会话失败 {}: {err}", target_relative))?;
-        Some(backup_path)
-    } else {
-        None
+    let overwrite_backup = match rollout_slot_entry(&logical_target)? {
+        Some(original) if Some(&original) == status_move.overwritten_path.as_ref() => {
+            if resolve_status_source(root, &logical_target)? != original {
+                return Err(format!("待覆盖的目标会话已变化，未移动: {target_relative}"));
+            }
+            let backup = status_overwrite_backup_path(&original, &status_move.id);
+            fs::rename(&original, &backup)
+                .map_err(|err| format!("备份覆盖目标会话失败 {}: {err}", target_relative))?;
+            Some(OverwriteBackup { original, backup })
+        }
+        Some(_) => {
+            return Err(format!(
+                "目标会话已存在且不在覆盖计划中，未移动: {target_relative}"
+            ))
+        }
+        None => None,
     };
-    if overwrite_backup.is_none() && status_move.target_path.exists() {
-        // Planned as free under the same I/O lock; something else created it since. Never replace it.
-        return Err(format!("目标会话已存在，未移动: {target_relative}"));
-    }
     let move_result = if let Some((old_id, new_id)) = &status_move.rewrite_id {
         copy_session_with_new_id(
             &status_move.source_path,
@@ -353,30 +451,9 @@ fn apply_status_move_file(
         })
     };
     if let Err(mut error) = move_result {
-        // The target never held anything but our partial copy (or it was renamed to the backup).
-        if status_move.rewrite_id.is_some() && status_move.target_path.exists() {
-            if let Err(remove_err) = fs::remove_file(&status_move.target_path) {
-                error.push_str(&format!(
-                    "；清理未完成目标失败 {}: {remove_err}",
-                    status_move.target_path.display()
-                ));
-            }
-        }
-        if let Some(backup_path) = &overwrite_backup {
-            if status_move.target_path.exists() {
-                if let Err(remove_err) = fs::remove_file(&status_move.target_path) {
-                    error.push_str(&format!(
-                        "；清理未完成目标失败 {}: {remove_err}",
-                        status_move.target_path.display()
-                    ));
-                }
-            }
-            if let Err(restore_err) = fs::rename(backup_path, &status_move.target_path) {
-                error.push_str(&format!(
-                    "；恢复原目标会话失败 {}: {restore_err}（备份保留于 {}）",
-                    status_move.target_path.display(),
-                    backup_path.display()
-                ));
+        if let Some(backup) = &overwrite_backup {
+            if let Err(restore_err) = restore_overwrite_backup(backup) {
+                error.push_str(&format!("；{restore_err}"));
             }
         }
         return Err(error);
@@ -397,6 +474,22 @@ fn rollback_status_move_file(applied: &AppliedStatusMove) -> Result<(), String> 
             )
         })?;
     } else {
+        let keep_paths = || {
+            let mut retained = format!("移动后的会话保留于 {}", status_move.target_path.display());
+            if let Some(backup) = &applied.overwrite_backup {
+                retained.push_str(&format!("，原目标备份保留于 {}", backup.backup.display()));
+            }
+            retained
+        };
+        let occupied = rollout_slot_entry(&logical_rollout_path(&status_move.source_path))
+            .map_err(|err| format!("{err}（{}）", keep_paths()))?;
+        if let Some(occupied) = occupied {
+            return Err(format!(
+                "撤销移动时源会话路径已被占用，未覆盖 {}（{}）",
+                occupied.display(),
+                keep_paths()
+            ));
+        }
         if let Some(parent) = status_move.source_path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 format!("撤销移动失败，无法创建原目录 {}: {err}", parent.display())
@@ -410,14 +503,8 @@ fn rollback_status_move_file(applied: &AppliedStatusMove) -> Result<(), String> 
             )
         })?;
     }
-    if let Some(backup_path) = &applied.overwrite_backup {
-        fs::rename(backup_path, &status_move.target_path).map_err(|err| {
-            format!(
-                "撤销移动失败，无法恢复被覆盖的会话 {}: {err}（备份保留于 {}）",
-                status_move.target_path.display(),
-                backup_path.display()
-            )
-        })?;
+    if let Some(backup) = &applied.overwrite_backup {
+        restore_overwrite_backup(backup)?;
     }
     Ok(())
 }
@@ -433,9 +520,12 @@ fn finalize_status_move_file(root: &Path, applied: &AppliedStatusMove) -> Vec<St
             ));
         }
     }
-    if let Some(backup_path) = &applied.overwrite_backup {
-        if let Err(err) = fs::remove_file(backup_path) {
-            errors.push(format!("清理覆盖备份失败 {}: {err}", backup_path.display()));
+    if let Some(backup) = &applied.overwrite_backup {
+        if let Err(err) = fs::remove_file(&backup.backup) {
+            errors.push(format!(
+                "清理覆盖备份失败 {}: {err}",
+                backup.backup.display()
+            ));
         }
     }
     remove_empty_parent_dirs(root, status_move.source_path.parent());
@@ -486,4 +576,61 @@ fn date_parts_from_timestamp(timestamp: &str) -> Option<(String, String, String)
 fn date_parts_from_rollout_filename(file_name: &str) -> Option<(String, String, String)> {
     let raw = file_name.strip_prefix("rollout-")?.get(0..10)?;
     date_parts_from_timestamp(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_manager::backup::unique_backup_id;
+
+    #[test]
+    fn rollback_preserves_both_formats_if_the_source_slot_is_recreated() {
+        let root = std::env::temp_dir().join(unique_backup_id("compressed-move-rollback"));
+        for format in [false, true] {
+            let root = root.join(if format { "compressed" } else { "plain" });
+            let logical_source = root.join("sessions/rollout-a.jsonl");
+            let source_path = compressed_rollout_path(&logical_source);
+            let overwritten_path = root.join("archived_sessions/rollout-a.jsonl");
+            let target_path = compressed_rollout_path(&overwritten_path);
+            fs::create_dir_all(logical_source.parent().unwrap()).unwrap();
+            fs::create_dir_all(overwritten_path.parent().unwrap()).unwrap();
+            let original = zstd::encode_all(b"to archive".as_slice(), 0).unwrap();
+            fs::write(&source_path, &original).unwrap();
+            fs::write(&overwritten_path, b"existing target").unwrap();
+            let applied = apply_status_move_file(
+                &root,
+                &StatusMove {
+                    id: "a".to_string(),
+                    target_id: "a".to_string(),
+                    source_path: source_path.clone(),
+                    target_path: target_path.clone(),
+                    rewrite_id: None,
+                    overwritten_path: Some(overwritten_path),
+                    overwritten_id: Some("a".to_string()),
+                },
+            )
+            .unwrap();
+            let recreated = if format { source_path } else { logical_source };
+            fs::write(&recreated, b"created externally").unwrap();
+
+            let err = rollback_status_move_file(&applied).unwrap_err();
+            let backup = applied.overwrite_backup.unwrap().backup;
+            assert!(
+                err.contains(&recreated.to_string_lossy().into_owned()),
+                "{err}"
+            );
+            assert!(
+                err.contains(&target_path.to_string_lossy().into_owned()),
+                "{err}"
+            );
+            assert!(
+                err.contains(&backup.to_string_lossy().into_owned()),
+                "{err}"
+            );
+            assert_eq!(fs::read(recreated).unwrap(), b"created externally");
+            assert_eq!(fs::read(target_path).unwrap(), original);
+            assert_eq!(fs::read(backup).unwrap(), b"existing target");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

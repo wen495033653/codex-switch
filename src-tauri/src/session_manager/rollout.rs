@@ -9,7 +9,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::{
     fs,
-    io::{self, BufRead, BufReader},
+    io::{self, BufRead, BufReader, Read, Write},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -395,15 +395,37 @@ pub(super) fn copy_session_with_new_id(
     old_id: &str,
     new_id: &str,
 ) -> Result<(), String> {
-    let content =
-        fs::read(source).map_err(|err| format!("读取会话文件失败 {}: {err}", source.display()))?;
+    let mut content = Vec::new();
+    open_rollout(source)
+        .and_then(|mut reader| reader.read_to_end(&mut content))
+        .map_err(|err| format!("读取会话文件失败 {}: {err}", source.display()))?;
     let output = rewrite_session_id_content(&content, old_id, new_id)?;
-    fs::write(target, output).map_err(|err| {
+    let write_error = |err| {
         format!(
             "写入修改 ID 后的会话失败 {} -> {}: {err}",
             source.display(),
             target.display()
         )
+    };
+    let mut file = fs::File::create_new(target).map_err(write_error)?;
+    let result = if is_compressed_rollout(target) {
+        zstd::Encoder::new(&mut file, 0).and_then(|mut encoder| {
+            encoder.write_all(&output)?;
+            encoder.finish().map(|_| ())
+        })
+    } else {
+        file.write_all(&output)
+    };
+    drop(file);
+    result.map_err(|err| {
+        let mut error = write_error(err);
+        if let Err(cleanup) = fs::remove_file(target) {
+            error.push_str(&format!(
+                "；清理未完成目标失败 {}: {cleanup}",
+                target.display()
+            ));
+        }
+        error
     })
 }
 

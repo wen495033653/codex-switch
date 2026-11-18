@@ -19,6 +19,8 @@
 
 - DB 失败（打不开、缺 `threads` 表或缺 `id/archived/archived_at/rollout_path` 列、SQLite 报错）时，按相反顺序撤销第 1 阶段的全部移动，返回 `ok=false`，`message` 写明原因和撤销结果（撤销失败会逐个列出路径）。state DB 不存在视为无需同步。
 - 第 3 阶段的清理失败（包括 global state）进入 `errors`，`ok=false`，`message` 带上原因；此时数据库已提交，文件已在新位置。
+- 明文和压缩文件按同一个逻辑目标判定冲突。常规移动保留原格式和字节，数据库写实际路径；修改 ID 时仍保留源格式。覆盖只替换一个明确的物理目标，回滚恢复目标原来的后缀；明文与压缩版同时存在时不移动或覆盖该组文件。
+- 如果回滚时外部程序已重建源路径（任一后缀），保留新出现的文件、已移动的目标和覆盖备份，并在错误中列出位置。provider 同步仍更新 state DB 的归属，但不把显式的 `.jsonl.zst` 当作明文扫描或改写。
 - 不再有 `let _ =` 丢弃 DB 或 global state 错误。
 
 ### 写 `threads` 表（`state_db::write_state_threads`）
@@ -30,11 +32,11 @@
 
 ### 导出（`transfer::collect_export_bundle`）
 
-在 I/O 锁内读取目录和文件；每个文件只读一次，同一份字节用于 zip 条目、manifest 的 `sha256` 和 `size_bytes`。锁在写 zip 之前释放。
+在 I/O 锁内读取目录和文件；同一份快照用于 zip 条目、manifest 的 `sha256` 和 `size_bytes`。压缩会话解码成原有的 `.jsonl` 包条目，不改源文件或包版本。锁在写 zip 之前释放。
 
 ### 导入（`transfer::apply_import_candidates`）
 
-- 确认对话框里的分类是在不持锁时做的；用户确认后在锁内复核：新文件用 `OpenOptions::create_new` 写入，期间出现的同名文件记为冲突且不覆盖；“内容相同跳过”的文件重新计算 SHA-256，变化了记为冲突。
+- 分类和确认后的复核都在 I/O 锁内读会话文件，不在用户确认期间持锁。新文件用 `OpenOptions::create_new` 写入，期间出现相同逻辑路径的文件（明文或压缩）记为冲突且不覆盖；“内容相同跳过”的文件按解码后的内容重新计算 SHA-256，变化了记为冲突。
 - 单个文件失败（建目录、创建、写入）收集进 `errors` 继续处理其余文件；写入中途失败会删掉本次创建的半截文件。
 - 最后对“本次写入成功 + 复核通过的相同文件”统一 upsert。upsert 失败时文件保留，`ok=false`，`message` 写明原因；重新导入同一个包会把这些文件识别为“相同跳过”并再次 upsert，从而补写索引。
 - 备份改用 `VACUUM INTO`（`state_db::backup_state_database_file`），位置从 Codex home 下的 `state_5.sqlite.bak.context-manager-*` 改为数据目录 `session-manager/backups/import/`。
@@ -119,6 +121,7 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 
 - Windows 隔离运行，Codex app-server `0.169.0-alpha.11.1`：`app_server_lists_and_previews_compressed_rollouts_across_pages` 先对 160 条未归档 / 20 条已归档会话建立索引，再把 130 个 rollout 替换成 `.jsonl.zst`。真实 app-server 跨页重查仍返回全部 180 条，归档计数仍为 20；压缩归档会话的预览可读。未操作正式库或前台界面。
 - 离线用例覆盖逻辑路径去重、缺失文件报错、与未压缩历史一致的消息分页或响应项解析、旧快照和无效 Zstandard 流的错误。
+- 同版官方 CLI 在隔离夹具中归档和取消归档后，数据库写实际 `.jsonl.zst`，RPC 仍返回逻辑 `.jsonl`。会话管理离线用例覆盖压缩归档往返字节不变、修改 ID 后仍能解码、跨格式覆盖遇 DB 故障的双文件回滚、源路径已重建时不覆盖、V1 导入/导出往返与迟到的压缩文件冲突；状态同步用例确认不会把压缩流里的字节标记误认成用户消息。
 
 ### 2026-11-17：永久删除
 
