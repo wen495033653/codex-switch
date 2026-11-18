@@ -1,8 +1,9 @@
 use super::{
     codex_home::{
         conversation_path_key, ensure_session_relative_path, extract_uuid_like,
-        normalize_relative_path, path_to_slash, relative_path_under_root, resolve_codex_root,
-        session_index_title, validate_codex_root, SessionIndex,
+        is_compressed_rollout, logical_rollout_path, normalize_relative_path, path_to_slash,
+        relative_path_under_root, resolve_codex_root, resolve_rollout_file, session_index_title,
+        validate_codex_root, validate_session_file_path, SessionIndex,
     },
     model::{ConversationItem, SessionSummary},
     rollout::parse_session_file_for_list,
@@ -16,6 +17,7 @@ use super::{
 };
 use crate::{
     codex_app_server::{list_interactive_threads, CodexDesktopThread},
+    codex_sessions::lock_codex_session_io,
     paths::codex_state_db_path_for_root,
     time_util::parse_rfc3339_seconds,
 };
@@ -36,6 +38,7 @@ pub(super) struct CurrentStateCatalog {
 
 pub(super) fn scan_conversations_impl(root: Option<String>) -> Result<Value, String> {
     let root = resolve_codex_root(root.as_deref())?;
+    let _io_guard = lock_codex_session_io("扫描会话")?;
     validate_codex_root(&root)?;
     let desktop_threads = list_interactive_threads(&root)
         .map_err(|err| format!("通过 Codex Desktop 查询会话失败: {err}"))?;
@@ -69,14 +72,14 @@ pub(super) fn conversations_from_desktop_threads(
     let mut seen_paths = HashSet::new();
 
     for thread in desktop_threads {
-        let id = thread.id.clone();
-        let path_key = conversation_path_key(&thread.path);
-        if seen_ids.contains(&id) || seen_paths.contains(&path_key) {
+        let id = thread.id;
+        if seen_ids.contains(&id) {
             warnings.push(format!("已忽略 Codex Desktop 返回的重复会话: {id}"));
             continue;
         }
 
-        let relative = match relative_path_under_root(root, &thread.path) {
+        let logical = logical_rollout_path(&thread.path);
+        let relative = match relative_path_under_root(root, &logical) {
             Some(relative) => relative,
             None => {
                 errors.push(format!(
@@ -91,16 +94,8 @@ pub(super) fn conversations_from_desktop_threads(
             errors.push(format!("Codex Desktop 返回了无效会话路径 {id}: {err}"));
             continue;
         }
-        let metadata = match thread.path.metadata() {
-            Ok(metadata) if metadata.is_file() => metadata,
-            Ok(_) => {
-                errors.push(format!(
-                    "Codex Desktop 会话路径不是文件 {}: {}",
-                    id,
-                    thread.path.display()
-                ));
-                continue;
-            }
+        let (path, metadata) = match resolve_rollout_file(&logical) {
+            Ok(file) => file,
             Err(err) => {
                 errors.push(format!(
                     "读取 Codex Desktop 会话文件失败 {}: {}: {err}",
@@ -110,9 +105,19 @@ pub(super) fn conversations_from_desktop_threads(
                 continue;
             }
         };
+        if is_compressed_rollout(&path) {
+            if let Err(err) = validate_session_file_path(root, &path) {
+                errors.push(format!("Codex Desktop 返回了无效压缩会话路径 {id}: {err}"));
+                continue;
+            }
+        }
+        let path_key = conversation_path_key(&path);
+        if !seen_paths.insert(path_key) {
+            warnings.push(format!("已忽略 Codex Desktop 返回的重复会话: {id}"));
+            continue;
+        }
 
         seen_ids.insert(id.clone());
-        seen_paths.insert(path_key);
 
         let preview = non_empty(thread.preview);
         let title = thread
@@ -135,7 +140,7 @@ pub(super) fn conversations_from_desktop_threads(
             } else {
                 "active".to_string()
             },
-            source_path: thread.path.to_string_lossy().to_string(),
+            source_path: path.to_string_lossy().into_owned(),
             relative_path: path_to_slash(&relative),
             size_bytes: metadata.len(),
             cwd: Some(thread.cwd.to_string_lossy().to_string()),
@@ -160,10 +165,11 @@ pub(super) fn conversation_from_path(
         parse_error: Some(err),
         ..SessionSummary::default()
     });
-    let relative_path = path
+    let logical = logical_rollout_path(path);
+    let relative_path = logical
         .strip_prefix(root)
         .map(path_to_slash)
-        .unwrap_or_else(|_| path.to_string_lossy().to_string());
+        .unwrap_or_else(|_| logical.to_string_lossy().into_owned());
     let id = summary
         .id
         .clone()
@@ -328,16 +334,13 @@ pub(super) fn read_current_state_conversations(
     let mut invalid_paths = 0usize;
     let mut duplicate_paths = 0usize;
     visit_state_thread_rows(&connection, |row| {
-        let Some((path, relative)) = resolve_state_rollout_path(root, &row.rollout_path) else {
+        let Some((logical, relative)) = resolve_state_rollout_path(root, &row.rollout_path) else {
             invalid_paths += 1;
             return false;
         };
-        let Ok(metadata) = path.metadata() else {
+        let Ok((path, metadata)) = resolve_rollout_file(&logical) else {
             return false;
         };
-        if !metadata.is_file() {
-            return false;
-        }
         if !indexed_paths.insert(conversation_path_key(&path)) {
             duplicate_paths += 1;
             return false;
@@ -377,7 +380,8 @@ pub(super) fn current_state_conversation_for_path(
     session_index: &SessionIndex,
 ) -> Result<Option<ConversationItem>, String> {
     let target = conversation_path_key(path);
-    let Some(target_name) = path
+    let logical = logical_rollout_path(path);
+    let Some(target_name) = logical
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
     else {
@@ -386,16 +390,17 @@ pub(super) fn current_state_conversation_for_path(
     let connection = open_current_state_db(root)?;
     let mut found = None;
     visit_state_thread_rows(&connection, |row| {
-        let Some((row_path, relative)) = resolve_state_rollout_path(root, &row.rollout_path) else {
+        let Some((row_logical, relative)) = resolve_state_rollout_path(root, &row.rollout_path)
+        else {
             return false;
         };
-        if !same_file_name(&row_path, &target_name) {
+        if !same_file_name(&row_logical, &target_name) {
             return false;
         }
-        let Ok(metadata) = row_path.metadata() else {
+        let Ok((row_path, metadata)) = resolve_rollout_file(&row_logical) else {
             return false;
         };
-        if !metadata.is_file() || conversation_path_key(&row_path) != target {
+        if conversation_path_key(&row_path) != target {
             return false;
         }
         found = Some(conversation_item_from_state_row(
@@ -428,8 +433,7 @@ fn resolve_state_rollout_path(root: &Path, rollout_path: &str) -> Option<(PathBu
     if raw.is_empty() {
         return None;
     }
-    let raw = raw.strip_prefix(r"\\?\").unwrap_or(raw);
-    let candidate = PathBuf::from(raw);
+    let candidate = logical_rollout_path(Path::new(raw)).into_owned();
     let (path, relative) = if candidate.is_absolute() {
         let relative = relative_path_under_root(root, &candidate)?;
         (candidate, relative)

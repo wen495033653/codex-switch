@@ -497,6 +497,75 @@ fn preview_uses_response_items_when_event_messages_are_absent() {
 }
 
 #[test]
+fn compressed_rollout_preview_matches_plain_message_pages() {
+    let root = temp_path("compressed-preview-pages");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("rollout-preview.jsonl");
+    let compressed = compressed_rollout_path(&path);
+    let compare = |content: &[u8], source: PreviewMessageSource| {
+        fs::write(&path, content).unwrap();
+        fs::write(&compressed, zstd::encode_all(content, 0).unwrap()).unwrap();
+        let read = |path: &Path| {
+            let latest = read_preview_message_page(path, None, None, Some(2), None, None).unwrap();
+            assert_eq!(latest.source, source);
+            assert!(latest.has_more);
+            let earlier = read_preview_message_page(
+                path,
+                latest.next_before,
+                Some(latest.file_size),
+                Some(2),
+                Some(latest.source.as_str()),
+                None,
+            )
+            .unwrap();
+            assert!(!earlier.has_more);
+            let stale = read_preview_message_page(
+                path,
+                None,
+                Some(latest.file_size + 1),
+                Some(2),
+                None,
+                None,
+            )
+            .unwrap_err();
+            assert!(stale.contains("会话文件已变化"));
+            (
+                latest.next_before,
+                json!([earlier.messages, latest.messages]),
+            )
+        };
+        assert_eq!(read(&path), read(&compressed));
+    };
+    let events = (0..4).map(|index| {
+        format!(
+            "{}\n",
+            json!({"type": "event_msg", "payload": {"type": "user_message", "message": format!("event {index}")}})
+        )
+    }).collect::<String>();
+    let responses = (0..4).map(|index| {
+        format!(
+            "{}\n",
+            json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"text": format!("response {index}")}]}})
+        )
+    }).collect::<String>();
+    compare(
+        responses.trim_end().as_bytes(),
+        PreviewMessageSource::Response,
+    );
+    // Event messages are preferred even when response items also appear.
+    compare(
+        format!("{responses}{events}").as_bytes(),
+        PreviewMessageSource::Event,
+    );
+
+    fs::write(&compressed, b"invalid zstd").unwrap();
+    let error =
+        read_preview_message_page(&compressed, None, None, Some(2), None, None).unwrap_err();
+    assert!(error.contains("压缩会话文件"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn preview_snapshot_allows_append_and_rejects_truncate() {
     let path = temp_path("preview-snapshot.jsonl");
     let initial = (0..5)
@@ -729,6 +798,157 @@ fn scan_catalog_uses_only_codex_desktop_thread_list() {
         conversations[0].source_path,
         archived_path.to_string_lossy()
     );
+}
+
+#[test]
+fn compressed_rollout_stays_in_catalog_with_its_logical_path() {
+    let root = temp_path("compressed-list");
+    let relative = Path::new("sessions/rollout-compressed.jsonl");
+    let logical = root.join(relative);
+    let file = compressed_rollout_path(&logical);
+    fs::create_dir_all(logical.parent().unwrap()).unwrap();
+    let bytes = zstd::encode_all(
+        &br#"{"type":"event_msg","payload":{"type":"user_message","message":"compressed history"}}"#[..],
+        0,
+    ).unwrap();
+    fs::write(&file, &bytes).unwrap();
+    let thread = CodexDesktopThread {
+        id: "compressed-thread".to_string(),
+        name: Some("Compressed thread".to_string()),
+        preview: "compressed history".to_string(),
+        cwd: root.join("workspace"),
+        path: logical.clone(),
+        updated_at: 1,
+        recency_at: Some(1),
+        archived: false,
+    };
+    let mut duplicate = thread.clone();
+    duplicate.id = "duplicate-thread".to_string();
+    duplicate.path = file.clone();
+    let mut missing = thread.clone();
+    missing.id = "missing-thread".to_string();
+    missing.path = logical.with_file_name("rollout-missing.jsonl");
+    let (items, warnings, errors) =
+        conversations_from_desktop_threads(&root, vec![thread, duplicate, missing]);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].relative_path, path_to_slash(relative));
+    assert_eq!(items[0].source_path, file.to_string_lossy());
+    assert_eq!(items[0].size_bytes, bytes.len() as u64);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("missing-thread"));
+    let db = create_current_state_db(&root);
+    db.execute(
+        "INSERT INTO threads (id, rollout_path, title) VALUES (?1, ?2, 'From state DB')",
+        params!["compressed-thread", logical.to_string_lossy()],
+    )
+    .unwrap();
+    drop(db);
+    let preview = preview_conversation_impl(
+        root.to_string_lossy().into_owned(),
+        path_to_slash(relative),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(preview["conversation"]["title"], "From state DB");
+    assert_eq!(preview["messages"][0]["text"], "compressed history");
+    assert!(!logical.exists());
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "starts the installed Codex Desktop app-server; run with isolated HOME and APPDATA"]
+fn app_server_lists_and_previews_compressed_rollouts_across_pages() {
+    let fixture = temp_path("compressed-catalog-official-rpc");
+    let root = fixture.join("codex");
+    let active = root.join("sessions/2026/11/17");
+    let archived = root.join("archived_sessions");
+    let originals = fixture.join("originals");
+    for dir in [&active, &archived, &originals] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let mut files_to_compress = Vec::new();
+    for i in 0..180 {
+        let id = format!("019f0000-0000-7000-8000-{i:012}");
+        let dir = if i < 160 { &active } else { &archived };
+        let path = dir.join(format!("rollout-2026-11-17T00-00-00-{id}.jsonl"));
+        let stamp = "2026-11-17T00:00:00Z";
+        let meta = json!({
+            "type": "session_meta", "timestamp": stamp,
+            "payload": {
+                "id": id, "timestamp": stamp, "cwd": root, "source": "vscode",
+                "model_provider": "openai", "originator": "codex_fixture",
+                "cli_version": "0.169.0", "history_mode": "legacy"
+            }
+        });
+        let message = json!({
+            "type": "event_msg", "timestamp": stamp,
+            "payload": { "type": "user_message", "message": "fixture message", "kind": "plain" }
+        });
+        fs::write(&path, format!("{meta}\n{message}\n")).unwrap();
+        if i >= 50 {
+            files_to_compress.push(path);
+        }
+    }
+    let scan = || scan_conversations_impl(Some(root.to_string_lossy().into_owned())).unwrap();
+    assert_eq!(scan()["conversations"].as_array().unwrap().len(), 180);
+    // Match Codex's storage: move the originals out of CODEX_HOME, leaving their logical
+    // paths in the state DB while the bytes on disk are only in .jsonl.zst.
+    for path in &files_to_compress {
+        let bytes = fs::read(path).unwrap();
+        fs::write(
+            compressed_rollout_path(path),
+            zstd::encode_all(bytes.as_slice(), 0).unwrap(),
+        )
+        .unwrap();
+        fs::rename(path, originals.join(path.file_name().unwrap())).unwrap();
+    }
+    let response = scan();
+    let conversations = response["conversations"].as_array().unwrap();
+    let errors = response["errors"].as_array().unwrap();
+    assert!(
+        errors.is_empty(),
+        "{} errors; first: {:?}",
+        errors.len(),
+        errors.first()
+    );
+    assert_eq!(conversations.len(), 180);
+    assert_eq!(
+        conversations
+            .iter()
+            .filter(|row| row["status"] == "archived")
+            .count(),
+        20
+    );
+    assert_eq!(
+        conversations
+            .iter()
+            .filter(|row| row["source_path"].as_str().unwrap().ends_with(".jsonl.zst"))
+            .count(),
+        130
+    );
+    let item = conversations
+        .iter()
+        .find(|row| row["status"] == "archived")
+        .unwrap();
+    let preview = preview_conversation_impl(
+        root.to_string_lossy().into_owned(),
+        item["relative_path"].as_str().unwrap().to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(preview["messages"][0]["text"], "fixture message");
+    fs::remove_dir_all(fixture).unwrap();
 }
 
 #[test]

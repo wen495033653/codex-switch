@@ -1,4 +1,5 @@
 use super::{
+    codex_home::is_compressed_rollout,
     model::{ConversationMessage, SessionSummary, ThreadDynamicToolMetadata},
     util::{backup_stamp, first_non_empty, hex_bytes, non_empty, truncate_text},
 };
@@ -8,7 +9,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{self, BufRead, BufReader},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -26,6 +27,15 @@ pub(super) fn parse_session_file_for_list(path: &Path) -> Result<SessionSummary,
     parse_session_file_with_limit(path, false, Some(240))
 }
 
+pub(super) fn open_rollout(path: &Path) -> io::Result<Box<dyn BufRead>> {
+    let file = fs::File::open(path)?;
+    if is_compressed_rollout(path) {
+        Ok(Box::new(BufReader::new(zstd::Decoder::new(file)?)))
+    } else {
+        Ok(Box::new(BufReader::new(file)))
+    }
+}
+
 #[cfg(test)]
 pub(super) fn parse_session_file(
     path: &Path,
@@ -39,9 +49,8 @@ fn parse_session_file_with_limit(
     include_messages: bool,
     max_lines: Option<usize>,
 ) -> Result<SessionSummary, String> {
-    let file = fs::File::open(path)
-        .map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
-    let mut reader = BufReader::new(file);
+    let mut reader =
+        open_rollout(path).map_err(|err| format!("读取会话文件失败 {}: {err}", path.display()))?;
     let mut summary = SessionSummary::default();
     let mut valid_lines = 0usize;
     let mut event_messages = Vec::new();

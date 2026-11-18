@@ -1,16 +1,18 @@
 use super::{
     catalog::{conversation_from_path, current_state_conversation_for_path},
     codex_home::{
-        ensure_session_relative_path, normalize_relative_path, read_session_index,
-        resolve_codex_root, status_from_relative_path, validate_codex_root,
+        ensure_session_relative_path, is_compressed_rollout, normalize_relative_path,
+        read_session_index, resolve_codex_root, resolve_rollout_file, status_from_relative_path,
+        validate_codex_root, validate_session_file_path,
     },
     model::ConversationMessage,
-    rollout::readable_payload_text,
+    rollout::{open_rollout, readable_payload_text},
     util::non_empty,
 };
 use crate::{codex_sessions::lock_codex_session_io, json_util::raw_string_field};
 use serde_json::{json, Value};
 use std::{
+    collections::VecDeque,
     fs,
     io::{Read, Seek, SeekFrom},
     path::Path,
@@ -24,6 +26,7 @@ const PREVIEW_MESSAGE_LIMIT_MAX: usize = 200;
 const PREVIEW_REVERSE_READ_BLOCK_BYTES: usize = 64 * 1024;
 
 const PREVIEW_CANCELLED_ERROR: &str = "会话预览请求已取消";
+const PREVIEW_CHANGED_ERROR: &str = "会话文件已变化，请重新加载最新内容";
 
 static LATEST_PREVIEW_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -67,10 +70,9 @@ pub(super) fn preview_conversation_impl(
     // The session sync rewrites rollouts in place (truncate, then write); reading one meanwhile
     // returns a cut file. The preview waits for the sync like every other session reader.
     let _io_guard = lock_codex_session_io("读取会话预览")?;
-    let path = root.join(&relative);
-    if !path.exists() {
-        return Err(format!("会话文件不存在: {}", relative.display()));
-    }
+    let (path, _) = resolve_rollout_file(&root.join(&relative))
+        .map_err(|err| format!("读取会话文件失败 {}: {err}", relative.display()))?;
+    validate_session_file_path(&root, &path)?;
 
     let mut index_warnings = Vec::new();
     let session_index = read_session_index(&root, &mut index_warnings);
@@ -154,6 +156,16 @@ pub(super) fn read_preview_message_page(
     ensure_preview_request_current(request_id)?;
     let limit = normalize_preview_limit(limit);
     let source = parse_preview_message_source(message_source)?;
+    if is_compressed_rollout(path) {
+        return scan_compressed_preview(
+            path,
+            before_cursor,
+            snapshot_size,
+            limit,
+            source,
+            request_id,
+        );
+    }
     if let Some(source) = source {
         return scan_preview_message_source(
             path,
@@ -198,7 +210,7 @@ fn scan_preview_message_source(
         .map_err(|err| format!("读取会话文件信息失败 {}: {err}", path.display()))?
         .len();
     if snapshot_size.is_some_and(|snapshot| current_file_size < snapshot) {
-        return Err("会话文件已变化，请重新加载最新内容".to_string());
+        return Err(PREVIEW_CHANGED_ERROR.to_string());
     }
     let file_size = snapshot_size.unwrap_or(current_file_size);
     let mut position = before_cursor.unwrap_or(file_size).min(file_size);
@@ -227,9 +239,9 @@ fn scan_preview_message_source(
             let segment_start = newline + 1;
             if segment_start < segment_end {
                 let line_offset = start.saturating_add(segment_start as u64);
-                if let Some(message) = preview_message_from_jsonl_line(
+                if let Some((_, message)) = preview_message_from_jsonl_line(
                     &block[segment_start..segment_end],
-                    source,
+                    Some(source),
                     line_offset,
                 ) {
                     matches.push((line_offset, message));
@@ -243,8 +255,8 @@ fn scan_preview_message_source(
 
         if start == 0 {
             if segment_end > 0 {
-                if let Some(message) =
-                    preview_message_from_jsonl_line(&block[..segment_end], source, 0)
+                if let Some((_, message)) =
+                    preview_message_from_jsonl_line(&block[..segment_end], Some(source), 0)
                 {
                     matches.push((0, message));
                 }
@@ -279,41 +291,123 @@ fn scan_preview_message_source(
     })
 }
 
+/// Compressed rollouts cannot be reverse-seeked. Decode once up to the previous page's logical
+/// byte offset, retaining only the latest page of matching messages.
+fn scan_compressed_preview(
+    path: &Path,
+    before_cursor: Option<u64>,
+    snapshot_size: Option<u64>,
+    limit: usize,
+    source: Option<PreviewMessageSource>,
+    request_id: Option<u64>,
+) -> Result<PreviewMessagePage, String> {
+    let file_size = fs::metadata(path)
+        .map_err(|err| format!("读取压缩会话文件信息失败 {}: {err}", path.display()))?
+        .len();
+    if snapshot_size.is_some_and(|snapshot| file_size != snapshot) {
+        return Err(PREVIEW_CHANGED_ERROR.to_string());
+    }
+    let mut reader = open_rollout(path)
+        .map_err(|err| format!("打开压缩会话文件失败 {}: {err}", path.display()))?;
+    let mut event = VecDeque::new();
+    let mut response = VecDeque::new();
+    let mut line = Vec::new();
+    let mut offset = 0;
+    while before_cursor.is_none_or(|cursor| offset < cursor) {
+        ensure_preview_request_current(request_id)?;
+        line.clear();
+        let read = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|err| format!("解码压缩会话文件失败 {}: {err}", path.display()))?;
+        let next_offset = offset + read as u64;
+        if read == 0 || before_cursor.is_some_and(|cursor| next_offset > cursor) {
+            break;
+        }
+        let preferred = source.or((!event.is_empty()).then_some(PreviewMessageSource::Event));
+        if let Some((matched_source, message)) =
+            preview_message_from_jsonl_line(&line, preferred, offset)
+        {
+            let matches = match matched_source {
+                PreviewMessageSource::Event => &mut event,
+                PreviewMessageSource::Response => &mut response,
+            };
+            if matches.len() == limit + 1 {
+                matches.pop_front();
+            }
+            matches.push_back(message);
+        }
+        offset = next_offset;
+    }
+    ensure_preview_request_current(request_id)?;
+
+    let (source, mut messages) = match source {
+        Some(PreviewMessageSource::Event) => (PreviewMessageSource::Event, event),
+        Some(PreviewMessageSource::Response) => (PreviewMessageSource::Response, response),
+        None if !event.is_empty() => (PreviewMessageSource::Event, event),
+        None => (PreviewMessageSource::Response, response),
+    };
+    let has_more = messages.len() > limit;
+    let next_before = if has_more {
+        messages.pop_front();
+        messages.front().and_then(|message| message.offset)
+    } else {
+        None
+    };
+    Ok(PreviewMessagePage {
+        messages: messages.into(),
+        source,
+        next_before,
+        has_more,
+        file_size,
+    })
+}
+
 fn preview_message_from_jsonl_line(
     line: &[u8],
-    source: PreviewMessageSource,
+    source: Option<PreviewMessageSource>,
     offset: u64,
-) -> Option<ConversationMessage> {
+) -> Option<(PreviewMessageSource, ConversationMessage)> {
     let line = line.strip_suffix(b"\r").unwrap_or(line);
     let value = serde_json::from_slice::<Value>(line).ok()?;
     let event_type = raw_string_field(&value, "type");
     let payload = value.get("payload")?;
     let payload_type = raw_string_field(payload, "type");
-    let (role, text) = match source {
-        PreviewMessageSource::Event if event_type == "event_msg" => {
+    let (source, role, text) = match event_type.as_str() {
+        "event_msg" if source != Some(PreviewMessageSource::Response) => {
             let role = match payload_type.as_str() {
                 "user_message" => "user",
                 "agent_message" => "assistant",
                 _ => return None,
             };
-            (role, readable_payload_text(payload)?)
+            (
+                PreviewMessageSource::Event,
+                role,
+                readable_payload_text(payload)?,
+            )
         }
-        PreviewMessageSource::Response
-            if event_type == "response_item" && payload_type == "message" =>
+        "response_item"
+            if source != Some(PreviewMessageSource::Event) && payload_type == "message" =>
         {
             let role = raw_string_field(payload, "role");
             if role != "user" && role != "assistant" {
                 return None;
             }
             let text = readable_payload_text(payload)?;
-            (if role == "user" { "user" } else { "assistant" }, text)
+            (
+                PreviewMessageSource::Response,
+                if role == "user" { "user" } else { "assistant" },
+                text,
+            )
         }
         _ => return None,
     };
-    Some(ConversationMessage {
-        role: role.to_string(),
-        text,
-        timestamp: non_empty(raw_string_field(&value, "timestamp")),
-        offset: Some(offset),
-    })
+    Some((
+        source,
+        ConversationMessage {
+            role: role.to_string(),
+            text,
+            timestamp: non_empty(raw_string_field(&value, "timestamp")),
+            offset: Some(offset),
+        },
+    ))
 }

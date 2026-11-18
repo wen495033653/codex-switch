@@ -4,6 +4,11 @@
 
 ## 当前行为
 
+### 目录与压缩存储（`catalog.rs` / `codex_home.rs`）
+
+- `thread/list` 仍是目录唯一数据源；分别列出未归档与已归档，并跟随各自的 `nextCursor`。Codex 将旧 rollout 压缩为 `.jsonl.zst` 后，RPC 和 state DB 的路径仍可能是原来的 `.jsonl`。只检查该路径本身会让压缩历史从目录消失，并非分页只读取了 50 条。
+- 目录、预览和 state DB 元数据查找在同一会话 I/O 锁规则下识别两种存储。列表的 `relative_path` 保留逻辑 `.jsonl`；`source_path` 与大小对应实际文件。原始文件优先；两种文件均不存在时仍返回该行的错误，不把失效索引或 app-server 未返回的会话加入目录。
+
 ### 归档 / 取消归档（`status.rs`）
 
 同一把 I/O 锁内分三个阶段：
@@ -37,6 +42,8 @@
 ### 预览（`preview.rs`）
 
 state DB 有该路径的行时不再解析会话文件；只有没有行时才走文件回退，回退出错才会让预览失败。`session_index.jsonl` 的读取警告随预览结果返回。
+
+未压缩文件仍从末尾倒序分页；Zstandard 文件按行流式解码，只保留本页需要的消息，不写入未压缩副本。分页游标使用解码后的行偏移，后续分页校验压缩文件字节数。
 
 ### `session_index.jsonl`（`codex_home::read_session_index`）
 
@@ -107,6 +114,11 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `app_log` 的日志文件同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
 
 ## 验证记录
+
+### 2026-11-18：目录与压缩预览
+
+- Windows 隔离运行，Codex app-server `0.169.0-alpha.11.1`：`app_server_lists_and_previews_compressed_rollouts_across_pages` 先对 160 条未归档 / 20 条已归档会话建立索引，再把 130 个 rollout 替换成 `.jsonl.zst`。真实 app-server 跨页重查仍返回全部 180 条，归档计数仍为 20；压缩归档会话的预览可读。未操作正式库或前台界面。
+- 离线用例覆盖逻辑路径去重、缺失文件报错、与未压缩历史一致的消息分页或响应项解析、旧快照和无效 Zstandard 流的错误。
 
 ### 2026-11-17：永久删除
 

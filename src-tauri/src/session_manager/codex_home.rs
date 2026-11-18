@@ -8,9 +8,10 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader},
+    io::{self, BufRead, BufReader},
     path::{Component, Path, PathBuf},
 };
 
@@ -140,8 +141,8 @@ pub(super) fn validate_session_file_path(root: &Path, path: &Path) -> Result<(),
             path.display()
         ));
     }
-    if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-        return Err(format!("拒绝处理非 jsonl 会话文件: {}", path.display()));
+    if !is_jsonl_file(&path) && !is_compressed_rollout(&path) {
+        return Err(format!("拒绝处理非会话文件: {}", path.display()));
     }
     let sessions = root.join("sessions");
     let archived_sessions = root.join("archived_sessions");
@@ -149,6 +150,46 @@ pub(super) fn validate_session_file_path(root: &Path, path: &Path) -> Result<(),
         return Err(format!("拒绝处理非会话目录中的文件: {}", path.display()));
     }
     Ok(())
+}
+
+pub(super) fn is_compressed_rollout(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "zst")
+        && path
+            .file_stem()
+            .is_some_and(|stem| is_jsonl_file(Path::new(stem)))
+}
+
+pub(super) fn logical_rollout_path(path: &Path) -> Cow<'_, Path> {
+    if is_compressed_rollout(path) {
+        Cow::Owned(path.with_extension(""))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
+pub(super) fn compressed_rollout_path(logical: &Path) -> PathBuf {
+    logical.with_extension("jsonl.zst")
+}
+
+/// Codex keeps a logical `.jsonl` path in the catalog after compressing the rollout.
+pub(super) fn resolve_rollout_file(path: &Path) -> io::Result<(PathBuf, fs::Metadata)> {
+    let logical = logical_rollout_path(path);
+    let (path, metadata) = match logical.metadata() {
+        Ok(metadata) => (logical.into_owned(), metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let compressed = compressed_rollout_path(&logical);
+            let metadata = compressed.metadata()?;
+            (compressed, metadata)
+        }
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("会话路径不是文件: {}", path.display()),
+        ));
+    }
+    Ok((path, metadata))
 }
 
 pub(super) fn read_session_index(root: &Path, warnings: &mut Vec<String>) -> SessionIndex {
@@ -294,10 +335,14 @@ pub(super) fn relative_path_under_root(root: &Path, path: &Path) -> Option<PathB
         }
     }
     if cfg!(windows) {
-        let root_text = path_to_slash(root).trim_end_matches('/').to_string();
-        let path_text = path_to_slash(path);
-        if path_text.len() > root_text.len()
-            && path_text[..root_text.len()].eq_ignore_ascii_case(&root_text)
+        // A logical .jsonl may not exist because only .jsonl.zst is stored. In that
+        // case canonicalization cannot reconcile the regular and extended paths.
+        let root_text = path_without_extended_prefix(root);
+        let root_text = root_text.trim_end_matches('/');
+        let path_text = path_without_extended_prefix(path);
+        if path_text
+            .get(..root_text.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(root_text))
             && path_text.as_bytes().get(root_text.len()) == Some(&b'/')
         {
             return normalize_relative_path(&path_text[root_text.len() + 1..]).ok();
@@ -312,17 +357,23 @@ pub(super) fn conversation_path_key(path: &Path) -> String {
 
 pub(super) fn normalized_path_identity(path: &Path) -> String {
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut value = resolved.to_string_lossy().replace('\\', "/");
-    if let Some(rest) = value.strip_prefix("//?/UNC/") {
-        value = format!("//{rest}");
-    } else if let Some(rest) = value.strip_prefix("//?/") {
-        value = rest.to_string();
-    }
+    let mut value = path_without_extended_prefix(&resolved);
     while value.len() > 1 && value.ends_with('/') {
         value.pop();
     }
     if cfg!(windows) {
         value.to_ascii_lowercase()
+    } else {
+        value
+    }
+}
+
+fn path_without_extended_prefix(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    if let Some(rest) = value.strip_prefix("//?/UNC/") {
+        format!("//{rest}")
+    } else if let Some(rest) = value.strip_prefix("//?/") {
+        rest.to_string()
     } else {
         value
     }
