@@ -1,15 +1,19 @@
 use super::{
     catalog::{conversation_from_path, read_current_state_conversations},
     codex_home::{
-        conversation_path_key, ensure_session_relative_path, normalize_relative_path,
-        normalize_status, read_session_index, resolve_codex_root, resolve_rollout_file,
-        status_from_relative_path, validate_codex_root, validate_session_file_path,
+        conversation_path_key, ensure_session_relative_path, is_compressed_rollout,
+        normalize_relative_path, normalize_status, read_session_index, resolve_codex_root,
+        resolve_rollout_file, status_from_relative_path, validate_codex_root,
+        validate_session_file_path,
     },
     model::ManifestSession,
     rollout::{open_rollout, parse_session_file_for_list},
     state_db::{backup_state_database_file, thread_metadata_from_manifest, upsert_state_threads},
     util::{backup_stamp, sha256_bytes, sha256_reader},
-    zip::{write_zip_store, ZipArchiveLite},
+    zip::{
+        validate_zip_store_layout, write_zip_store, ZipArchiveLite, ZIP_V1_LIMIT_ERROR,
+        ZIP_V1_MAX_BYTES,
+    },
 };
 use crate::{
     app_log::log_event, codex_sessions::lock_codex_session_io, paths::codex_state_db_path_for_root,
@@ -20,7 +24,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{ErrorKind, Read, Write},
+    io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
 use tauri::AppHandle;
@@ -39,6 +43,22 @@ struct ExportManifest {
     exported_at: String,
     source_os: String,
     sessions: Vec<ManifestSession>,
+}
+
+impl ExportManifest {
+    fn new(exported_at: String, sessions: Vec<ManifestSession>) -> Self {
+        Self {
+            format: MANIFEST_FORMAT.to_string(),
+            version: MANIFEST_VERSION,
+            exported_at,
+            source_os: std::env::consts::OS.to_string(),
+            sessions,
+        }
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec_pretty(self).map_err(|err| format!("生成 manifest.json 失败: {err}"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,15 +113,8 @@ pub(super) fn export_conversations_impl(
         ));
     }
 
-    let manifest = ExportManifest {
-        format: MANIFEST_FORMAT.to_string(),
-        version: MANIFEST_VERSION,
-        exported_at: now_string(),
-        source_os: std::env::consts::OS.to_string(),
-        sessions: bundle.sessions,
-    };
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|err| format!("生成 manifest.json 失败: {err}"))?;
+    let manifest = ExportManifest::new(bundle.exported_at, bundle.sessions);
+    let manifest_bytes = manifest.bytes()?;
     let mut zip_entries = vec![("manifest.json".to_string(), manifest_bytes)];
     zip_entries.extend(bundle.entries);
     write_zip_store(&export_path, &zip_entries)?;
@@ -121,11 +134,17 @@ pub(super) fn export_conversations_impl(
 }
 
 pub(super) struct ExportBundle {
+    exported_at: String,
     pub(super) sessions: Vec<ManifestSession>,
     pub(super) entries: Vec<(String, Vec<u8>)>,
     pub(super) errors: Vec<String>,
     pub(super) warnings: Vec<String>,
     pub(super) total_size: u64,
+}
+
+struct ExportFile {
+    path: PathBuf,
+    session: ManifestSession,
 }
 
 /// One JSONL snapshot provides the ZIP entry, its SHA-256 and its size. Compressed rollouts
@@ -146,12 +165,14 @@ pub(super) fn collect_export_bundle(
         .collect::<HashMap<_, _>>();
     let mut seen = HashSet::new();
     let mut bundle = ExportBundle {
+        exported_at: now_string(),
         sessions: Vec::new(),
         entries: Vec::new(),
         errors: Vec::new(),
         warnings,
         total_size: 0,
     };
+    let mut selected = Vec::new();
 
     for relative_path in relative_paths {
         if !seen.insert(relative_path.clone()) {
@@ -168,8 +189,8 @@ pub(super) fn collect_export_bundle(
             }
         };
         let logical_path = root.join(&relative);
-        let path = match resolve_rollout_file(&logical_path) {
-            Ok((path, _)) => path,
+        let (path, metadata) = match resolve_rollout_file(&logical_path) {
+            Ok(file) => file,
             Err(err) => {
                 bundle.errors.push(format!(
                     "读取会话文件失败 {}: {err}",
@@ -182,6 +203,15 @@ pub(super) fn collect_export_bundle(
             bundle.errors.push(err);
             continue;
         }
+        let lower_bound = match export_file_lower_bound(&path, metadata.len()) {
+            Ok(len) => len,
+            Err(err) => {
+                bundle
+                    .errors
+                    .push(format!("读取会话大小失败 {}: {err}", path.display()));
+                continue;
+            }
+        };
         let status = match status_from_relative_path(&relative) {
             Ok(status) => status,
             Err(err) => {
@@ -199,27 +229,133 @@ pub(super) fn collect_export_bundle(
                 }
             },
         };
-        let mut data = Vec::new();
-        if let Err(err) = open_rollout(&path).and_then(|mut reader| reader.read_to_end(&mut data)) {
-            bundle
-                .errors
-                .push(format!("读取会话文件失败 {}: {err}", path.display()));
-            continue;
-        }
-        let size_bytes = data.len() as u64;
-        bundle.total_size += size_bytes;
-        bundle.sessions.push(ManifestSession {
-            id: item.id,
-            title: item.title,
-            updated_at: item.updated_at,
-            status: item.status,
-            relative_path: item.relative_path.clone(),
-            size_bytes,
-            sha256: sha256_bytes(&data),
+        selected.push(ExportFile {
+            path,
+            session: ManifestSession {
+                id: item.id,
+                title: item.title,
+                updated_at: item.updated_at,
+                status: item.status,
+                relative_path: item.relative_path,
+                size_bytes: lower_bound,
+                sha256: String::new(),
+            },
         });
-        bundle.entries.push((item.relative_path, data));
+    }
+
+    // Reject selections known to be oversized before allocating or decoding any payload.
+    let layout = validate_zip_store_layout(selected.iter().map(export_file_layout))?;
+    let prepared = prepare_export_files(
+        selected,
+        ZIP_V1_MAX_BYTES - layout.total_bytes(),
+        &mut bundle.errors,
+    )?;
+    validate_export_layout(&prepared, &bundle.exported_at)?;
+
+    for ExportFile { path, mut session } in prepared {
+        let data = match read_exported_data(&path, session.size_bytes as usize) {
+            Ok(data) => data,
+            Err(err) => {
+                bundle.errors.push(err);
+                continue;
+            }
+        };
+        session.sha256 = sha256_bytes(&data);
+        bundle.total_size += session.size_bytes;
+        bundle.entries.push((session.relative_path.clone(), data));
+        bundle.sessions.push(session);
     }
     Ok(bundle)
+}
+
+fn read_exported_data(path: &Path, size: usize) -> Result<Vec<u8>, String> {
+    let read_error = |err| format!("读取会话文件失败 {}: {err}", path.display());
+    let mut reader = open_rollout(path).map_err(read_error)?;
+    let mut data = vec![0; size];
+    let changed = || format!("导出期间会话文件大小变化，请重新导出: {}", path.display());
+    match reader.read_exact(&mut data) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::UnexpectedEof => return Err(changed()),
+        Err(err) => return Err(read_error(err)),
+    }
+    if reader.read(&mut [0]).map_err(read_error)? != 0 {
+        return Err(changed());
+    }
+    Ok(data)
+}
+
+fn export_file_layout(file: &ExportFile) -> (&str, u64) {
+    (&file.session.relative_path, file.session.size_bytes)
+}
+
+fn export_file_lower_bound(path: &Path, file_size: u64) -> io::Result<u64> {
+    if !is_compressed_rollout(path) {
+        return Ok(file_size);
+    }
+    // Zstandard's largest frame header is 18 bytes. Its content size is only a lower bound:
+    // it can be omitted, and a rollout can be a concatenation of more than one frame.
+    let mut header = [0u8; 18];
+    let needed = file_size.min(header.len() as u64) as usize;
+    let header = &mut header[..needed];
+    fs::File::open(path)?.read_exact(header)?;
+    zstd::zstd_safe::get_frame_content_size(header)
+        .map(|size| size.unwrap_or(0))
+        .map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))
+}
+
+fn prepare_export_files(
+    files: Vec<ExportFile>,
+    mut extra_budget: u64,
+    errors: &mut Vec<String>,
+) -> Result<Vec<ExportFile>, String> {
+    let mut prepared = Vec::with_capacity(files.len());
+    for mut file in files {
+        if is_compressed_rollout(&file.path) {
+            let bound = file.session.size_bytes;
+            let budget = bound + extra_budget;
+            let bytes = match open_rollout(&file.path)
+                .and_then(|reader| io::copy(&mut reader.take(budget + 1), &mut io::sink()))
+            {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    errors.push(format!("读取会话文件失败 {}: {err}", file.path.display()));
+                    extra_budget += bound;
+                    continue;
+                }
+            };
+            if bytes > budget {
+                return Err(format!(
+                    "{ZIP_V1_LIMIT_ERROR}；{} 至少有 {bytes} 字节，剩余容量 {budget} 字节",
+                    file.path.display()
+                ));
+            }
+            extra_budget = budget - bytes;
+            file.session.size_bytes = bytes;
+        }
+        prepared.push(file);
+    }
+    Ok(prepared)
+}
+
+fn validate_export_layout(files: &[ExportFile], exported_at: &str) -> Result<(), String> {
+    // Real SHA-256 values are 64 unescaped ASCII characters. Use equal-width placeholders only
+    // to measure the manifest before buffering the data; the written manifest uses actual hashes.
+    let sessions = files
+        .iter()
+        .map(|file| {
+            let mut session = file.session.clone();
+            session.sha256 = "0".repeat(64);
+            session
+        })
+        .collect();
+    let manifest_size = ExportManifest::new(exported_at.to_string(), sessions)
+        .bytes()?
+        .len() as u64;
+    validate_zip_store_layout(
+        std::iter::once(("manifest.json", manifest_size))
+            .chain(files.iter().map(export_file_layout)),
+    )?;
+    Ok(())
 }
 
 pub(super) fn import_conversations_impl(app: AppHandle, root: String) -> Result<Value, String> {
@@ -606,4 +742,69 @@ fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_manager::backup::unique_backup_id;
+
+    fn prepared_file(path: PathBuf, bytes: u64) -> ExportFile {
+        ExportFile {
+            path,
+            session: ManifestSession {
+                id: "fixture".to_string(),
+                title: "fixture".to_string(),
+                updated_at: None,
+                status: "active".to_string(),
+                relative_path: "sessions/rollout-fixture.jsonl".to_string(),
+                size_bytes: bytes,
+                sha256: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn export_size_preflight_counts_every_compressed_frame() {
+        let root = std::env::temp_dir().join(unique_backup_id("zip-preflight"));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-fixture.jsonl.zst");
+        let mut compressed = zstd::bulk::compress(b"first", 0).unwrap();
+        compressed.extend(zstd::bulk::compress(b"second", 0).unwrap());
+        fs::write(&path, &compressed).unwrap();
+        let lower_bound = export_file_lower_bound(&path, compressed.len() as u64).unwrap();
+
+        assert_eq!(lower_bound, 5);
+        let mut errors = Vec::new();
+        let result = prepare_export_files(
+            vec![prepared_file(path.clone(), lower_bound)],
+            0,
+            &mut errors,
+        );
+        assert!(result.err().unwrap().starts_with(ZIP_V1_LIMIT_ERROR));
+        let files = prepare_export_files(
+            vec![prepared_file(path.clone(), lower_bound)],
+            6,
+            &mut errors,
+        )
+        .unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(files[0].session.size_bytes, 11);
+        assert_eq!(read_exported_data(&path, 11).unwrap(), b"firstsecond");
+        assert!(read_exported_data(&path, 10)
+            .unwrap_err()
+            .contains("大小变化"));
+        assert!(read_exported_data(&path, 12)
+            .unwrap_err()
+            .contains("大小变化"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn export_manifest_counts_toward_the_limit_before_buffering_payloads() {
+        let entry = prepared_file(PathBuf::new(), ZIP_V1_MAX_BYTES - 160);
+        validate_zip_store_layout([export_file_layout(&entry)]).unwrap();
+        let err = validate_export_layout(&[entry], "2026-11-18T00:00:00Z").unwrap_err();
+        assert!(err.starts_with(ZIP_V1_LIMIT_ERROR), "{err}");
+    }
 }
