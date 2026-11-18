@@ -98,6 +98,8 @@
 
 **定向验证。** `cargo test usage_stats::tests` 通过：三模型的 Standard / Fast、272,000 与 272,001 输入边界、订阅不收缓存写入溢价、免费日期和归属边界、缺 rollout 仍可为符合条件的历史 Auto-review 补零价（逐条、小时和全部汇总一致、第二次刷新结果不变）。`node --test scripts/test-usage-bills.mjs` 通过：零费用及免费标签正确。正式库只读盘点，未写入。
 
+**隔离旧账回放（2026-11-18，Windows）。** 从正式数据只读取四个已匹配响应的 token 数与档位，替换所有标识符，在临时库中重建四条未定价记录（两个普通 rollout、两个压缩 rollout）。生产后端命令 `usage_stats_get`、`usage_bills_list` 回放后：Astra 6.2 为 $0.2617600、Sol 6.2 为 $0.0323964、Terra 6.1 为 $0.0234120、订阅 Auto-review 为 $0；四条都与独立逐项计算相符。小时和全部时间汇总与明细一致，再次刷新未变，日志只有一次 `usage_stats_unpriced_rechecked`（`repriced: 4`）。未验证安装版界面或全库升级。
+
 ### 请求耗时、首 Token 与输出速率（2026-10-17）
 
 Codex Switch 不在请求路径上（订阅模式 Codex 直连 chatgpt.com，API 模式直连配置的 base URL），量不到网络层的首字节，两种模式能拿到的数据一样：
