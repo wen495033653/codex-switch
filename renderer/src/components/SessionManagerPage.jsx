@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
+import { getRawErrorMessage } from '../utils/errors';
 import {
   PREVIEW_PAGE_SIZE,
   PREVIEW_MESSAGE_WINDOW,
@@ -20,6 +21,7 @@ import SessionContextMenu from './session/SessionContextMenu';
 import SessionFilterBar from './session/SessionFilterBar';
 import SessionListPanel from './session/SessionListPanel';
 import SessionPreviewPanel from './session/SessionPreviewPanel';
+import SessionScanReport from './session/SessionScanReport';
 
 export default function SessionManagerPage({ toast, toastError, sessionState }) {
   const { language, t } = useI18n();
@@ -28,6 +30,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     setRootPath,
     conversations,
     setConversations,
+    scanReport,
+    setScanReport,
     search,
     setSearch,
     statusFilter,
@@ -56,6 +60,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
     setActionLoading,
     previewRef,
     previewRequestRef,
+    scanRequestRef,
     hasAutoLoadedRef
   } = sessionState;
   const [previewEarlierLoading, setPreviewEarlierLoading] = useState(false);
@@ -233,13 +238,22 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
   };
 
   const refreshSessions = async (nextRoot = rootPath) => {
+    const requestId = ++scanRequestRef.current;
     setLoading(true);
     try {
       const res = await window.api.scanSessions(nextRoot || undefined);
+      if (scanRequestRef.current !== requestId) return null;
       const nextConversations = Array.isArray(res.conversations) ? res.conversations : [];
+      const resolvedRoot = res.root || nextRoot || '';
       const existing = new Set(nextConversations.map(item => item.relative_path));
-      setRootPath(res.root || nextRoot || '');
+      setRootPath(resolvedRoot);
       setConversations(nextConversations);
+      setScanReport({
+        hasResult: true,
+        errors: res.errors ?? [],
+        warnings: res.warnings ?? [],
+        refreshError: null
+      });
       setSelected(prev => new Set(Array.from(prev).filter(path => existing.has(path))));
       if (activePathRef.current && !existing.has(activePathRef.current)) {
         previewRequestRef.current += 1;
@@ -251,10 +265,14 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
         setPreviewEarlierLoading(false);
         setPreviewTrimmedNewer(false);
       }
+      return { root: resolvedRoot, conversations: nextConversations };
     } catch (err) {
+      if (scanRequestRef.current !== requestId) return null;
+      setScanReport(current => ({ ...current, refreshError: getRawErrorMessage(err) }));
       toastError(err, t('扫描会话失败'), 7000);
+      return null;
     } finally {
-      setLoading(false);
+      if (scanRequestRef.current === requestId) setLoading(false);
     }
   };
 
@@ -467,6 +485,8 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
         statusFilter={statusFilter}
       />
 
+      <SessionScanReport readableCount={conversations.length} report={scanReport} />
+
       <div className="session-workspace">
         <SessionListPanel
           actionLoading={actionLoading}
@@ -483,6 +503,7 @@ export default function SessionManagerPage({ toast, toastError, sessionState }) 
           openContextMenu={openContextMenu}
           pageItems={pageItems}
           pageSize={pageSize}
+          scanIncomplete={scanReport.errors.length > 0}
           selected={selected}
           selectedActivePaths={selectedActivePaths}
           selectedArchivedPaths={selectedArchivedPaths}

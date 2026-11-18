@@ -3,6 +3,12 @@ import { useRef, useState } from 'react';
 export function useSessionManagerState() {
   const [rootPath, setRootPath] = useState('');
   const [conversations, setConversations] = useState([]);
+  const [scanReport, setScanReport] = useState({
+    hasResult: false,
+    errors: [],
+    warnings: [],
+    refreshError: null
+  });
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(1);
@@ -18,6 +24,7 @@ export function useSessionManagerState() {
   const [actionLoading, setActionLoading] = useState(false);
   const previewRef = useRef(null);
   const previewRequestRef = useRef(0);
+  const scanRequestRef = useRef(0);
   const hasAutoLoadedRef = useRef(false);
 
   return {
@@ -25,6 +32,8 @@ export function useSessionManagerState() {
     setRootPath,
     conversations,
     setConversations,
+    scanReport,
+    setScanReport,
     search,
     setSearch,
     statusFilter,
@@ -53,6 +62,7 @@ export function useSessionManagerState() {
     setActionLoading,
     previewRef,
     previewRequestRef,
+    scanRequestRef,
     hasAutoLoadedRef
   };
 }

@@ -13,6 +13,45 @@
   min-width: 0;
 }
 
+.session-scan-report {
+  padding: 8px 12px;
+  border: 1px solid var(--border-app);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.session-scan-refresh-error {
+  color: var(--danger);
+}
+
+.session-scan-incomplete {
+  color: var(--warning);
+}
+
+.session-scan-report summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.session-scan-report summary:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.session-scan-details {
+  max-height: 160px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.session-scan-details ul {
+  margin: 0;
+  padding-inline-start: 20px;
+}
+
 .session-page-actions {
   margin-left: auto;
   display: flex;

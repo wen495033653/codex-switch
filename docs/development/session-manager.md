@@ -8,6 +8,7 @@
 
 - `thread/list` 仍是目录唯一数据源；分别列出未归档与已归档，并跟随各自的 `nextCursor`。Codex 将旧 rollout 压缩为 `.jsonl.zst` 后，RPC 和 state DB 的路径仍可能是原来的 `.jsonl`。只检查该路径本身会让压缩历史从目录消失，并非分页只读取了 50 条。
 - 目录、预览和 state DB 元数据查找在同一会话 I/O 锁规则下识别两种存储。列表的 `relative_path` 保留逻辑 `.jsonl`；`source_path` 与大小对应实际文件。原始文件优先；两种文件均不存在时仍返回该行的错误，不把失效索引或 app-server 未返回的会话加入目录。
+- 会话页照常显示扫描返回的可读会话。遇到未读出的会话，用「已列出」代替「总计」，并在筛选栏下方显示可读数和失败数；重复会话等扫描提示单独统计，具体原因可展开。整次刷新失败不覆盖原列表，明确显示当前为上一次结果（或从未获取列表）。该状态和列表一同跨页面保留；新扫描成功后替换旧状态，已被更新请求取代的返回不会覆盖新列表。
 
 ### 归档 / 取消归档（`status.rs`）
 
@@ -118,6 +119,10 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - **单元测试不写真实数据目录。** `backup::session_manager_data_dir` 在 `cfg(test)` 下指向系统临时目录 `codex-switch-session-manager-tests`（与 `app_log` 的日志文件同一做法）。此前已有测试会把 state DB 备份写进真实 `%APPDATA%\codex-switch\session-manager\backups`。
 
 ## 验证记录
+
+### 2026-11-18：会话扫描提示
+
+- 离线前端行为测试 `node --experimental-vm-modules --test scripts/test-session-delete.mjs`：6 项通过。模拟目录部分成功，核对可用行、失败计数、重复提示与原始错误；模拟整次刷新失败、首次失败、后续成功清除提示及并发扫描结果乱序，保留原有两项删除回归。未启动安装版。
 
 ### 2026-11-18：目录与压缩预览
 
