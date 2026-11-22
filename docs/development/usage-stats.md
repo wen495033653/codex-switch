@@ -37,7 +37,7 @@
 - **起点。** 时间早于或等于 `meta.records_counted_after` 的记录不计入。新建的库以建库时间为起点；从旧版迁移来的库以旧统计最后一次扫描的时间为起点（见下文"旧统计的迁移"）。
 - **归属。** 按每次响应发生的时间和当时的 provider，在 `attribution` 表里找当时选中的账号或 API 配置。会话中途切换账号或模式后，后面的响应算到新的归属下。多开实例的记录固定归到实例标记里的账号。找不到归属的记录照样存下，但不计入任何卡片，只计入提示"N 个 session 缺少 Codex Switch 归属记录"。
 - **计价。** 每条记录单独计价：
-  - **档位。** `service_tier` 为空或 `default` 按标准档；`priority` 或 `fast` 按快速模式（官方已把 Priority processing 改名为 Fast mode，两种写法都接受）。本程序尚未建模的档位仍标为未定价。
+  - **档位。** `service_tier` 为空或 `default` 按标准档；`priority` 或 `fast` 按快速档；`ultrafast` 单独按超快档计价。不支持的模型与档位组合仍标为未定价。
   - **长上下文。** API 配置的请求（以及没有归属的记录），这一次请求的 `input_tokens` 超过 272,000 时，按长上下文价格计。官方页面对短上下文的说明是 "≤272K input tokens"。是否长上下文由本程序按 `input_tokens` 判断，API 响应里没有长上下文或实际计费档位的字段。
   - **订阅账号不收取长上下文和缓存写入溢价。** 按 [Codex 官方价目说明](https://learn.chatgpt.com/docs/pricing)，使用 ChatGPT 登录时不区分长短上下文；写缓存的 token 计普通输入单价，不加 API 缓存写入溢价。API 缓存写入仍取 30 分钟单价做估算，rollout 没有存保留时长，无法反推出 12 小时实际用价。美元数值是用量估算，不是 ChatGPT credits 实际扣费。
   - **公式。** 未命中缓存的输入 × 输入单价 + 缓存命中 × 缓存单价 + 缓存写入 × 缓存写入单价 + 输出（含推理）× 输出单价。
@@ -95,6 +95,10 @@
 此外，任何时候重读到一条未定价的已存记录（分叉副本、被改写的文件），都会按当前价格表走第 3 步。
 
 **2026-11-18 价格表。** 补入 [OpenAI API 官方价](https://developers.openai.com/api/docs/pricing#flagship-models)的 GPT-6.2 Astra、GPT-6.2 Sol、GPT-6.1 Terra，支持已有的 Standard / Fast 档位及 API 长上下文。标准档短上下文（美元 / 百万 token，顺序为输入、缓存读取、30 分钟缓存写入、输出）分别是 `8 / 0.40 / 10 / 40`、`2 / 0.10 / 2.50 / 10`、`1 / 0.05 / 1.25 / 5`。
+
+**2026-11-23 超快档。** 按 [OpenAI Ultrafast 价目表](https://developers.openai.com/api/docs/pricing.md#ultrafast-pricing-data)，GPT-6.2 Sol 和 GPT-6.2 Astra 在 2027-03-01 08:00 UTC 之前按同一上下文标准价的 3 倍估算，之后（含该时刻）按 6 倍；GPT-6.1 Sol 和 GPT-6 Astra 均按 6 倍。历史补价用**响应发生时间**，不取打开账单的时间。例如促销期订阅 Sol 的新增输入、缓存命中、输出分别为每百万 token $6、$0.30、$30；一条新增 255、命中 247,168、输出 327 的请求估算为 $0.0854904。这里估算的是用量的美元等值，不是套餐扣款；[官方套餐说明](https://learn.chatgpt.com/docs/pricing#speed-multipliers)中 6.2 超快消耗的套餐内额度一直是标准档的 6 倍。
+
+验证：用旧版价格标记和已读到末尾的 rollout 游标，在隔离库重放上述样本：旧账从 `missing_tier_price` 改为超快，明细与小时、全部时间汇总一致，再次刷新不重复计费。前端组件测试验证了中英标签和该笔账单显示为 $0.0855。正式库只用于核对原始记录，没有回写。
 
 **Auto-review。** [OpenAI 帮助中心](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_34e1b497e6)明确 ChatGPT 登录后的安全检查免费、也不消耗额度。历史补价只把归属为订阅、模型为 `codex-auto-review`、响应时间不早于 2026-10-07 00:00 UTC（[10 月 6 日公告](https://x.com/thsottiaux/status/2107368734981517634)后的完整 UTC 日）的逐条记录标为免费 $0。此规则不需要服务档位，即使没有会话文件也可以精确补价；该日前、API 模式、未归属及旧统计迁移记录没有可确认的官方单价，保持未定价。
 

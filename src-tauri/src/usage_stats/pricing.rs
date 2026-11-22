@@ -5,7 +5,7 @@ pub(super) const PRICING_SOURCE: &str = "https://developers.openai.com/api/docs/
 /// The day the table below was copied from `PRICING_SOURCE`. Costs are fixed when a record is
 /// stored, so a later table change leaves priced records as they are; records stored without a
 /// price are priced once against each new table (`db::pending_reprice`).
-pub(super) const PRICING_UPDATED_AT: &str = "2026-11-18";
+pub(super) const PRICING_UPDATED_AT: &str = "2026-11-23";
 
 /// "Short context: ≤272K input tokens, long context: >272K input tokens", judged per request.
 pub(super) const LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 272_000;
@@ -17,6 +17,10 @@ pub(super) const PRICE_LABEL_STANDARD_LONG: &str = "standard_long_context";
 pub(super) const PRICE_LABEL_FAST_SHORT: &str = "fast_short_context";
 
 pub(super) const PRICE_LABEL_FAST_LONG: &str = "fast_long_context";
+
+pub(super) const PRICE_LABEL_ULTRAFAST_SHORT: &str = "ultrafast_short_context";
+
+pub(super) const PRICE_LABEL_ULTRAFAST_LONG: &str = "ultrafast_long_context";
 
 pub(super) const PRICE_LABEL_AUTO_REVIEW_FREE: &str = "auto_review_free";
 
@@ -43,6 +47,8 @@ const PRICED_LABELS: &[&str] = &[
     PRICE_LABEL_STANDARD_LONG,
     PRICE_LABEL_FAST_SHORT,
     PRICE_LABEL_FAST_LONG,
+    PRICE_LABEL_ULTRAFAST_SHORT,
+    PRICE_LABEL_ULTRAFAST_LONG,
     PRICE_LABEL_AUTO_REVIEW_FREE,
 ];
 
@@ -237,6 +243,38 @@ const MODEL_PRICES: &[ModelPrice] = &[
     },
 ];
 
+/// March 1, 2027, 00:00 Pacific (UTC-08:00). GPT-6.2 switches from the promotional
+/// 3x rates to the 6x list rates. Use the response timestamp even when repricing old records.
+const ULTRAFAST_LIST_RATES_SINCE: i64 = 1_803_888_000;
+
+/// `PRICING_SOURCE` Ultrafast tables, USD per 1M tokens, with 30-minute cache writes.
+fn ultrafast_prices(model: &str, timestamp_seconds: i64) -> Option<TierPrices> {
+    let promo = timestamp_seconds < ULTRAFAST_LIST_RATES_SINCE;
+    Some(match model {
+        "gpt-6.2-astra" if promo => TierPrices {
+            short_context: prices(24.0, 1.2, Some(30.0), 120.0),
+            long_context: Some(prices(48.0, 2.4, Some(60.0), 180.0)),
+        },
+        "gpt-6.2-sol" if promo => TierPrices {
+            short_context: prices(6.0, 0.3, Some(7.5), 30.0),
+            long_context: Some(prices(12.0, 0.6, Some(15.0), 45.0)),
+        },
+        "gpt-6.2-astra" => TierPrices {
+            short_context: prices(48.0, 2.4, Some(60.0), 240.0),
+            long_context: Some(prices(96.0, 4.8, Some(120.0), 360.0)),
+        },
+        "gpt-6.2-sol" | "gpt-6.1-sol" => TierPrices {
+            short_context: prices(12.0, 0.6, Some(15.0), 60.0),
+            long_context: Some(prices(24.0, 1.2, Some(30.0), 90.0)),
+        },
+        "gpt-6-astra" => TierPrices {
+            short_context: prices(60.0, 6.0, Some(75.0), 300.0),
+            long_context: Some(prices(120.0, 12.0, Some(150.0), 450.0)),
+        },
+        _ => return None,
+    })
+}
+
 pub(super) fn is_priced_label(label: &str) -> bool {
     PRICED_LABELS.contains(&label)
 }
@@ -256,7 +294,14 @@ pub(super) fn estimate_request_cost(
         return auto_review_waived_cost();
     }
     let long_context = !subscription && usage.input_tokens > LONG_CONTEXT_THRESHOLD_TOKENS;
-    price_tokens(model, usage, tier, long_context, subscription)
+    price_tokens(
+        model,
+        usage,
+        tier,
+        long_context,
+        subscription,
+        timestamp_seconds,
+    )
 }
 
 /// Auto-review requires a ChatGPT sign-in for the waiver and has no public API model price.
@@ -271,7 +316,7 @@ pub(super) fn auto_review_waived_cost() -> EstimatedCost {
 /// Prices usage summed over several requests whose sizes are unknown (the statistics kept
 /// before per-response records): standard processing, short context.
 pub(super) fn estimate_summed_cost(model: &str, usage: &TokenUsage) -> EstimatedCost {
-    price_tokens(model, usage, ServiceTier::Standard, false, false)
+    price_tokens(model, usage, ServiceTier::Standard, false, false, 0)
 }
 
 fn price_tokens(
@@ -280,17 +325,28 @@ fn price_tokens(
     tier: ServiceTier,
     long_context: bool,
     subscription: bool,
+    timestamp_seconds: i64,
 ) -> EstimatedCost {
     let Some(price) = find_model_price(model) else {
         return unpriced(UNPRICED_MISSING_MODEL_PRICE);
     };
     let (tier_prices, short_label, long_label) = match tier {
         ServiceTier::Standard => (
-            &price.standard,
+            price.standard,
             PRICE_LABEL_STANDARD_SHORT,
             PRICE_LABEL_STANDARD_LONG,
         ),
-        ServiceTier::Fast => (&price.fast, PRICE_LABEL_FAST_SHORT, PRICE_LABEL_FAST_LONG),
+        ServiceTier::Fast => (price.fast, PRICE_LABEL_FAST_SHORT, PRICE_LABEL_FAST_LONG),
+        ServiceTier::Ultrafast => {
+            let Some(tier_prices) = ultrafast_prices(price.model, timestamp_seconds) else {
+                return unpriced(UNPRICED_MISSING_TIER_PRICE);
+            };
+            (
+                tier_prices,
+                PRICE_LABEL_ULTRAFAST_SHORT,
+                PRICE_LABEL_ULTRAFAST_LONG,
+            )
+        }
         ServiceTier::Other => return unpriced(UNPRICED_MISSING_TIER_PRICE),
     };
     let (mut token_prices, label) = if long_context && price.long_context_priced {
@@ -315,7 +371,7 @@ fn price_tokens(
     }
 }
 
-/// The prices a priced record was charged at, found again from its model and price label.
+/// Prices for backfilling the schema that predated stored unit prices (and Ultrafast).
 pub(super) fn prices_for_label(model: &str, label: &str) -> Option<TokenPrices> {
     let price = find_model_price(model)?;
     match label {

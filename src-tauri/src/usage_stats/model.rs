@@ -91,6 +91,7 @@ pub(super) struct UsageScanSource {
 pub(super) enum ServiceTier {
     Standard,
     Fast,
+    Ultrafast,
     /// A tier this table has no prices for (for example `flex`).
     Other,
 }
@@ -101,6 +102,7 @@ impl ServiceTier {
             // Without a service_tier the request runs on standard processing.
             "" | "default" => Self::Standard,
             "priority" | "fast" => Self::Fast,
+            "ultrafast" => Self::Ultrafast,
             _ => Self::Other,
         }
     }
@@ -144,8 +146,7 @@ pub(super) struct UsageRecord {
     pub(super) owner: OwnerAttribution,
     pub(super) model: String,
     pub(super) usage: TokenUsage,
-    /// The tier the request ran on; not stored, but needed to price again a record stored
-    /// while its model had no price.
+    /// The tier the request ran on; not stored, but needed to reprice an unpriced record.
     pub(super) service_tier: ServiceTier,
     pub(super) cost: EstimatedCost,
     pub(super) timing: RequestTiming,

@@ -116,6 +116,9 @@ export default function BillDetailDrawer({ ownerName, record, onClose, onOpenSes
               />
             )) : null}
             <Row label={t('合计')} value={priced ? formatBillCost(record.estimated_cost_usd) : t('未定价')} />
+            {priced && record.owner_type === 'subscription'
+              ? <p className="usage-bill-note">{t('订阅请求显示的是美元估算，不是套餐额度或 Credits 的实际扣减。')}</p>
+              : null}
             {priced && !Array.isArray(record.charges)
               ? <p className="usage-bill-note">{t('这条记录写入时没有保存单价，只有合计。')}</p>
               : null}

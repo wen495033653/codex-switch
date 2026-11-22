@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { transformWithOxc } from 'vite';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer, transformWithOxc } from 'vite';
 import * as billUtils from '../renderer/src/utils/usageBills.js';
 import { locateSession } from '../renderer/src/utils/sessionManager.js';
 
@@ -94,8 +97,67 @@ test('owners without a current name are shown by type and short id', () => {
 test('price labels name the tier and context or the Auto-review waiver', () => {
   assert.equal(priceLabelText('standard_short_context', t), '标准');
   assert.equal(priceLabelText('fast_long_context', t), '快速 · 长上下文');
+  assert.equal(priceLabelText('ultrafast_short_context', t), '超快');
+  assert.equal(priceLabelText('ultrafast_long_context', t), '超快 · 长上下文');
   assert.equal(priceLabelText('auto_review_free', t), '免费 · Auto-review');
   assert.equal(priceLabelText('missing_model_price', t), '未定价');
+});
+
+test('Ultrafast is shown independently in bills and usage statistics', async () => {
+  const server = await createServer({
+    configFile: fileURLToPath(new URL('../vite.config.mjs', import.meta.url)),
+    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
+    appType: 'custom',
+    logLevel: 'error'
+  });
+  try {
+    const { I18nProvider } = await server.ssrLoadModule('/src/i18n.jsx');
+    const { default: BillsTable } = await server.ssrLoadModule('/src/components/bills/BillsTable.jsx');
+    const { default: BillDetailDrawer } = await server.ssrLoadModule('/src/components/bills/BillDetailDrawer.jsx');
+    const { default: UsageStatsDetailDrawer } = await server.ssrLoadModule('/src/components/UsageStatsDetailDrawer.jsx');
+    const render = (Component, props, preference = 'zh-CN') => renderToStaticMarkup(
+      createElement(I18nProvider, { preference }, createElement(Component, props))
+    );
+    const record = {
+      response_id: 'resp-ultrafast',
+      timestamp: '2026-11-22T18:40:24Z',
+      owner_type: 'subscription',
+      owner_id: 'fixture-account',
+      model: 'gpt-6.2-sol',
+      price_label: 'ultrafast_short_context',
+      fresh_input_tokens: 255,
+      cached_input_tokens: 247168,
+      output_tokens: 327,
+      estimated_cost_usd: 0.0854904,
+      duration_ms: null,
+      first_token_ms: null,
+      charges: []
+    };
+    const table = render(BillsTable, { records: [record], namesByKey: new Map(), page: 1, pageSize: 50, total: 1 });
+    assert.match(table, /class="usage-bills-text" title="超快">超快</);
+    assert.match(table, /\$0\.0855/);
+    assert.doesNotMatch(table, /未定价/);
+
+    const subscription = render(BillDetailDrawer, { ownerName: 'Fixture', record }, 'en');
+    assert.match(subscription, />Ultrafast</);
+    assert.match(subscription, /USD estimate, not a deduction from included usage or credits/);
+    const api = render(BillDetailDrawer, {
+      ownerName: 'Fixture',
+      record: { ...record, owner_type: 'api_profile', price_label: 'ultrafast_long_context' }
+    }, 'en');
+    assert.match(api, />Ultrafast · Long context</);
+    assert.doesNotMatch(api, /deduction from included usage/);
+
+    const renderStats = (pricing_contexts, language) => render(UsageStatsDetailDrawer, {
+      detail: { ownerName: 'Fixture' },
+      stats: { today: { total_tokens: 1, priced: true, estimated_cost_usd: 0.08, pricing_contexts } }
+    }, language);
+    assert.match(renderStats({ ultrafast_short_context: 1 }, 'en'), />Ultrafast mode</);
+    assert.match(renderStats({ fast_short_context: 1, ultrafast_long_context: 1 }),
+      />含快速模式 · 含超快模式 · 含长上下文</);
+  } finally {
+    await server.close();
+  }
 });
 
 test('request costs keep four decimals below one dollar', () => {

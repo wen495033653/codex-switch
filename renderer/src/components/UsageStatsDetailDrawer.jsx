@@ -18,9 +18,11 @@ const USAGE_WINDOWS = [
   { key: 'all', label: '全部' }
 ];
 
-const LONG_CONTEXT_KEYS = ['standard_long_context', 'fast_long_context'];
+const LONG_CONTEXT_KEYS = ['standard_long_context', 'fast_long_context', 'ultrafast_long_context'];
 
 const FAST_MODE_KEYS = ['fast_short_context', 'fast_long_context'];
+
+const ULTRAFAST_MODE_KEYS = ['ultrafast_short_context', 'ultrafast_long_context'];
 
 function getObjectMap(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -65,9 +67,11 @@ function formatPricingHint(windowStats, t) {
   const countOf = (keys) => keys.reduce((sum, key) => sum + (Number(contexts[key]) || 0), 0);
   const total = Object.values(contexts).reduce((sum, value) => sum + (Number(value) || 0), 0);
   const fastCount = countOf(FAST_MODE_KEYS);
+  const ultrafastCount = countOf(ULTRAFAST_MODE_KEYS);
   const longCount = countOf(LONG_CONTEXT_KEYS);
   const parts = [];
   if (fastCount > 0) parts.push(fastCount === total ? t('快速模式') : t('含快速模式'));
+  if (ultrafastCount > 0) parts.push(ultrafastCount === total ? t('超快模式') : t('含超快模式'));
   if (longCount > 0) parts.push(longCount === total ? t('长上下文') : t('含长上下文'));
   return parts.join(' · ');
 }

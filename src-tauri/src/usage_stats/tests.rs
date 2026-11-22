@@ -1164,6 +1164,81 @@ fn new_model_prices_match_openai_standard_and_fast_rates() {
 }
 
 #[test]
+fn ultrafast_prices_use_the_model_context_and_response_date() {
+    let tier = ServiceTier::from_setting("ultrafast");
+    assert_eq!(tier, ServiceTier::Ultrafast);
+    let cutoff = parse_rfc3339_seconds("2027-03-01T08:00:00Z").unwrap();
+    // USD per million: input, cached input, 30-minute cache write, output.
+    let cases = [
+        (
+            "gpt-6.2-sol",
+            cutoff - 1,
+            [[6.0, 0.30, 7.5, 30.0], [12.0, 0.60, 15.0, 45.0]],
+        ),
+        (
+            "gpt-6.2-sol",
+            cutoff,
+            [[12.0, 0.60, 15.0, 60.0], [24.0, 1.20, 30.0, 90.0]],
+        ),
+        (
+            "gpt-6.2-astra",
+            cutoff - 1,
+            [[24.0, 1.20, 30.0, 120.0], [48.0, 2.40, 60.0, 180.0]],
+        ),
+        (
+            "gpt-6.2-astra",
+            cutoff,
+            [[48.0, 2.40, 60.0, 240.0], [96.0, 4.80, 120.0, 360.0]],
+        ),
+        (
+            "gpt-6-astra",
+            cutoff - 1,
+            [[60.0, 6.0, 75.0, 300.0], [120.0, 12.0, 150.0, 450.0]],
+        ),
+        (
+            "gpt-6.1-sol",
+            cutoff - 1,
+            [[12.0, 0.60, 15.0, 60.0], [24.0, 1.20, 30.0, 90.0]],
+        ),
+    ];
+    let forms = [
+        (272_000, PRICE_LABEL_ULTRAFAST_SHORT),
+        (272_001, PRICE_LABEL_ULTRAFAST_LONG),
+    ];
+    for (model, when, rates) in cases {
+        for ((input, label), [fresh, cached, write, output]) in forms.into_iter().zip(rates) {
+            let cost = estimate_request_cost(
+                model,
+                &usage(input, 100_000, 20_000, 10_000),
+                tier,
+                OWNER_TYPE_API_PROFILE,
+                when,
+            );
+            assert_cost(
+                &cost,
+                ((input - 120_000) as f64 * fresh
+                    + 100_000.0 * cached
+                    + 20_000.0 * write
+                    + 10_000.0 * output)
+                    / 1e6,
+                label,
+            );
+        }
+    }
+    // Dollar estimates are not included-usage charges. No long-context or cache-write premium
+    // applies to a request by a signed-in subscriber.
+    let subscription = estimate_request_cost(
+        "gpt-6.2-sol",
+        &usage(320_000, 100_000, 20_000, 10_000),
+        tier,
+        OWNER_TYPE_SUBSCRIPTION,
+        cutoff - 1,
+    );
+    assert_cost(&subscription, 1.65, PRICE_LABEL_ULTRAFAST_SHORT);
+    assert_eq!(subscription.prices.unwrap().cache_write, Some(6.0));
+}
+
+#[test]
 fn auto_review_waiver_requires_chatgpt_sign_in_and_known_effective_date() {
     let usage = usage(50, 10, 3, 5);
     let cutoff = parse_rfc3339_seconds("2026-10-07T00:00:00Z").unwrap();
@@ -1201,6 +1276,12 @@ fn missing_prices_leave_the_request_unpriced_with_the_reason() {
             "gpt-5.6-sol",
             usage(10, 0, 0, 0),
             ServiceTier::from_setting("flex"),
+            UNPRICED_MISSING_TIER_PRICE,
+        ),
+        (
+            "gpt-6.1-terra",
+            usage(10, 0, 0, 0),
+            ServiceTier::Ultrafast,
             UNPRICED_MISSING_TIER_PRICE,
         ),
         (
@@ -1699,8 +1780,9 @@ fn prices_are_backfilled_only_where_they_reproduce_the_stored_cost() {
 
 #[test]
 fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
-    // sub-a: two Fast requests the table now prices. sub-b: one on a tier the table has no price
-    // for, and one whose rollout is gone.
+    // sub-a: two Fast requests whose model previously had no price and one Ultrafast request
+    // whose tier previously had no price. sub-b: one where the tier still has no price, and one
+    // whose rollout is gone.
     let root = temp_root("reprice");
     let db_path = root.join("usage.sqlite");
     let codex_home = root.join("codex");
@@ -1718,6 +1800,21 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
     )];
     lines.push(thread_settings_line(
         "2026-06-15T01:00:01Z",
+        "gpt-6.2-sol",
+        "openai",
+        json!("ultrafast"),
+    ));
+    let ultrafast_at = "2026-06-15T01:00:02Z";
+    lines.push(record_line(
+        ultrafast_at,
+        "resp-ultrafast",
+        "thread-a",
+        247_423,
+        247_168,
+        327,
+    ));
+    lines.push(thread_settings_line(
+        "2026-06-15T01:00:03Z",
         "gpt-6.1-sol",
         "openai",
         json!("priority"),
@@ -1760,8 +1857,8 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
     ));
     let flex_path = write_rollout(&codex_home, "flex", &flex);
 
-    // What 6.0.6 stored while the table had no gpt-6.1-sol: every record unpriced, and a cursor
-    // at the end of each rollout, so a plain refresh never reads them again.
+    // The old price reasons and a cursor at the end of each rollout. The timing backfill is
+    // already done, so only a price-table update can cause the files to be read again.
     {
         let mut connection = open_usage_connection(&db_path, "2026-06-15T02:00:00Z").unwrap();
         let transaction = connection.transaction().unwrap();
@@ -1795,7 +1892,16 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
                     record.usage.clone(),
                 );
                 let stored = UsageRecord {
+                    model: record.model.clone(),
                     timestamp_seconds: record.timestamp_seconds,
+                    cost: EstimatedCost {
+                        price_label: if record.response_id == "resp-ultrafast" {
+                            UNPRICED_MISSING_TIER_PRICE
+                        } else {
+                            UNPRICED_MISSING_MODEL_PRICE
+                        },
+                        ..stored.cost
+                    },
                     ..stored
                 };
                 insert_record(&transaction, &stored, true).unwrap();
@@ -1826,7 +1932,19 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
             usage(500, 0, 0, 5),
         );
         insert_record(&transaction, &gone, true).unwrap();
+        transaction
+            .execute(
+                "INSERT INTO meta VALUES ('unpriced_records_checked_for', '2026-11-18')",
+                [],
+            )
+            .unwrap();
+        mark_timings_filled(&transaction, "2026-06-15T02:00:00Z").unwrap();
         transaction.commit().unwrap();
+        // The earliest record lacks a tier price, not a model price. It too triggers a re-read.
+        assert_eq!(
+            pending_reprice(&connection).unwrap().unwrap().reread_since,
+            parse_rfc3339_seconds(ultrafast_at)
+        );
     }
 
     let response = stats(&db_path, &codex_home, "2026-06-15T03:00:00Z");
@@ -1850,14 +1968,17 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
         .cost_usd
         .unwrap()
     };
-    let expected = fast_cost(&fast_usage(300_000, 100)) + fast_cost(&fast_usage(1_000, 10));
+    // USD: 255 fresh input at 6/M, 247,168 cached input at 0.30/M, 327 output at 30/M.
+    let ultrafast_cost = 0.0854904;
+    let expected =
+        fast_cost(&fast_usage(300_000, 100)) + fast_cost(&fast_usage(1_000, 10)) + ultrafast_cost;
     assert_eq!(all["priced"], true, "{all}");
     assert_close(all["estimated_cost_usd"].as_f64().unwrap(), expected);
     assert_eq!(
         all["pricing_contexts"],
-        json!({ PRICE_LABEL_FAST_SHORT: 2 })
+        json!({ PRICE_LABEL_FAST_SHORT: 2, PRICE_LABEL_ULTRAFAST_SHORT: 1 })
     );
-    assert_eq!(all["total_tokens"], 301_110);
+    assert_eq!(all["total_tokens"], 548_860);
     // Found on a tier without a price: that is its reason now. Not found: its tier is unknown.
     let other = window(&response, "subscriptions", "sub-b", "all");
     assert_eq!(other["priced"], false, "{other}");
@@ -1875,6 +1996,17 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
             )
             .unwrap();
         assert_eq!(unpriced, 0, "{table}");
+        let (count, cost): (i64, f64) = connection
+            .query_row(
+                &format!(
+                    "SELECT record_count, estimated_cost_usd FROM {table} WHERE price_label = ?1"
+                ),
+                [PRICE_LABEL_ULTRAFAST_SHORT],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "{table}");
+        assert_close(cost, ultrafast_cost);
     }
     let checked: String = connection
         .query_row(
@@ -1906,8 +2038,25 @@ fn records_stored_without_a_price_are_priced_from_their_rollout_once() {
     let page = bills(&db_path, "all", None, None, 1, 50, "2026-06-15T03:00:00Z");
     assert_eq!(
         response_ids(&page),
-        ["resp-flex", "resp-short", "resp-long", "resp-gone"]
+        [
+            "resp-flex",
+            "resp-short",
+            "resp-long",
+            "resp-gone",
+            "resp-ultrafast"
+        ]
     );
+    let ultrafast = &page["records"][4];
+    assert_eq!(ultrafast["price_label"], PRICE_LABEL_ULTRAFAST_SHORT);
+    assert_close(
+        ultrafast["estimated_cost_usd"].as_f64().unwrap(),
+        ultrafast_cost,
+    );
+    let charges = ultrafast["charges"].as_array().unwrap();
+    for (charge, price) in charges.iter().zip([6.0, 0.30, 6.0, 30.0]) {
+        assert_close(charge["price_per_million"].as_f64().unwrap(), price);
+    }
+    assert_eq!(charges.len(), 4);
     assert_eq!(page["records"][2]["price_label"], PRICE_LABEL_FAST_SHORT);
     assert!(page["records"][2]["charges"].is_array());
     assert_eq!(

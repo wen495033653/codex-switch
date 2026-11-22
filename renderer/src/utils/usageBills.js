@@ -24,6 +24,8 @@ const PRICE_LABEL_TEXT = {
   standard_long_context: '标准 · 长上下文',
   fast_short_context: '快速',
   fast_long_context: '快速 · 长上下文',
+  ultrafast_short_context: '超快',
+  ultrafast_long_context: '超快 · 长上下文',
   auto_review_free: '免费 · Auto-review'
 };
 
