@@ -189,13 +189,17 @@ export function useSettingsActions({
     try {
       const res = await window.api.setCodexModelInstructionsEnabled({ enabled, overwriteLocal });
       if (res && res.confirmationRequired) {
-        setModelInstructionsConfirmation({ path: res.path });
+        setModelInstructionsConfirmation({
+          path: res.path,
+          exists: res.exists === true,
+          backupPath: res.backupPath || ''
+        });
         return;
       }
       if (!res || res.ok !== true) throw new Error(res?.message || '模型指令设置失败');
       applySettings(res);
       setModelInstructionsConfirmation(null);
-      const message = res.message || (enabled ? 'gpt破限已启用' : 'gpt破限已关闭');
+      const message = res.message || (enabled ? 'GPT 破甲已替换' : 'GPT 破甲已关闭');
       toast(res.backupPath
         ? translate('{message}\n本地文件已备份：{path}', { message: translateRuntimeText(message), path: res.backupPath })
         : message, res.backupPath ? 7000 : undefined);
@@ -208,13 +212,13 @@ export function useSettingsActions({
           return;
         }
         if (hasRunningCodexApp(processStatus)) {
-          setCodexRestartNoticeMessage('gpt破限配置已保存，重启 Codex 后生效。');
+          setCodexRestartNoticeMessage('GPT 破甲配置已保存，重启 Codex 后生效。');
           setCodexRestartNoticeVisible(true);
         }
       }
     } catch (err) {
       setSettingsDraft(settings);
-      toast(getErrorMessage(err, enabled ? '启用 gpt破限失败' : '关闭 gpt破限失败'), 7000);
+      toast(getErrorMessage(err, enabled ? '替换 GPT 破甲失败' : '关闭 GPT 破甲失败'), 7000);
     } finally {
       setSavingCodexModelInstructions(false);
     }
@@ -299,9 +303,10 @@ export function useSettingsActions({
     savingCodexModelInstructions,
     modelInstructionsConfirmation: modelInstructionsConfirmation && {
       path: modelInstructionsConfirmation.path,
+      exists: modelInstructionsConfirmation.exists,
+      backupPath: modelInstructionsConfirmation.backupPath,
       loading: savingCodexModelInstructions,
-      onKeep: () => setCodexModelInstructionsEnabled(true, false),
-      onOverwrite: () => setCodexModelInstructionsEnabled(true, true),
+      onConfirm: () => setCodexModelInstructionsEnabled(true, true),
       onCancel: () => !savingCodexModelInstructions && setModelInstructionsConfirmation(null)
     },
     savingCodexRemoteControl,

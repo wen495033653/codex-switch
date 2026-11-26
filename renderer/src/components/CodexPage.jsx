@@ -67,22 +67,29 @@ export default function CodexPage({
                     <section className="settings-section settings-app-card-section codex-model-instructions-section">
                         <div className="settings-feature-head codex-model-instructions-head">
                             <div className="settings-section-head">
-                                <div className="settings-section-title">{t('gpt破限')}</div>
-                                <div className="settings-section-desc">{t('替换instruction.md')}</div>
+                                <div className="settings-section-title">{t('GPT 破甲')}</div>
+                                <div className="settings-section-desc">{t('替换 instruction.md')}</div>
                             </div>
-                            <button
-                                type="button"
-                                className={`settings-feature-switch codex-model-instructions-switch ${modelInstructionsEnabled ? 'active' : ''}`}
-                                aria-pressed={modelInstructionsEnabled}
-                                aria-label={modelInstructionsEnabled ? t('关闭 gpt破限') : t('启动 gpt破限')}
-                                disabled={switching || savingCodexModelInstructions}
-                                onClick={() => setCodexModelInstructionsEnabled(!modelInstructionsEnabled)}
-                            >
-                                <span className="settings-feature-switch-label codex-model-instructions-switch-label">{t('启动')}</span>
-                                <span className="settings-switch" aria-hidden="true">
-                                    <span className="settings-switch-thumb" />
-                                </span>
-                            </button>
+                            <div className="codex-model-instructions-actions">
+                                {modelInstructionsEnabled && (
+                                    <button
+                                        type="button"
+                                        className="codex-model-instructions-secondary-button"
+                                        disabled={switching || savingCodexModelInstructions}
+                                        onClick={() => setCodexModelInstructionsEnabled(false)}
+                                    >
+                                        {t('关闭')}
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className="codex-model-instructions-primary-button"
+                                    disabled={switching || savingCodexModelInstructions}
+                                    onClick={() => setCodexModelInstructionsEnabled(true)}
+                                >
+                                    {savingCodexModelInstructions ? t('处理中...') : t('一键替换')}
+                                </button>
+                            </div>
                         </div>
                     </section>
 

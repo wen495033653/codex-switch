@@ -963,9 +963,11 @@ html[data-theme="light"] .settings-path-value {
 
 .settings-proxy-switch-button,
 .codex-model-instructions-switch,
+.codex-model-instructions-secondary-button,
 .settings-remote-control-switch,
 html[data-theme="light"] .settings-proxy-switch-button,
 html[data-theme="light"] .codex-model-instructions-switch,
+html[data-theme="light"] .codex-model-instructions-secondary-button,
 html[data-theme="light"] .settings-remote-control-switch {
   border-color: var(--border-default);
   background: var(--surface-raised);
@@ -974,9 +976,11 @@ html[data-theme="light"] .settings-remote-control-switch {
 
 .settings-proxy-switch-button:hover,
 .codex-model-instructions-switch:hover,
+.codex-model-instructions-secondary-button:hover:not(:disabled),
 .settings-remote-control-switch:hover,
 html[data-theme="light"] .settings-proxy-switch-button:hover,
 html[data-theme="light"] .codex-model-instructions-switch:hover,
+html[data-theme="light"] .codex-model-instructions-secondary-button:hover:not(:disabled),
 html[data-theme="light"] .settings-remote-control-switch:hover {
   border-color: var(--border-strong);
   background: var(--surface-hover);

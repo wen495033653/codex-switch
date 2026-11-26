@@ -4,7 +4,7 @@ use crate::{
 };
 use std::{
     fs,
-    io::{self, ErrorKind, Write},
+    io::{self, ErrorKind},
     path::{Path, PathBuf},
 };
 use tauri::{path::BaseDirectory, AppHandle, Manager};
@@ -17,6 +17,8 @@ pub(crate) const SETTING_KEY: &str = "codex_model_instructions_enabled";
 pub(crate) enum ModelInstructionsPreparation {
     Confirmation {
         path: String,
+        exists: bool,
+        backup_path: Option<String>,
     },
     Ready {
         path: String,
@@ -50,8 +52,13 @@ fn prepare_model_instructions_file(
         }
     };
     let path = path_for_config(target);
-    if exists && overwrite_local.is_none() {
-        return Ok(ModelInstructionsPreparation::Confirmation { path });
+    if overwrite_local.is_none() {
+        let backup_path = exists.then(|| path_for_config(&backup_model_instructions_path(target)));
+        return Ok(ModelInstructionsPreparation::Confirmation {
+            path,
+            exists,
+            backup_path,
+        });
     }
     let backup_path = if exists && overwrite_local == Some(true) {
         Some(path_for_config(&replace_model_instructions_file(
@@ -65,30 +72,28 @@ fn prepare_model_instructions_file(
     Ok(ModelInstructionsPreparation::Ready { path, backup_path })
 }
 
+fn backup_model_instructions_path(target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(FILE_NAME);
+    target.with_file_name(format!("{file_name}.bak"))
+}
+
 fn replace_model_instructions_file(source: &Path, target: &Path) -> Result<PathBuf, String> {
     let replacement = fs::read(source)
         .map_err(|err| format!("读取模型指令资源失败 {}: {err}", source.display()))?;
     let original = fs::read(target)
         .map_err(|err| format!("读取本地模型指令失败 {}: {err}", target.display()))?;
-    let backup = target.with_file_name(format!(
-        "{FILE_NAME}.backup-{}",
-        crate::accounts::random_urlsafe(12)
-    ));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&backup)
-        .map_err(|err| format!("创建模型指令备份失败 {}: {err}", backup.display()))?;
-    file.write_all(&original)
-        .and_then(|_| file.sync_all())
-        .map_err(|err| {
-            format!(
-                "写入模型指令备份失败 {}: {err}；本地文件未覆盖",
-                backup.display()
-            )
-        })?;
+    let backup = backup_model_instructions_path(target);
+    write_file_atomically(&backup, &original).map_err(|err| {
+        format!(
+            "写入模型指令备份失败 {}: {err}；本地文件未覆盖",
+            backup.display()
+        )
+    })?;
     // Written beside the target and renamed over it, so a failed write leaves the local file as
-    // it was; the backup above stays either way.
+    // it was; the .bak backup above stays either way.
     write_file_atomically(target, &replacement).map_err(|err| {
         format!(
             "覆盖模型指令失败（本地文件未改动）: {err}；备份: {}",
@@ -270,17 +275,23 @@ mod tests {
     }
 
     #[test]
-    fn existing_file_requires_confirmation_without_writing() {
+    fn existing_file_requires_confirmation_with_bak_path_without_writing() {
         let dir = fixture();
         let target = dir.join(FILE_NAME);
         fs::write(&target, "user updated\r\n").unwrap();
         let result =
             prepare_model_instructions_file(&target, None, || panic!("must not resolve bundle"))
                 .unwrap();
-        assert!(matches!(
-            result,
-            ModelInstructionsPreparation::Confirmation { .. }
-        ));
+        let ModelInstructionsPreparation::Confirmation {
+            exists,
+            backup_path: Some(backup_path),
+            ..
+        } = result
+        else {
+            panic!("confirmation with backup path required")
+        };
+        assert!(exists);
+        assert!(backup_path.ends_with("gpt-unrestricted.md.bak"));
         assert_eq!(fs::read_to_string(&target).unwrap(), "user updated\r\n");
         assert_eq!(fs::read_dir(dir).unwrap().count(), 1);
     }
@@ -302,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_overwrite_preserves_original_in_backup() {
+    fn confirmed_overwrite_preserves_original_in_dot_bak_file() {
         let dir = fixture();
         let target = dir.join(FILE_NAME);
         let source = dir.join("bundle.md");
@@ -317,17 +328,30 @@ mod tests {
         else {
             panic!("backup required")
         };
+        assert!(backup.ends_with("gpt-unrestricted.md.bak"));
         assert_eq!(fs::read_to_string(backup).unwrap(), original);
         assert_eq!(fs::read_to_string(target).unwrap(), "bundled replacement");
     }
 
     #[test]
-    fn missing_file_initializes_without_confirmation() {
+    fn missing_file_requests_confirmation_then_initializes_on_confirm() {
         let dir = fixture();
         let target = dir.join(FILE_NAME);
         let source = dir.join("bundle.md");
         fs::write(&source, "bundled").unwrap();
-        let result = prepare_model_instructions_file(&target, None, || Ok(source)).unwrap();
+        let preview =
+            prepare_model_instructions_file(&target, None, || panic!("must not resolve bundle"))
+                .unwrap();
+        assert!(matches!(
+            preview,
+            ModelInstructionsPreparation::Confirmation {
+                exists: false,
+                backup_path: None,
+                ..
+            }
+        ));
+        assert!(!target.exists());
+        let result = prepare_model_instructions_file(&target, Some(true), || Ok(source)).unwrap();
         assert!(matches!(
             result,
             ModelInstructionsPreparation::Ready {
