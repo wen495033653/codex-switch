@@ -6,6 +6,7 @@ export { useApiModeDraft } from './useApiModeDraft';
 export { useAsyncPolling } from './useAsyncPolling';
 export { useApiProfilePagination } from './useApiProfilePagination';
 export { useCodexAppInstances } from './useCodexAppInstances';
+export { useCodexComputerUseDocs } from './useCodexComputerUseDocs';
 export { useCodexProcessStatus } from './useCodexProcessStatus';
 export { useCodexSessionSync } from './useCodexSessionSync';
 export { useCurrentModeSummary } from './useCurrentModeSummary';

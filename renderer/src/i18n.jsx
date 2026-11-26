@@ -301,6 +301,27 @@ const EN_TRANSLATIONS = {
   '关闭 gpt破限': 'Disable GPT unlock',
   '启动 gpt破限': 'Enable GPT unlock',
   'gpt破限': 'GPT unlock',
+  'Computer Use 增强': 'Computer Use boost',
+  '移除安全禁令，仅保留金钱/付款确认': 'Remove safety denials and keep only money/payment confirmations',
+  '重新检测': 'Recheck',
+  '检测中...': 'Checking...',
+  '一键清除': 'Clear all',
+  '清理中...': 'Clearing...',
+  '已清理': 'Cleared',
+  '待清理': 'Pending',
+  '安全禁令': 'Safety denials',
+  '自动授权（付款除外）': 'Auto-approve (except payments)',
+  '待应用': 'Pending',
+  '已生效': 'Active',
+  '确认清理？': 'Confirm cleanup?',
+  '1. 删除 guidance.md 中的 Non-negotiable Windows Automation Safety 段落。': '1. Remove the Non-negotiable Windows Automation Safety section from guidance.md.',
+  '2. confirmations.md 改为仅金钱/付款确认': '2. Update confirmations.md to require confirmation only for money and payments.',
+  '确认清除': 'Confirm clear',
+  '还原': 'Restore',
+  '还原中...': 'Restoring...',
+  '确认还原？': 'Confirm restore?',
+  '将从备份还原 Computer Use 原文件。': 'Restore the original Computer Use files from backup.',
+  '确认还原': 'Confirm restore',
   '启动': 'Start',
   '启用': 'Enable',
   '不可用': 'Unavailable',
@@ -692,7 +713,13 @@ const EN_TRANSLATIONS = {
   '{message}；无法确认 Codex 运行状态，建议重启': '{message}; the Codex process state could not be confirmed, so a restart is recommended',
   '控制账号已删除，远程控制已关闭；重启 Codex 后生效。': 'The control account was deleted and remote control was disabled. Restart Codex to apply.',
   '{message}\n本地文件已备份：{path}': '{message}\nLocal file backed up: {path}',
-  '{message} 远程控制代理更新失败：{error}': '{message} Updating the remote control proxy failed: {error}'
+  '{message} 远程控制代理更新失败：{error}': '{message} Updating the remote control proxy failed: {error}',
+  '检测 Computer Use 增强状态失败': 'Failed to inspect Computer Use status',
+  '清理 Computer Use 限制失败': 'Failed to clear Computer Use restrictions',
+  '还原 Computer Use 原文件失败': 'Failed to restore original Computer Use files',
+  '未检测到 Computer Use 插件缓存': 'Computer Use plugin cache not found',
+  'Computer Use 限制已清理': 'Computer Use restrictions are already cleared',
+  '没有可还原的 Computer Use 备份': 'No Computer Use backup available to restore'
 };
 
 // The backend joins reopened IDE names with "、" and falls back to "Codex 或 VS Code".
@@ -746,7 +773,9 @@ const RUNTIME_PATTERNS = [
   [/^已永久删除 (\d+) 个会话，(\d+) 个失败：([\s\S]+)$/, match => `${match[1]} sessions permanently deleted, ${match[2]} failed: ${match[3]}`],
   [/^已永久删除 (\d+) 个会话；([\s\S]+)$/, match => `${match[1]} sessions permanently deleted; ${match[2]}`],
   [/^请填写(.+)$/, match => `Complete the following fields: ${match[1].split('、').map(field => EN_TRANSLATIONS[field] || field).join(', ')}`],
-  [/^API Base URL 格式无效：(.+)$/, match => `Invalid API Base URL: ${match[1]}`]
+  [/^API Base URL 格式无效：(.+)$/, match => `Invalid API Base URL: ${match[1]}`],
+  [/^已清理 (\d+) 份 Computer Use 限制文件，新对话或重启 Codex 后生效。$/, match => `Cleared ${match[1]} Computer Use restriction files. Start a new conversation or restart Codex to apply.`],
+  [/^已还原 (\d+) 份 Computer Use 原文件，新对话或重启 Codex 后生效。$/, match => `Restored ${match[1]} original Computer Use files. Start a new conversation or restart Codex to apply.`]
 ];
 
 let runtimeLanguage = DEFAULT_UI_LANGUAGE;

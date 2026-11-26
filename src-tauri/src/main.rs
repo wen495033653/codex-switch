@@ -10,6 +10,7 @@ mod app_log;
 mod atomic_file;
 mod blocking_task;
 mod codex_app_server;
+mod codex_computer_use;
 mod codex_config;
 mod codex_launcher;
 mod codex_session_usage;
@@ -180,6 +181,9 @@ fn main() {
             commands::general::get_settings,
             commands::general::update_settings,
             commands::general::set_codex_model_instructions_enabled,
+            codex_computer_use::inspect_codex_computer_use_docs,
+            codex_computer_use::clear_codex_computer_use_restrictions,
+            codex_computer_use::restore_codex_computer_use_docs,
             commands::account::capture_current,
             commands::account::import_refresh_token,
             commands::account::delete_account,
