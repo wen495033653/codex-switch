@@ -317,9 +317,7 @@ fn session_meta_line_cwd(line: &[u8]) -> Option<Option<String>> {
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
+    memchr::memmem::find(haystack, needle).is_some()
 }
 
 fn is_locked_io_error(error: &std::io::Error) -> bool {

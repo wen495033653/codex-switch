@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getRawErrorMessage } from '../utils/errors';
 import { useAsyncPolling } from './useAsyncPolling';
 
 export const EMPTY_REMOTE_CONTROL_STATUS = Object.freeze({
@@ -58,7 +59,7 @@ export function useRemoteControlStatus({ enabled, accountId, onAutoDisabled }) {
       if (isCurrent()) {
         setRemoteControlStatus({
           ...EMPTY_REMOTE_CONTROL_STATUS,
-          error: err && err.message ? err.message : '读取远程控制状态失败'
+          error: getRawErrorMessage(err) || '读取远程控制状态失败'
         });
       }
     }
