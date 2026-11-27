@@ -63,47 +63,60 @@ async function fixture(responses) {
   };
 }
 
-const confirmation = () => ({ ok: false, confirmationRequired: true, path: 'fixture/gpt-unrestricted.md' });
+const existingConfirmation = () => ({
+  ok: false,
+  confirmationRequired: true,
+  path: 'fixture/gpt-unrestricted.md',
+  exists: true,
+  backupPath: 'fixture/gpt-unrestricted.md.bak',
+});
+const freshConfirmation = () => ({
+  ok: false,
+  confirmationRequired: true,
+  path: 'fixture/gpt-unrestricted.md',
+  exists: false,
+  backupPath: null,
+});
 const success = enabled => ({ ok: true, restartRequired: true, settings: { codex_model_instructions_enabled: enabled } });
 
-test('existing-file prompt does not enable, and cancel performs no second request', async () => {
-  const f = await fixture([confirmation()]);
+test('replace prompt exposes .bak info without enabling, and cancel performs no second request', async () => {
+  const f = await fixture([existingConfirmation()]);
   await f.render().setCodexModelInstructionsEnabled(true);
   assert.equal(f.draft.codex_model_instructions_enabled, false);
   assert.equal(f.applied.length, 0);
-  f.render().modelInstructionsConfirmation.onCancel();
+  const modal = f.render().modelInstructionsConfirmation;
+  assert.equal(modal.exists, true);
+  assert.equal(modal.backupPath, 'fixture/gpt-unrestricted.md.bak');
+  modal.onCancel();
   assert.equal(f.render().modelInstructionsConfirmation, null);
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].overwriteLocal, null);
 });
 
-test('keep and overwrite send distinct explicit decisions and close only after success', async () => {
-  for (const overwrite of [false, true]) {
-    const f = await fixture([confirmation(), success(true)]);
+test('confirming replacement sends overwriteLocal=true and closes only after success', async () => {
+  for (const prompt of [existingConfirmation(), freshConfirmation()]) {
+    const f = await fixture([prompt, success(true)]);
     await f.render().setCodexModelInstructionsEnabled(true);
-    const modal = f.render().modelInstructionsConfirmation;
-    await (overwrite ? modal.onOverwrite() : modal.onKeep());
-    assert.equal(f.calls[1].overwriteLocal, overwrite);
+    await f.render().modelInstructionsConfirmation.onConfirm();
+    assert.equal(f.calls[1].overwriteLocal, true);
     assert.equal(f.render().modelInstructionsConfirmation, null);
     assert.equal(f.draft.codex_model_instructions_enabled, true);
   }
 });
 
-test('failed overwrite leaves local choice dialog open and enabled state unchanged', async () => {
-  const f = await fixture([confirmation(), new Error('fixture backup failure')]);
+test('failed replacement leaves confirmation modal open and enabled state unchanged', async () => {
+  const f = await fixture([existingConfirmation(), new Error('fixture backup failure')]);
   await f.render().setCodexModelInstructionsEnabled(true);
-  await f.render().modelInstructionsConfirmation.onOverwrite();
+  await f.render().modelInstructionsConfirmation.onConfirm();
   assert.notEqual(f.render().modelInstructionsConfirmation, null);
   assert.equal(f.draft.codex_model_instructions_enabled, false);
   assert.equal(f.applied.length, 0);
   assert.ok(f.errors.some(message => message.includes('fixture backup failure')));
 });
 
-test('disable and first-time enable complete without a confirmation response', async () => {
-  for (const enabled of [false, true]) {
-    const f = await fixture([success(enabled)]);
-    await f.render().setCodexModelInstructionsEnabled(enabled);
-    assert.equal(f.render().modelInstructionsConfirmation, null);
-    assert.equal(f.draft.codex_model_instructions_enabled, enabled);
-  }
+test('disable completes directly without a confirmation dialog', async () => {
+  const f = await fixture([success(false)]);
+  await f.render().setCodexModelInstructionsEnabled(false);
+  assert.equal(f.render().modelInstructionsConfirmation, null);
+  assert.equal(f.draft.codex_model_instructions_enabled, false);
 });

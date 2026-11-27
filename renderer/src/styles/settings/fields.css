@@ -273,6 +273,54 @@
   white-space: nowrap;
 }
 
+.codex-model-instructions-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.codex-model-instructions-secondary-button,
+.codex-model-instructions-primary-button {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
+}
+
+.codex-model-instructions-secondary-button {
+  border: 1px solid var(--border-app);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.codex-model-instructions-secondary-button:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.34);
+  background: var(--bg-row-hover);
+}
+
+.codex-model-instructions-primary-button {
+  min-width: 82px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 800;
+}
+
+.codex-model-instructions-primary-button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.codex-model-instructions-secondary-button:disabled,
+.codex-model-instructions-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 @media (max-width: 720px) {
   .codex-config-open-button {
     width: 100%;
@@ -285,5 +333,10 @@
 
   .codex-model-instructions-switch {
     width: 100%;
+  }
+
+  .codex-model-instructions-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }

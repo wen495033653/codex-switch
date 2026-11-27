@@ -129,11 +129,17 @@ fn set_codex_model_instructions_enabled_impl(
                 err
             })?;
         match preparation {
-            ModelInstructionsPreparation::Confirmation { path } => {
+            ModelInstructionsPreparation::Confirmation {
+                path,
+                exists,
+                backup_path,
+            } => {
                 return Ok(json!({
                     "ok": false,
                     "confirmationRequired": true,
-                    "path": path
+                    "path": path,
+                    "exists": exists,
+                    "backupPath": backup_path
                 }));
             }
             ModelInstructionsPreparation::Ready { path, backup_path } => {
@@ -152,9 +158,9 @@ fn set_codex_model_instructions_enabled_impl(
         "codex_model_instructions_enabled": enabled
     }))?)?;
     let message = if enabled {
-        "gpt破限已启用，重启 Codex 后生效。"
+        "GPT 破甲已替换，重启 Codex 后生效。"
     } else {
-        "gpt破限已关闭，重启 Codex 后生效。"
+        "GPT 破甲已关闭，重启 Codex 后生效。"
     };
 
     Ok(json!({

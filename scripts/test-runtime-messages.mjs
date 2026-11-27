@@ -22,8 +22,8 @@ after(async () => { await server?.close(); });
 // Texts as the backend sends them in command results, status events and auto-disable notices.
 const BACKEND_MESSAGES = [
   ['设置已保存', 'Settings saved'],
-  ['gpt破限已启用，重启 Codex 后生效。', 'GPT unlock enabled. Restart Codex to apply.'],
-  ['gpt破限已关闭，重启 Codex 后生效。', 'GPT unlock disabled. Restart Codex to apply.'],
+  ['GPT 破甲已替换，重启 Codex 后生效。', 'GPT Armor replaced. Restart Codex to apply.'],
+  ['GPT 破甲已关闭，重启 Codex 后生效。', 'GPT Armor disabled. Restart Codex to apply.'],
   ['远程控制账号已更新，重启 Codex 后生效', 'The remote control account was updated and will take effect after Codex restarts.'],
   ['控制账号登录已失效，已关闭远程控制', 'The control account sign-in is no longer valid, so remote control was disabled'],
   ['远程控制账号不存在，已关闭远程控制并切换到 API 模式', 'The remote control account no longer exists, so remote control was disabled and Codex switched to API mode'],
@@ -77,8 +77,8 @@ test('messages the frontend composes around a backend message are translated as 
     'The control account sign-in is no longer valid, so remote control was disabled; the Codex process state could not be confirmed, so a restart is recommended'
   );
   assert.equal(
-    translate('{message}\n本地文件已备份：{path}', { message: translateRuntimeText('gpt破限已启用，重启 Codex 后生效。', 'en'), path: 'fixture.bak' }, 'en'),
-    'GPT unlock enabled. Restart Codex to apply.\nLocal file backed up: fixture.bak'
+    translate('{message}\n本地文件已备份：{path}', { message: translateRuntimeText('GPT 破甲已替换，重启 Codex 后生效。', 'en'), path: 'fixture.bak' }, 'en'),
+    'GPT Armor replaced. Restart Codex to apply.\nLocal file backed up: fixture.bak'
   );
   assert.equal(
     translate('{message} 远程控制代理更新失败：{error}', { message: translateRuntimeText('Codex 代理配置已启用，重启 Codex 后生效。', 'en'), error: 'fixture error' }, 'en'),
