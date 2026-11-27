@@ -1,22 +1,27 @@
-use super::support::{provider_log_value, write_existing_file};
+use super::support::provider_log_value;
 use crate::{app_log::log_event, json_util::raw_string_field};
-use memchr::memmem::Finder;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex, MutexGuard},
+    process,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        LazyLock, Mutex, MutexGuard,
+    },
     time::SystemTime,
 };
 
-const PREFLIGHT_RESUME_CHECK_BYTES: u64 = 64;
+const HEADER_READ_BUFFER_BYTES: usize = 64 * 1024;
+const STREAM_COPY_BUFFER_BYTES: usize = 256 * 1024;
+const MAX_HEADER_SESSION_META_LINES: usize = 8;
 
-/// What earlier preflights learned about each rollout file. The watcher runs a preflight every
-/// minute; without this it re-read every rollout each time. A provider check is reused while the
-/// file keeps its size and modification time, and extended over the appended lines while the bytes
-/// before its offset still match.
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Caches the last header-only provider preflight result per rollout while its size and
+/// modification time remain unchanged.
 #[derive(Default)]
 struct RolloutPreflightCache {
     provider_checks: HashMap<PathBuf, ProviderCheck>,
@@ -32,9 +37,6 @@ struct FileStamp {
 struct ProviderCheck {
     target_provider: String,
     stamp: FileStamp,
-    /// Complete lines before this offset were checked.
-    offset: u64,
-    resume_check: Vec<u8>,
     would_change: bool,
 }
 
@@ -48,8 +50,8 @@ fn preflight_cache() -> MutexGuard<'static, RolloutPreflightCache> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The sync rewrites a file in place and then restores its modification time, so a same-length
-/// rewrite would look unchanged. It drops what the cache knows about the file instead.
+/// The sync preserves a rollout's modification time (and on the in-place fast path also its exact
+/// byte length), so drop what the cache knows about the file whenever we rewrite it.
 fn forget_cached_rollout(path: &Path) {
     preflight_cache().provider_checks.remove(path);
 }
@@ -58,6 +60,23 @@ fn forget_cached_rollout(path: &Path) {
 struct RolloutFileSyncOutcome {
     changed: bool,
     from_provider: Option<String>,
+}
+
+struct HeaderLine {
+    start_offset: u64,
+    raw_segment: Vec<u8>,
+    is_session_meta: bool,
+}
+
+struct RolloutHeader {
+    lines: Vec<HeaderLine>,
+    header_end_offset: u64,
+}
+
+struct InPlacePatch {
+    offset: u64,
+    original: Vec<u8>,
+    replacement: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -228,10 +247,10 @@ fn sync_rollout_files_to_provider_with_diagnostics(
                     "trigger": trigger,
                     "targetProvider": target_provider,
                     "updatedFiles": updated,
-                        "providerChanges": provider_change_counts_json(
-                            &provider_change_counts,
-                            target_provider
-                        )
+                    "providerChanges": provider_change_counts_json(
+                        &provider_change_counts,
+                        target_provider
+                    )
                 }),
             );
         }
@@ -260,8 +279,15 @@ fn provider_change_counts_json(counts: &BTreeMap<String, usize>, target_provider
     )
 }
 
-fn rollout_content_session_meta_summary(content: &str) -> Value {
-    for line in content.lines() {
+fn rollout_header_session_meta_summary(header: &RolloutHeader) -> Value {
+    for entry in &header.lines {
+        if !entry.is_session_meta {
+            continue;
+        }
+        let Ok(segment) = std::str::from_utf8(&entry.raw_segment) else {
+            continue;
+        };
+        let (line, _) = split_line_ending(segment);
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -306,6 +332,86 @@ fn rollout_meta_provider(meta: &Value) -> String {
     }
 }
 
+/// Reads only the leading contiguous `session_meta` lines (and any leading blank lines) at the
+/// start of a rollout file, stopping as soon as the first non-`session_meta` line is encountered.
+/// Codex writes `session_meta` only at the head of a rollout (line 1, or lines 1-2 for forked
+/// sessions), so the multi-hundred-MB body never needs to be read into memory.
+fn read_rollout_header(path: &Path) -> Result<Option<(FileStamp, RolloutHeader)>, String> {
+    let read_error =
+        |err: io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(read_error(err)),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("读取 Codex session 修改时间失败 {}: {err}", path.display()))?;
+    let stamp = FileStamp {
+        len: metadata.len(),
+        modified: metadata
+            .modified()
+            .map_err(|err| format!("读取 Codex session 修改时间失败 {}: {err}", path.display()))?,
+    };
+    let header = read_rollout_header_from_file(path, file)?;
+    Ok(Some((stamp, header)))
+}
+
+fn read_rollout_header_from_file(path: &Path, file: fs::File) -> Result<RolloutHeader, String> {
+    let read_error =
+        |err: io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
+    let mut reader = BufReader::with_capacity(HEADER_READ_BUFFER_BYTES, file);
+    let mut offset = 0u64;
+    let mut lines = Vec::new();
+    let mut session_meta_count = 0usize;
+
+    while session_meta_count < MAX_HEADER_SESSION_META_LINES {
+        let mut segment = Vec::new();
+        let read = reader.read_until(b'\n', &mut segment).map_err(read_error)?;
+        if read == 0 {
+            break;
+        }
+        let is_blank = segment.iter().all(|byte| byte.is_ascii_whitespace());
+        if is_blank {
+            lines.push(HeaderLine {
+                start_offset: offset,
+                raw_segment: segment,
+                is_session_meta: false,
+            });
+            offset += read as u64;
+            continue;
+        }
+        if !is_session_meta_segment(&segment) {
+            break;
+        }
+        session_meta_count += 1;
+        lines.push(HeaderLine {
+            start_offset: offset,
+            raw_segment: segment,
+            is_session_meta: true,
+        });
+        offset += read as u64;
+    }
+
+    Ok(RolloutHeader {
+        lines,
+        header_end_offset: offset,
+    })
+}
+
+fn is_session_meta_segment(segment: &[u8]) -> bool {
+    if memchr::memmem::find(segment, b"\"session_meta\"").is_none() {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(segment) else {
+        return false;
+    };
+    let (line, _) = split_line_ending(text);
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .is_some_and(|event| event.get("type").and_then(Value::as_str) == Some("session_meta"))
+}
+
 fn sync_rollout_file_provider(
     path: &Path,
     target_provider: &str,
@@ -316,92 +422,223 @@ fn sync_rollout_file_provider(
         changed: false,
         from_provider: None,
     };
-    let original_modified = match fs::metadata(path).and_then(|metadata| metadata.modified()) {
-        Ok(modified) => modified,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gone()),
-        Err(err) => {
-            return Err(format!(
-                "读取 Codex session 修改时间失败 {}: {err}",
-                path.display()
-            ))
-        }
+    let Some((stamp, header)) = read_rollout_header(path)? else {
+        forget_cached_rollout(path);
+        return Ok(gone());
     };
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gone()),
-        Err(err) => {
-            return Err(format!(
-                "读取 Codex session 文件失败 {}: {err}",
-                path.display()
-            ))
-        }
-    };
-    let mut updated_content: Option<String> = None;
-    let mut processed_bytes = 0usize;
 
-    for segment in content.split_inclusive('\n') {
+    let mut any_changed = false;
+    let mut in_place_patches: Option<Vec<InPlacePatch>> = Some(Vec::new());
+    let mut rewritten_header = Vec::new();
+
+    for entry in &header.lines {
+        if !entry.is_session_meta {
+            rewritten_header.extend_from_slice(&entry.raw_segment);
+            continue;
+        }
+        let segment = std::str::from_utf8(&entry.raw_segment).map_err(|err| {
+            format!(
+                "读取 Codex session 文件失败 {}: 不是有效的 UTF-8: {err}",
+                path.display()
+            )
+        })?;
         let (line, line_ending) = split_line_ending(segment);
         match update_rollout_provider_line(line, target_provider)? {
             Some(updated_line) => {
-                let buf = updated_content.get_or_insert_with(|| {
-                    let mut s = String::with_capacity(content.len());
-                    s.push_str(&content[..processed_bytes]);
-                    s
-                });
-                buf.push_str(&updated_line);
-                buf.push_str(line_ending);
+                any_changed = true;
+                if let Some(patches) = in_place_patches.as_mut() {
+                    if let Some(patch) = try_in_place_provider_patch(
+                        entry.start_offset,
+                        line.as_bytes(),
+                        &updated_line,
+                        target_provider,
+                    ) {
+                        patches.push(patch);
+                    } else {
+                        in_place_patches = None;
+                    }
+                }
+                rewritten_header.extend_from_slice(updated_line.as_bytes());
+                rewritten_header.extend_from_slice(line_ending.as_bytes());
             }
             None => {
-                if let Some(buf) = updated_content.as_mut() {
-                    buf.push_str(segment);
-                }
+                rewritten_header.extend_from_slice(&entry.raw_segment);
             }
         }
-        processed_bytes += segment.len();
     }
 
-    let mut changed = false;
-    if let Some(updated_content) = updated_content {
-        let before_meta = rollout_content_session_meta_summary(&content);
-        let from_provider = rollout_meta_provider(&before_meta);
-        // The rewrite truncates the file in place. When Codex is still running (a close that
-        // failed, or reopening editors) it may have appended since the read; writing now would
-        // drop those lines, so the file is left alone and reported instead. This narrows the
-        // window to the write itself; it does not close it.
-        ensure_rollout_unchanged_since_read(path, content.len(), original_modified)?;
-        let wrote = write_existing_file(path, &updated_content, "写入 Codex session 文件")?;
-        forget_cached_rollout(path);
-        if wrote {
-            fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .and_then(|file| file.set_modified(original_modified))
-                .map_err(|err| {
-                    format!("恢复 Codex session 修改时间失败 {}: {err}", path.display())
-                })?;
-        }
-        changed = wrote;
+    if !any_changed {
         return Ok(RolloutFileSyncOutcome {
-            changed,
-            from_provider: changed.then_some(from_provider),
+            changed: false,
+            from_provider: None,
         });
     }
 
+    let before_meta = rollout_header_session_meta_summary(&header);
+    let from_provider = rollout_meta_provider(&before_meta);
+
+    let wrote = if let Some(patches) = in_place_patches {
+        apply_in_place_patches(path, stamp, &patches)?
+    } else {
+        rewrite_rollout_header_streaming(path, stamp, header.header_end_offset, &rewritten_header)?
+    };
+
+    forget_cached_rollout(path);
     Ok(RolloutFileSyncOutcome {
-        changed,
-        from_provider: None,
+        changed: wrote,
+        from_provider: wrote.then_some(from_provider),
     })
 }
 
-fn ensure_rollout_unchanged_since_read(
+fn apply_in_place_patches(
     path: &Path,
-    read_len: usize,
-    read_modified: std::time::SystemTime,
+    stamp: FileStamp,
+    patches: &[InPlacePatch],
+) -> Result<bool, String> {
+    let mut file = match fs::OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(format!(
+                "打开 Codex session 文件失败 {}: {err}",
+                path.display()
+            ))
+        }
+    };
+
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("复核 Codex session 文件失败 {}: {err}", path.display()))?;
+    ensure_metadata_unchanged(path, &metadata, stamp)?;
+
+    let mut current = Vec::new();
+    for patch in patches {
+        current.resize(patch.original.len(), 0);
+        file.seek(SeekFrom::Start(patch.offset))
+            .and_then(|_| file.read_exact(&mut current))
+            .map_err(|err| format!("复核 Codex session 文件失败 {}: {err}", path.display()))?;
+        if current != patch.original {
+            return Err(format!(
+                "Codex session 文件在同步期间被写入（头部内容已变化），为避免覆盖新内容已跳过 {}",
+                path.display()
+            ));
+        }
+    }
+
+    for patch in patches {
+        file.seek(SeekFrom::Start(patch.offset))
+            .and_then(|_| file.write_all(&patch.replacement))
+            .map_err(|err| format!("写入 Codex session 文件失败 {}: {err}", path.display()))?;
+    }
+    file.flush()
+        .map_err(|err| format!("刷新 Codex session 文件失败 {}: {err}", path.display()))?;
+    file.set_modified(stamp.modified)
+        .map_err(|err| format!("恢复 Codex session 修改时间失败 {}: {err}", path.display()))?;
+    Ok(true)
+}
+
+fn rewrite_rollout_header_streaming(
+    path: &Path,
+    stamp: FileStamp,
+    header_end_offset: u64,
+    new_header_bytes: &[u8],
+) -> Result<bool, String> {
+    let temp = temp_rollout_path(path)?;
+    let write_result = (|| -> Result<bool, String> {
+        let mut source = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(err) => {
+                return Err(format!(
+                    "读取 Codex session 文件失败 {}: {err}",
+                    path.display()
+                ))
+            }
+        };
+        let source_meta = source
+            .metadata()
+            .map_err(|err| format!("复核 Codex session 文件失败 {}: {err}", path.display()))?;
+        ensure_metadata_unchanged(path, &source_meta, stamp)?;
+        source
+            .seek(SeekFrom::Start(header_end_offset))
+            .map_err(|err| format!("定位 Codex session 正文失败 {}: {err}", path.display()))?;
+
+        let temp_file = fs::File::create_new(&temp)
+            .map_err(|err| format!("创建 Codex session 临时文件失败 {}: {err}", temp.display()))?;
+        let mut reader = BufReader::with_capacity(STREAM_COPY_BUFFER_BYTES, source);
+        let mut writer = BufWriter::with_capacity(STREAM_COPY_BUFFER_BYTES, temp_file);
+        writer
+            .write_all(new_header_bytes)
+            .and_then(|()| io::copy(&mut reader, &mut writer).map(|_| ()))
+            .and_then(|()| writer.flush())
+            .map_err(|err| format!("写入 Codex session 文件失败 {}: {err}", path.display()))?;
+        let temp_file = writer
+            .into_inner()
+            .map_err(|err| format!("刷新 Codex session 文件失败 {}: {err}", path.display()))?;
+        temp_file
+            .sync_all()
+            .map_err(|err| format!("同步 Codex session 临时文件失败 {}: {err}", temp.display()))?;
+        temp_file
+            .set_modified(stamp.modified)
+            .map_err(|err| format!("恢复 Codex session 修改时间失败 {}: {err}", path.display()))?;
+        // Release both handles before replacing the target file (required on Windows).
+        drop(temp_file);
+        drop(reader);
+
+        // Re-check right before replace so concurrent appends are never dropped and a rollout
+        // moved away in the meantime is never recreated.
+        match verify_rollout_present_and_unchanged(path, stamp)? {
+            true => {}
+            false => return Ok(false),
+        }
+
+        fs::rename(&temp, path)
+            .map_err(|err| format!("替换 Codex session 文件失败 {}: {err}", path.display()))?;
+        Ok(true)
+    })();
+
+    if !matches!(write_result, Ok(true)) {
+        let _ = fs::remove_file(&temp);
+    }
+    write_result
+}
+
+fn temp_rollout_path(path: &Path) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} 没有上级目录", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("{} 不是文件路径", path.display()))?
+        .to_string_lossy();
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(
+        ".{file_name}.{}.{sequence}.sync-tmp",
+        process::id()
+    )))
+}
+
+fn ensure_metadata_unchanged(
+    path: &Path,
+    metadata: &fs::Metadata,
+    stamp: FileStamp,
 ) -> Result<(), String> {
+    let current_len = metadata.len();
+    let current_modified = metadata.modified().ok();
+    if current_len != stamp.len || current_modified != Some(stamp.modified) {
+        return Err(format!(
+            "Codex session 文件在同步期间被写入（读取时 {} 字节，写入前 {current_len} 字节），为避免丢失新内容已跳过 {}",
+            stamp.len,
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn verify_rollout_present_and_unchanged(path: &Path, stamp: FileStamp) -> Result<bool, String> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
-        // A file removed since the read is handled by write_existing_file (never recreated).
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
         Err(err) => {
             return Err(format!(
                 "复核 Codex session 文件失败 {}: {err}",
@@ -409,26 +646,224 @@ fn ensure_rollout_unchanged_since_read(
             ))
         }
     };
-    let current_len = metadata.len();
-    let current_modified = metadata.modified().ok();
-    if current_len != read_len as u64 || current_modified != Some(read_modified) {
-        return Err(format!(
-            "Codex session 文件在同步期间被写入（读取时 {read_len} 字节，写入前 {current_len} 字节），为避免丢失新内容已跳过 {}",
-            path.display()
-        ));
+    ensure_metadata_unchanged(path, &metadata, stamp)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+fn ensure_rollout_unchanged_since_read(
+    path: &Path,
+    read_len: usize,
+    read_modified: SystemTime,
+) -> Result<(), String> {
+    verify_rollout_present_and_unchanged(
+        path,
+        FileStamp {
+            len: read_len as u64,
+            modified: read_modified,
+        },
+    )
+    .map(|_| ())
+}
+
+/// Attempts to build a byte-length-preserving patch for `payload.model_provider` inside a single
+/// `session_meta` JSONL line. Padding with ASCII spaces after `:` keeps `"model_provider":"openai"`
+/// and `"model_provider":   "api"` at identical byte length so the multi-hundred-MB body and all
+/// byte offsets remain completely untouched.
+fn try_in_place_provider_patch(
+    line_start_offset: u64,
+    raw_line: &[u8],
+    expected_line: &str,
+    target_provider: &str,
+) -> Option<InPlacePatch> {
+    let (slot_start, slot_end) = find_payload_model_provider_slot(raw_line)?;
+    let encoded_target = serde_json::to_string(target_provider).ok()?;
+    let slot_len = slot_end.checked_sub(slot_start)?;
+    if encoded_target.len() > slot_len {
+        return None;
     }
-    Ok(())
+
+    let pad = slot_len - encoded_target.len();
+    let mut replacement = Vec::with_capacity(slot_len);
+    replacement.resize(pad, b' ');
+    replacement.extend_from_slice(encoded_target.as_bytes());
+
+    // Self-verify against the full serde_json rewrite before touching disk; this automatically
+    // rejects lines with multiple `model_provider` fields or any unusual JSON edge case.
+    let mut candidate = raw_line.to_vec();
+    candidate[slot_start..slot_end].copy_from_slice(&replacement);
+    let candidate_value: Value = serde_json::from_slice(&candidate).ok()?;
+    let expected_value: Value = serde_json::from_str(expected_line).ok()?;
+    if candidate_value != expected_value {
+        return None;
+    }
+
+    Some(InPlacePatch {
+        offset: line_start_offset + slot_start as u64,
+        original: raw_line[slot_start..slot_end].to_vec(),
+        replacement,
+    })
+}
+
+/// Locates the `(slot_start, slot_end)` byte range of `payload.model_provider`'s JSON string value
+/// (including any surrounding ASCII spaces/tabs between `:` and `,`/`}`) in a single JSON object.
+fn find_payload_model_provider_slot(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut pos = skip_json_ws(bytes, 0);
+    if bytes.get(pos) != Some(&b'{') {
+        return None;
+    }
+    pos += 1;
+
+    loop {
+        pos = skip_json_ws(bytes, pos);
+        match bytes.get(pos)? {
+            b'}' => return None,
+            b'"' => {}
+            _ => return None,
+        }
+        let key_start = pos;
+        let key_end = scan_json_string(bytes, pos)?;
+        pos = skip_json_ws(bytes, key_end);
+        if bytes.get(pos) != Some(&b':') {
+            return None;
+        }
+        pos = skip_json_ws(bytes, pos + 1);
+
+        if &bytes[key_start + 1..key_end - 1] == b"payload" {
+            return find_model_provider_slot_in_object(bytes, pos);
+        }
+
+        pos = skip_json_value(bytes, pos)?;
+        pos = skip_json_ws(bytes, pos);
+        match bytes.get(pos)? {
+            b',' => pos += 1,
+            b'}' => return None,
+            _ => return None,
+        }
+    }
+}
+
+fn find_model_provider_slot_in_object(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    if bytes.get(start) != Some(&b'{') {
+        return None;
+    }
+    let mut pos = start + 1;
+
+    loop {
+        pos = skip_json_ws(bytes, pos);
+        match bytes.get(pos)? {
+            b'}' => return None,
+            b'"' => {}
+            _ => return None,
+        }
+        let key_start = pos;
+        let key_end = scan_json_string(bytes, pos)?;
+        pos = skip_json_ws(bytes, key_end);
+        if bytes.get(pos) != Some(&b':') {
+            return None;
+        }
+        let slot_start = pos + 1;
+        pos = skip_json_ws(bytes, slot_start);
+
+        if &bytes[key_start + 1..key_end - 1] == b"model_provider" {
+            if bytes.get(pos) != Some(&b'"') {
+                return None;
+            }
+            let val_end = scan_json_string(bytes, pos)?;
+            let slot_end = skip_json_ws(bytes, val_end);
+            if !matches!(bytes.get(slot_end), Some(b',' | b'}')) {
+                return None;
+            }
+            return Some((slot_start, slot_end));
+        }
+
+        pos = skip_json_value(bytes, pos)?;
+        pos = skip_json_ws(bytes, pos);
+        match bytes.get(pos)? {
+            b',' => pos += 1,
+            b'}' => return None,
+            _ => return None,
+        }
+    }
+}
+
+fn skip_json_ws(bytes: &[u8], mut pos: usize) -> usize {
+    while let Some(&byte) = bytes.get(pos) {
+        if matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
+            pos += 1;
+        } else {
+            break;
+        }
+    }
+    pos
+}
+
+fn scan_json_string(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut pos = start + 1;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b'\\' => {
+                pos += 2;
+                if pos > bytes.len() {
+                    return None;
+                }
+            }
+            b'"' => return Some(pos + 1),
+            _ => pos += 1,
+        }
+    }
+    None
+}
+
+fn skip_json_value(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut pos = skip_json_ws(bytes, start);
+    match *bytes.get(pos)? {
+        b'"' => scan_json_string(bytes, pos),
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            while pos < bytes.len() {
+                match bytes[pos] {
+                    b'"' => pos = scan_json_string(bytes, pos)?,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        pos += 1;
+                    }
+                    b'}' | b']' => {
+                        depth = depth.checked_sub(1)?;
+                        pos += 1;
+                        if depth == 0 {
+                            return Some(pos);
+                        }
+                    }
+                    _ => pos += 1,
+                }
+            }
+            None
+        }
+        _ => {
+            let begin = pos;
+            while let Some(&byte) = bytes.get(pos) {
+                if matches!(byte, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n') {
+                    break;
+                }
+                pos += 1;
+            }
+            (pos > begin).then_some(pos)
+        }
+    }
 }
 
 fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Result<bool, String> {
     let read_error =
-        |err: std::io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
+        |err: io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
     // A rollout Codex moved after it was listed (archiving the thread) has nothing to sync here;
     // the next listing checks it at its new path.
-    let opened = fs::metadata(path).and_then(|metadata| Ok((metadata, fs::File::open(path)?)));
-    let (metadata, mut file) = match opened {
-        Ok(opened) => opened,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
             forget_cached_rollout(path);
             return Ok(false);
         }
@@ -438,100 +873,50 @@ fn rollout_file_provider_would_change(path: &Path, target_provider: &str) -> Res
         len: metadata.len(),
         modified: metadata.modified().map_err(read_error)?,
     };
-    let previous = preflight_cache()
+    if let Some(cached) = preflight_cache()
         .provider_checks
         .get(path)
-        .filter(|check| check.target_provider == target_provider)
-        .cloned();
-    if let Some(previous) = previous.as_ref() {
-        if previous.stamp == stamp {
-            return Ok(previous.would_change);
-        }
+        .filter(|check| check.target_provider == target_provider && check.stamp == stamp)
+    {
+        return Ok(cached.would_change);
     }
 
-    let resumed = match previous {
-        Some(previous)
-            if resumes_at(&mut file, previous.offset, &previous.resume_check)
-                .map_err(read_error)? =>
-        {
-            Some(previous)
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            forget_cached_rollout(path);
+            return Ok(false);
         }
-        _ => None,
+        Err(err) => return Err(read_error(err)),
     };
-    // Each line decides on its own, so a file that already needs a change still does after more
-    // lines were appended.
-    let (offset, would_change) = match resumed {
-        Some(previous) if previous.would_change => (previous.offset, true),
-        Some(previous) => check_provider_lines(path, &mut file, previous.offset, target_provider)?,
-        None => check_provider_lines(path, &mut file, 0, target_provider)?,
-    };
-    let check_len = offset.min(PREFLIGHT_RESUME_CHECK_BYTES);
-    let mut resume_check = vec![0; check_len as usize];
-    file.seek(SeekFrom::Start(offset - check_len))
-        .and_then(|_| file.read_exact(&mut resume_check))
-        .map_err(read_error)?;
-    preflight_cache().provider_checks.insert(
-        path.to_path_buf(),
-        ProviderCheck {
-            target_provider: target_provider.to_string(),
-            stamp,
-            offset,
-            resume_check,
-            would_change,
-        },
-    );
-    Ok(would_change)
-}
-
-fn resumes_at(file: &mut fs::File, offset: u64, resume_check: &[u8]) -> std::io::Result<bool> {
-    let check_len = resume_check.len() as u64;
-    if offset < check_len || file.metadata()?.len() < offset {
-        return Ok(false);
-    }
-    let mut current = vec![0; resume_check.len()];
-    file.seek(SeekFrom::Start(offset - check_len))?;
-    file.read_exact(&mut current)?;
-    Ok(current == resume_check)
-}
-
-/// Checks the complete lines from `offset` on and stops at the first one that would change.
-/// Returns the offset after the last line checked. A trailing line without a newline is still
-/// being written and is checked once it is complete.
-fn check_provider_lines(
-    path: &Path,
-    file: &mut fs::File,
-    offset: u64,
-    target_provider: &str,
-) -> Result<(u64, bool), String> {
-    let read_error =
-        |err: std::io::Error| format!("读取 Codex session 文件失败 {}: {err}", path.display());
-    file.seek(SeekFrom::Start(offset)).map_err(read_error)?;
-    let mut reader = BufReader::new(&mut *file);
-    let mut offset = offset;
-    let mut segment = Vec::new();
-    let provider_finder = Finder::new(b"\"model_provider\"");
-    let meta_finder = Finder::new(b"\"session_meta\"");
-    loop {
-        segment.clear();
-        let read = reader.read_until(b'\n', &mut segment).map_err(read_error)?;
-        if read == 0 || segment.last() != Some(&b'\n') {
-            return Ok((offset, false));
-        }
-        offset += read as u64;
-        if provider_finder.find(&segment).is_none() && meta_finder.find(&segment).is_none() {
+    let header = read_rollout_header_from_file(path, file)?;
+    let mut would_change = false;
+    for entry in &header.lines {
+        if !entry.is_session_meta {
             continue;
         }
-        let segment = std::str::from_utf8(&segment).map_err(|err| {
+        let segment = std::str::from_utf8(&entry.raw_segment).map_err(|err| {
             format!(
                 "读取 Codex session 文件失败 {}: 不是有效的 UTF-8: {err}",
                 path.display()
             )
         })?;
-        let (line, _line_ending) = split_line_ending(segment);
+        let (line, _) = split_line_ending(segment);
         if update_rollout_provider_line(line, target_provider)?.is_some() {
-            return Ok((offset, true));
+            would_change = true;
+            break;
         }
     }
+
+    preflight_cache().provider_checks.insert(
+        path.to_path_buf(),
+        ProviderCheck {
+            target_provider: target_provider.to_string(),
+            stamp,
+            would_change,
+        },
+    );
+    Ok(would_change)
 }
 
 fn collect_rollout_files_from_dirs(
@@ -620,7 +1005,7 @@ pub(super) fn update_rollout_provider_line(
     }
     // A line can only change if some object in it has a `model_provider` key, or if it is a
     // session_meta event (which gains the key). Neither is possible without these literals, so
-    // the other lines (almost all of a rollout) skip the JSON parse.
+    // the other lines skip the JSON parse.
     if !line.contains("\"model_provider\"") && !line.contains("\"session_meta\"") {
         return Ok(None);
     }
@@ -695,24 +1080,31 @@ fn update_model_provider_fields(value: &mut Value, target_provider: &str) -> boo
 }
 
 #[cfg(test)]
-mod append_guard_tests {
+mod patch_and_guard_tests {
     use super::{
         ensure_rollout_unchanged_since_read, preview_rollout_files_to_provider_with_diagnostics,
         rollout_file_provider_would_change, sync_rollout_file_provider,
     };
+    use serde_json::{json, Value};
     use std::{
         env, fs,
         io::Write,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    #[test]
-    fn rollout_appended_after_the_read_is_not_rewritten() {
+    fn unique_path(label: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = env::temp_dir().join(format!("codex-switch-append-guard-{stamp}.jsonl"));
+        let dir = env::temp_dir().join(format!("codex-switch-rollout-patch-{label}-{stamp}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("rollout-test.jsonl")
+    }
+
+    #[test]
+    fn rollout_appended_after_the_read_is_not_rewritten() {
+        let path = unique_path("append-guard");
         fs::write(&path, "{\"type\":\"session_meta\"}\n").unwrap();
         let metadata = fs::metadata(&path).unwrap();
         let read_len = metadata.len() as usize;
@@ -728,16 +1120,12 @@ mod append_guard_tests {
             .unwrap();
         let err = ensure_rollout_unchanged_since_read(&path, read_len, read_modified).unwrap_err();
         assert!(err.contains("同步期间被写入"), "{err}");
-        fs::remove_file(path).unwrap();
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn a_rollout_moved_away_after_listing_is_skipped_not_an_error() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = env::temp_dir().join(format!("codex-switch-moved-rollout-{stamp}.jsonl"));
+        let path = unique_path("moved-rollout");
 
         assert_eq!(rollout_file_provider_would_change(&path, "api"), Ok(false));
         assert_eq!(
@@ -747,5 +1135,167 @@ mod append_guard_tests {
         let outcome = sync_rollout_file_provider(&path, "api").unwrap();
         assert!(!outcome.changed);
         assert!(!path.exists());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn in_place_patch_round_trip_keeps_exact_size_mtime_and_untouched_body() {
+        let path = unique_path("in-place-round-trip");
+        let meta = json!({
+            "timestamp": "2026-11-27T00:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "thread-1",
+                "base_instructions": "mentions \"model_provider\":\"openai\" in text",
+                "model_provider": "openai",
+                "cwd": "E:\\Project\\ai"
+            }
+        });
+        // Body intentionally contains non-UTF-8 bytes to prove in-place patch never reads or
+        // parses the rollout body.
+        let body = b"{\"type\":\"event_msg\",\"payload\":{\"raw\":\"\xff\xfe\"}}\n";
+        let mut raw = format!("{meta}\n").into_bytes();
+        let body_offset = raw.len();
+        raw.extend_from_slice(body);
+        fs::write(&path, &raw).unwrap();
+
+        let original_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(original_mtime)
+            .unwrap();
+
+        let to_api = sync_rollout_file_provider(&path, "api").unwrap();
+        assert!(to_api.changed);
+        assert_eq!(to_api.from_provider.as_deref(), Some("openai"));
+
+        let after_api_bytes = fs::read(&path).unwrap();
+        assert_eq!(after_api_bytes.len(), raw.len());
+        assert_eq!(&after_api_bytes[body_offset..], body);
+        let after_api_meta: Value =
+            serde_json::from_slice(&after_api_bytes[..body_offset - 1]).unwrap();
+        assert_eq!(after_api_meta["payload"]["model_provider"], "api");
+        assert_eq!(
+            after_api_meta["payload"]["base_instructions"],
+            "mentions \"model_provider\":\"openai\" in text"
+        );
+        let api_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(
+            api_mtime
+                .duration_since(original_mtime)
+                .or_else(|_| original_mtime.duration_since(api_mtime))
+                .unwrap()
+                < Duration::from_secs(1)
+        );
+        assert_eq!(rollout_file_provider_would_change(&path, "api"), Ok(false));
+        assert_eq!(
+            rollout_file_provider_would_change(&path, "openai"),
+            Ok(true)
+        );
+
+        // Switching back to "openai" reuses the exact 8-byte padded slot in place.
+        let back_to_openai = sync_rollout_file_provider(&path, "openai").unwrap();
+        assert!(back_to_openai.changed);
+        assert_eq!(back_to_openai.from_provider.as_deref(), Some("api"));
+        let back_bytes = fs::read(&path).unwrap();
+        assert_eq!(back_bytes, raw);
+        assert_eq!(
+            rollout_file_provider_would_change(&path, "openai"),
+            Ok(false)
+        );
+
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn forked_two_line_session_meta_patches_both_lines_in_place() {
+        let path = unique_path("fork-two-lines");
+        let line1 = json!({
+            "type": "session_meta",
+            "payload": {"id": "child", "forked_from_id": "parent", "model_provider": "openai"}
+        });
+        let line2 = json!({
+            "type": "session_meta",
+            "payload": {"id": "parent", "model_provider": "openai"}
+        });
+        let body = b"{\"type\":\"event_msg\",\"payload\":{}}\n";
+        let mut raw = format!("{line1}\n{line2}\n").into_bytes();
+        let body_offset = raw.len();
+        raw.extend_from_slice(body);
+        fs::write(&path, &raw).unwrap();
+
+        let outcome = sync_rollout_file_provider(&path, "api").unwrap();
+        assert!(outcome.changed);
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), raw.len());
+        assert_eq!(&after[body_offset..], body);
+
+        let lines: Vec<&str> = std::str::from_utf8(&after[..body_offset])
+            .unwrap()
+            .lines()
+            .collect();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            let parsed: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(parsed["payload"]["model_provider"], "api");
+        }
+
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn streaming_fallback_preserves_raw_body_mtime_and_subsequent_in_place_round_trip() {
+        let path = unique_path("streaming-fallback");
+        let line1 = json!({
+            "type": "session_meta",
+            "payload": {"id": "api-origin", "model_provider": "api"}
+        });
+        let body = b"{\"type\":\"event_msg\",\"payload\":\"\xff\xfe\"}\r\n";
+        let mut raw = format!("{line1}\r\n").into_bytes();
+        raw.extend_from_slice(body);
+        fs::write(&path, &raw).unwrap();
+
+        let original_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_500);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(original_mtime)
+            .unwrap();
+
+        // "api" (5 bytes) -> "openai" (8 bytes) uses streaming rewrite once.
+        let to_openai = sync_rollout_file_provider(&path, "openai").unwrap();
+        assert!(to_openai.changed);
+        assert_eq!(to_openai.from_provider.as_deref(), Some("api"));
+
+        let after_openai = fs::read(&path).unwrap();
+        assert!(after_openai.ends_with(body));
+        let first_eol = after_openai.windows(2).position(|w| w == b"\r\n").unwrap();
+        let meta: Value = serde_json::from_slice(&after_openai[..first_eol]).unwrap();
+        assert_eq!(meta["payload"]["model_provider"], "openai");
+
+        let entries: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["rollout-test.jsonl"]);
+
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(
+            mtime
+                .duration_since(original_mtime)
+                .or_else(|_| original_mtime.duration_since(mtime))
+                .unwrap()
+                < Duration::from_secs(1)
+        );
+
+        // Now that the slot holds "openai" (8 bytes), switching back to "api" is fixed-width in-place.
+        let back_to_api = sync_rollout_file_provider(&path, "api").unwrap();
+        assert!(back_to_api.changed);
+        assert_eq!(fs::read(&path).unwrap().len(), after_openai.len());
+
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

@@ -439,9 +439,11 @@ fn sync_writer_does_not_recreate_missing_rollout_file() {
     let path = sessions_dir.join("rollout-missing-before-write.jsonl");
     fs::create_dir_all(&sessions_dir).unwrap();
 
-    let wrote = write_existing_file(&path, "{\"type\":\"session_meta\"}\n", "测试写入").unwrap();
+    let updated =
+        sync_codex_session_rollout_dirs_to_provider(&[], "api", std::slice::from_ref(&path))
+            .unwrap();
 
-    assert!(!wrote);
+    assert_eq!(updated, 0);
     assert!(!path.exists());
 
     fs::remove_dir_all(&sessions_dir).unwrap();
@@ -1243,23 +1245,21 @@ fn append_to(path: &Path, text: &str) {
 }
 
 #[test]
-fn preflight_checks_appended_lines_and_reuses_unchanged_results() {
-    let sessions_dir = unique_sessions_dir("preflight-append");
-    let path = sessions_dir.join("rollout-append.jsonl");
+fn preflight_checks_header_only_and_reuses_unchanged_results() {
+    let sessions_dir = unique_sessions_dir("preflight-header");
+    let path = sessions_dir.join("rollout-header.jsonl");
     write_rollout_file(&path, "openai", r"D:\Workspace\preflight");
     assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
     assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
 
-    // A line still being written is only judged once it is complete.
+    // Body lines appended after the leading session_meta block are not scanned or treated as
+    // provider changes, keeping preflight O(header) on multi-hundred-MB rollouts.
     append_to(
         &path,
-        "{\"type\":\"event_msg\",\"payload\":{\"model_provider\":\"a",
+        "{\"type\":\"event_msg\",\"payload\":{\"model_provider\":\"api\"}}\n",
     );
     assert_eq!(preview_rollouts(&sessions_dir, "openai"), 0);
-    append_to(&path, "pi\"}}\n");
-    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 1);
-    assert_eq!(preview_rollouts(&sessions_dir, "openai"), 1);
-    // Another target provider is checked on its own.
+    // Another target provider is checked on its own against the session_meta header.
     assert_eq!(preview_rollouts(&sessions_dir, "api"), 1);
 
     fs::remove_dir_all(&sessions_dir).unwrap();
