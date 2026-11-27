@@ -50,34 +50,72 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-          cache-on-failure: true
-
-      - name: Check Tauri compile
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target
-
       - name: Check Rust formatting
         working-directory: src-tauri
         run: cargo fmt --check
 
-      - name: Test Rust
-        working-directory: src-tauri
-        run: cargo test
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ci
+          cache-on-failure: true
 
       - name: Lint Rust
         working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test Rust
+        working-directory: src-tauri
+        run: cargo test --locked
+
+  release-cache:
+    name: Warm release cache (${{ matrix.platform }})
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.platform }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Probe release Rust cache
+        id: release_cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: release
+          lookup-only: true
+          save-if: false
+
+      - name: Cache Rust (release)
+        if: steps.release_cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: release
+          cache-on-failure: true
+
+      - name: Warm release Rust dependencies
+        if: steps.release_cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path renderer/dist | Out-Null
+          if (-not (Test-Path -LiteralPath renderer/dist/index.html)) {
+            Set-Content -LiteralPath renderer/dist/index.html -Value '<!doctype html>' -Encoding utf8
+          }
+          cargo build --release --locked --manifest-path src-tauri/Cargo.toml
