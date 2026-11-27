@@ -31,6 +31,7 @@
 - 本机正式远控当前关闭；没有为测试切换正式账号、修改正式 `config.toml` 或重启当前 Codex。隔离验证与真实耗尽订阅账号的现场结果分开记录，不将前者称为后者。
 
 - Windows CI 验证（2026-11-18）：[CI 44268000342](https://github.com/wen495033653/codex-switch/actions/runs/44268000342) 的正常刷新 fixture 在最终成功响应和 stop 信号间继续轮询，被服务端收尾关闭报 `CDP WebSocket 已关闭`。本机隔离 fixture 强制“回复 → 关闭写端 → 客户端退出 → stop”复现同一错误；改为回复前先发布 stop 后，在相同受控交错下通过。正式测试只修复 fixture 的发布顺序，不更改生产代码、超时或重试。
+- Desktop `26.1120.6357.0` Rspack 分片适配与实机 watcher CDP 验证（2026-11-27）：新版 Codex Desktop 将渲染端打包产物由旧 Vite 命名分片（`assets/app-primary-*.js`、`assets/composer-content-*.js`）迁移为 Rspack 数字哈希分片（入口运行时导出 `__webpack_require__` 与异步映射 `assets/async/<id>.<hash>.js`）。`cdp/api_quota.rs` 与 `cdp/api_quota.js` 在保留旧 Vite 定位路径的基础上，补充对 Rspack 运行时、`send_gate`、`["user-saved-config"]` 模块导出和 `LocalConversationPage` 异步 banner 分片的动态定位，并补齐 `scripts/test-api-quota.mjs` 单测及本机隔离开发版 watcher 端到端实测（详见 [codex-restart.md](codex-restart.md)）。
 
 ## 代理与远程控制的状态反馈（2026-09-06）
 

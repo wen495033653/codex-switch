@@ -32,7 +32,7 @@
 
 2026-10-17 按 [dev-preview.md](dev-preview.md) 的做法隔离真实运行：上面列出的 8 个可安全调用的命令（`get_store`、`get_settings`、`update_settings`、`get_codex_app_instance_status`、`list_brand_voice_files`、`set_codex_proxy_env_enabled`、`set_codex_model_instructions_enabled`、`dismiss_update_version`）都返回 `ok: true`，字段与前端读取的一致，沙盒 `logs/codex-switch-errors.jsonl` 没有 `command_blocking_task_error`。
 
-TODO(verify): `show_codex_app_instance` 在 worker 线程调用 `SetForegroundWindow` 后能否激活窗口，没有真实运行过（隔离运行不打开 Codex）。Windows 按进程判断前台权限，预期仍能激活。触发条件：安装包含本改动的版本后第一次使用多开“显示窗口”。通过判据：点击已运行实例的“打开”能把该 Codex 窗口带到前台，且不返回“独立 Codex 窗口激活失败”。判据不成立时，从 `codex_app_instances.rs` 的 `focus_instance_window` 继续：进程查询留在 worker 线程，只把激活窗口放回主线程执行。
+2026-11-27 在本机交互桌面开发版实测 `show_codex_app_instance`（worker 线程 `SetForegroundWindow`）：分别在账号页与 API 页打开独立 `ChatGPT.exe` 窗口，先切回 Codex Switch 开发窗口置前，再点击“打开独立 Codex”，Win32 `GetForegroundWindow` 均切至对应独立实例进程，界面提示成功且无 `codex_app_multi_open_show_window_error`；将账号页独立窗口最小化后再次点击同样恢复并置前（`IsIconic` 由 `true` 变为 `false`）。
 
 ## Rust 各模块的分层
 

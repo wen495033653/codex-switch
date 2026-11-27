@@ -43,21 +43,19 @@
 - 保留 `relaunch_running_codex_processes` 结束进程树后的 `wait_for_pids_exit(&pids, 12_000)`：`kill_process_tree` 在根进程已经退出时直接返回 `Ok(false)`，不结束也不等待它的后代，这时外层等待是唯一覆盖 watcher 列表里其余 PID 的检查。正常情况下它第一次检查就返回。
 - IDE 快照 `capture_open_ide_snapshot` 本来就只刷新 cmd 和 exe，没有用 `new_all`。试过先按名称筛候选再读 cmd/exe，本机 380 个进程下 235ms 对 236–385ms，开销主要在逐进程打开句柄取启动时间，收益不明显，没有提交。
 
-## 会话同步预检查的缓存（2026-09-23）
+## 会话同步预检查的缓存与全量 rollout 同步（2026-09-23 / 2026-11-27）
 
-- **问题。** watcher 每约 60 秒周期检查一次，每次都做会话同步预检查（`preview_codex_session_rollouts_to_provider_if_exists`）。这一步要读全部 rollout 文件末尾 128KB 来排出最近活跃的 50 个，再把这 50 个整份读进来逐行检查 provider。2026-09-23 实测每次读 411.6MB、耗时 3.6 秒，结果都是 0 项需要改。安装版空闲时每约 63 秒出现一次约 449MB 的读取，与之对应。
-- **做法。** 在 `codex_sessions/rollouts.rs` 的进程内缓存（`ROLLOUT_PREFLIGHT_CACHE`）里，按文件记住两样东西：
-  - **排序键。** 文件大小和修改时间不变就复用。
-  - **provider 检查结论。** 按目标 provider 分别记，同时记下已检查到的偏移和偏移前 64 字节：
-    - 文件没变，直接用上次的结论。
-    - 只追加了内容，只检查新增的完整行。
-    - 已判定"需要改"的文件，追加后结论不变，不再读取。
-    - 偏移前的字节对不上，从头检查。
-    - 未写完的最后一行等写完再检查。
+- **问题。** watcher 每约 60 秒周期检查一次，每次都做会话同步预检查（`preview_codex_session_rollouts_to_provider_if_exists`）。2026-09-23 以前要逐次重读 rollout 检查 provider，实测每次读 411.6MB、耗时 3.6 秒。2026-11-27 实测真实 `codex.exe`（`codex-cli 0.171.0-alpha.13.2`）进一步证实：仅同步“最近活跃 50 个”rollout 会导致 50 之外的旧 rollout 在切回订阅模式后触发 `modelProviderNotConfigured` 且被 `codex.exe` 将 `state_5.sqlite` 反向改回 `api`，因此去掉了 50 文件上限与末尾时间戳排序，改为同步 `sessions/` 与 `archived_sessions/` 下的全部 rollout（仍保留 `pinned` 额外路径），并在 `check_provider_lines` 中改用 `memchr::memmem::Finder` 在字节层快速跳过无关行。
+- **做法。** 在 `codex_sessions/rollouts.rs` 的进程内缓存（`ROLLOUT_PREFLIGHT_CACHE`）里按文件记住 provider 检查结论（按目标 provider 分别记，同时记下已检查到的偏移和偏移前 64 字节）：
+  - 文件大小和修改时间没变，直接复用上次结论。
+  - 只追加了内容，只检查新增的完整行。
+  - 已判定“需要改”的文件，追加后结论不变，不再读取。
+  - 偏移前的字节对不上，从头检查。
+  - 未写完的最后一行等写完再检查。
 - **失效。** 同步改写文件后会恢复原修改时间，同长度的改写从大小和时间上看不出变化，所以 `sync_rollout_file_provider` 写入后会主动删掉这个文件的缓存。遍历时已找不到的文件（删除、移入归档或回收站），缓存也一起删掉。
-- **边界。** 缓存依赖"只有本程序的同步会原地改写并恢复修改时间"。如果别的程序同长度改写 rollout 并恢复修改时间，预检查会沿用旧结论，直到文件下一次变化。
+- **边界。** 缓存依赖“只有本程序的同步会原地改写并恢复修改时间”。如果别的程序同长度改写 rollout 并恢复修改时间，预检查会沿用旧结论，直到文件下一次变化。
 - **验证。**
-  - 离线：`preflight_checks_appended_lines_and_reuses_unchanged_results`（未写完的行、追加后结论改变、换目标 provider）、`preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time`（同步后大小、时间不变，结论变为 0）、`preflight_checks_a_file_rewritten_by_someone_else_from_the_start`。
+  - 离线：`preflight_checks_appended_lines_and_reuses_unchanged_results`（未写完的行、追加后结论改变、换目标 provider）、`preflight_notices_a_sync_rewrite_that_keeps_size_and_modified_time`（同步后大小、时间不变，结论变为 0）、`preflight_checks_a_file_rewritten_by_someone_else_from_the_start`、`sync_updates_all_rollouts_across_sessions_and_archived_beyond_old_50_cap`、`sync_rollout_provider_updates_every_file_in_sessions_dir`。
   - 真实数据（测试二进制对真实 `~/.codex` 只读）：第一次 420.36MB、3130ms；立即再做一次 0.66MB、28ms；60 秒后（Codex 正在写入）0.81MB、30ms。
   - 安装版 v6.0.5（2026-09-23）：5 分钟合计读 24.09MB，没有再出现每约 63 秒约 449MB 的读取，采样明细见 [usage-stats.md](usage-stats.md) 的"安装版 v6.0.5"。
 
@@ -104,10 +102,9 @@
 - 会话同步需要重启时，Codex 总是带调试端口重开（提交 `942013b`：保留 CDP 流程）。远程控制关闭时没有任何脚本要注入，以前仍要在 12 秒内等到可连接的页面，等不到（机器慢、刚更新）就结束刚重开的 Codex 并报错，watcher 随之停用自动处理。现在没有脚本时，带上同样的两个调试参数走普通启动，按“启动后 1.5 秒仍在运行”确认（`codex_app_launch_confirmation_*`），不再等页面；有脚本时不变。
 - 验证：只过了编译、Clippy 和 cdp 的测试；没有真实运行。
 
-## 会话排序时读不了文件末尾（2026-10-17）
+## 会话排序时读不了文件末尾（2026-10-17；已于 2026-11-27 随全量同步移除）
 
-- 同步只改写“最近活动”的 50 个 rollout，排序依据是文件末尾最后一行的时间。以前读末尾时的 I/O 错误（例如共享冲突）被吞掉，退回按文件名里的创建时间排序，并且按当前文件状态缓存下来：这个文件在下次变化前一直排在靠后的位置，可能被排除在同步之外，日志里没有任何记录。现在读不了末尾时记 `session_sync_rollout_tail_read_error`（每种错误每次运行一条），本次按文件名排序但不缓存，下一次预检查重新读。
-- 验证：会话同步 31 个测试通过；I/O 错误这条路径没有测试，也没有真实触发。
+- 2026-10-17 曾为“最近活跃 50 个 rollout”排序增加 `session_sync_rollout_tail_read_error` 诊断；2026-11-27 实测证实 50 文件上限会导致残留旧 provider 的会话不可恢复，因此移除 50 文件上限与末尾时间戳排序，改按全量目录枚举同步。
 
 ## 同步期间被 Codex 移走的会话文件（2026-10-17）
 
@@ -202,15 +199,27 @@
 - 安装版 v6.0.6（2026-10-10）与 v6.0.9（2026-10-24）的事件日志 `codex-switch-events.jsonl` 记录了两次完整的 watcher 自动同步重启：`codex_app_relaunch_processes_start`（`origin: "Watcher"`, `mode: Cdp(codex_mobile_no_replace: false)`）→ 单次针对根进程的 `codex_app_process_kill_finish`（`terminated: true`，耗时 420–484 ms）→ `session_sync_state_db_summary` 与 `session_sync_finish`（49 项 / 6 项更新，全量切换到目标 provider）→ `codex_app_launch_confirmation_finish`（v6.0.9 确认 1.5s 存活）→ `codex_app_relaunch_processes_finish`（`restartedCount: 1`），无相关错误日志。
 - 上述两次运行远程控制均关闭，未触发 CDP 脚本注入（`codex_mobile_no_replace: true` / `api_quota: true`），该部分仍保留在下方待验证。
 
+### 2026-11-27：本机开发版实测四项真实桌面路径（隔离数据目录 + 真实 `ChatGPT.exe` / `codex.exe`）
+
+- 所有测试均以普通桌面权限（与 Explorer 相同的 Medium integrity token）和独立沙盒 `USERPROFILE`/`APPDATA`/`LOCALAPPDATA`/`CODEX_HOME` 运行，并在测试期间暂停正式版 `codex-switch.exe`；运行后核对正式 `settings.json`、`accounts.json`、`auth.json`、`config.toml`、`state_5.sqlite` 全部未变，开机自启注册表项与正式版/默认 Codex 恢复原状。
+- **rollout 残留旧 provider 的真实行为与修复**：用本机 `codex.exe`（`codex-cli 0.171.0-alpha.13.2`）在隔离 `CODEX_HOME` 先通过 `thread/start` + `turn/start` 生成真实会话，再构造 4 组对照：
+  - `config=openai`（无 `api` 表）、`state_5.sqlite=openai`、rollout 首行=`api`：`thread/list` 返回空（0 条），`thread/resume` 报 `-32600` `modelProviderNotConfigured`（`modelProvider: "api"`），且 `codex.exe` 会将 `state_5.sqlite` 的 `model_provider` 反向改回 `api`。
+  - `config=api`、`state_5.sqlite=api`、rollout 首行=`openai`：`thread/list` 返回空（0 条）。
+  - `db` 与 `rollout` 一致（同为 `openai` 或同为 `api`）：`thread/list` 返回 1 条且 `thread/resume` 成功。
+  - 按既有回退/扩大范围方案移除 `codex_sessions/rollouts.rs` 的 50 文件上限与末尾时间戳排序，同步 `sessions/` 与 `archived_sessions/` 全部 rollout，并新增超过 50 个文件的单元测试。
+- **远程控制运行时出错的两条路径**：
+  - 预检查失败：清空沙盒 API `base_url` 后点“重启 Codex”，`logs/codex-switch-errors.jsonl` 记录 `codex_app_restart_command_remote_control_runtime_error` 与 `codex_app_restart_command_error`，同次操作零 `codex_app_process_kill_*` 记录，默认 `ChatGPT.exe` 根 PID 未变，界面弹出原始错误提示。
+  - 退出后配置应用失败：在沙盒建旧版 `remote-control-codex-home/locked.tmp` 并独占打开制造 Windows 共享冲突（`os error 32`）后点“重启 Codex”，默认 `ChatGPT.exe` 退出后 `codex_app_relaunch_processes_post_exit_config_apply_error` 落盘，随后仍成功重开新的 `ChatGPT.exe` 主进程，`codex_app_restart_command_error` 与界面提示均包含同一条配置错误。
+- **多开实例保留与只开实例 60 秒静默**：
+  - 同时运行默认 `ChatGPT.exe` 与沙盒账号多开实例并点“重启 Codex”：`codex_app_relaunch_processes_start` 的 `pids` 与多开实例进程交集为空；默认 `ChatGPT.exe` 重启为新根 PID，多开实例根 PID 与窗口保持存活，账号卡片仍显示“窗口运行中”。
+  - 结束默认 `ChatGPT.exe`、仅保留多开实例运行 66 秒（超过 60 秒周期复查）：期间 `codex_app_watcher_on_open_invoke` 为 0 次、无任何时间线重启事件，多开实例持续存活。
+- **watcher 启用远程控制时的 CDP 脚本注入（`codex_mobile_no_replace: true` / `api_quota: true`）**：
+  - 首次实测暴露本机新版 Desktop `26.1120.6357.0` 已由旧 Vite 命名分片切换为 Rspack 数字哈希分片（`assets/<runtime>.js` + `assets/async/<id>.<hash>.js`），导致旧 `api_quota` 超时并清理子进程。
+  - 在 `cdp/api_quota.rs` 与 `cdp/api_quota.js` 补充兼容 Rspack 运行时与异步块动态定位（保留旧 Vite 路径）后复测通过：沙盒调用 `switch_api_mode` + `set_codex_remote_control_enabled(true)` 并放置待同步 `openai` rollout，启动普通无参 `ChatGPT.exe`；watcher 在 9.2 秒内完成 `codex_app_relaunch_processes_start`（`origin: "Watcher"`, `mode: Cdp(CodexCdpLaunchHooks { codex_mobile_no_replace: true, api_quota: true })`）→ `codex_app_process_kill_finish` → `session_sync_finish`（rollout 变为 `api`）→ `codex_api_quota_hook_ready`（`rspack_runtime` 与 `send_gate` 已绑定、`official_quota_banner` 预挂）→ `codex_app_relaunch_processes_finish`（`restartedCount: 1`），新 `ChatGPT.exe` 带 `--remote-debugging-port=9229` 持续运行且 `/json/list` 可见 `app://-/index.html`，日志零错误。
+
 ## 待验证
 
-TODO(verify): watcher 路径启用远程控制时的 CDP 脚本注入（`codex_mobile_no_replace: true` / `api_quota: true`）还没有在正式安装包里完整运行过（无脚本重启路径已由上方 v6.0.6/v6.0.9 安装版日志证实）。触发条件：开启远程控制后在 API 模式和订阅模式之间切换并打开 Codex，使 watcher 触发带脚本注入的 CDP 重启。检查：新的 `ChatGPT.exe` 命令行含 `--remote-debugging-port` 并持续运行，日志无 `codex_app_watcher_on_open_error` 或 `codex_app_open_handler_cdp_hook_error`。
-
-TODO(verify): 会话文件里残留的旧 provider 是否有影响，仍未通过实际恢复该类会话证实（2026-11-27 只读复查显示 2026-09-14 至 09-15 的 49 条 DB 记录均已为 `openai`，磁盘上对应文件首行已无残留 `api` 标记）。未知：若未来再次因“最近 50 个”滚动范围差异留下首行旧 `model_provider` 与数据库不一致的文件，Codex 恢复会话时取的是数据库还是文件里的值。通过判据：遇到该状态并打开对应会话能正常继续对话，则删除本条；若报 “Model provider `api` not found”，从 `codex_sessions/rollouts.rs` 的 `collect_recent_rollout_files_from_dirs` 继续扩大同步范围。
-
-TODO(verify): 远程控制运行时出错时的真实表现还没有运行过（2026-09-23 的改动只有单元测试）。触发条件：数据目录下 `logs/codex-switch-errors.jsonl` 出现 `codex_app_restart_command_remote_control_runtime_error` 或 `codex_app_relaunch_processes_post_exit_config_apply_error`。检查：前者出现时，同一次操作里没有 `codex_app_process_kill_*` 记录，Codex 进程未被结束，界面显示该错误；后者出现时，随后有新的 ChatGPT 主进程启动，`codex_app_restart_command_error` 或 `codex_app_watcher_on_open_error` 的 `error` 字段包含同一条配置错误。判据不成立时，从 `codex_app_open.rs` 的 `restart_current_codex_app_normal` 和 `reopen_after_post_exit_steps` 继续。
-
-TODO(verify): 多开实例在“重启 Codex”后是否保留，还没有真实运行（2026-10-17 的改动只有单元测试）。触发条件：下一次同时开着默认 Codex 和一个多开实例时点“重启 Codex”，或只开着实例超过 60 秒。检查：事件日志 `codex-switch-events.jsonl` 里 `codex_app_relaunch_processes_start` 的 `pids` 不含实例窗口的进程；重启后实例窗口仍在，账号卡片仍显示“窗口运行中”；只开实例时没有 `codex_app_watcher_on_open_invoke`。判据不成立时，看 `codex_app_restart_command_start` 的 `processes` 里实例进程的 `commandLine` 是否带 `--user-data-dir`，从 `detect.rs` 的 `codex_instance_pids` 继续。
+（当前模块已登记的 `TODO(verify)` 项均已完成验证并归入上方验证记录。）
 
 ## 回退
 
