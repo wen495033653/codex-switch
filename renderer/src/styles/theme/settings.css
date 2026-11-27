@@ -138,6 +138,29 @@ html[data-theme="light"] .settings-remote-control-status-badge.active {
   background: rgba(22, 163, 74, 0.08);
 }
 
+html[data-theme="light"] .codex-computer-use-pill {
+  background: rgba(100, 116, 139, 0.08);
+}
+
+html[data-theme="light"] .codex-computer-use-pill.active {
+  color: #15803d;
+  border-color: rgba(21, 128, 61, 0.24);
+  background: rgba(22, 163, 74, 0.08);
+}
+
+html[data-theme="light"] .codex-computer-use-pill.warning {
+  color: #b45309;
+  border-color: rgba(180, 83, 9, 0.22);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+html[data-theme="light"] .codex-computer-use-pill.error,
+html[data-theme="light"] .codex-computer-use-error {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.22);
+  background: rgba(220, 38, 38, 0.08);
+}
+
 html[data-theme="light"] .settings-option-title {
   color: var(--text-primary);
 }

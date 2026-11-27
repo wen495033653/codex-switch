@@ -1,5 +1,6 @@
+import ComputerUseDocsSection from './settings/ComputerUseDocsSection';
 import ProxySettingsTab, { CodexProcessCard } from './settings/ProxySettingsTab';
-import { useCodexProcessStatus, useRemoteControlStatus } from '../hooks';
+import { useCodexComputerUseDocs, useCodexProcessStatus, useRemoteControlStatus } from '../hooks';
 import { useI18n } from '../i18n';
 import ModelInstructionsConfirmModal from './ModelInstructionsConfirmModal';
 
@@ -31,11 +32,14 @@ export default function CodexPage({
     settingsDraft,
     subscriptionModeActive,
     switching,
+    toast,
+    toastError,
     updateCodexProxySettings
 }) {
     const { t } = useI18n();
     const modelInstructionsEnabled = settingsDraft.codex_model_instructions_enabled !== false;
     const codexAppProcessStatus = useCodexProcessStatus();
+    const computerUseDocs = useCodexComputerUseDocs({ toast, toastError });
     const remoteControlStatus = useRemoteControlStatus({
         enabled: settingsDraft.codex_remote_control_enabled === true,
         accountId: String(settingsDraft.codex_remote_control_account_id || '').trim(),
@@ -92,6 +96,18 @@ export default function CodexPage({
                             </div>
                         </div>
                     </section>
+
+                    <ComputerUseDocsSection
+                        clearing={computerUseDocs.clearing}
+                        error={computerUseDocs.error}
+                        loading={computerUseDocs.loading}
+                        onClear={computerUseDocs.clearRestrictions}
+                        onRefresh={() => computerUseDocs.refresh({ notifyError: true })}
+                        onRestore={computerUseDocs.restoreDocs}
+                        restoring={computerUseDocs.restoring}
+                        status={computerUseDocs.status}
+                        switching={switching}
+                    />
 
                     <ProxySettingsTab
                         accounts={accounts}

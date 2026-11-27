@@ -46,6 +46,9 @@ const COMMAND_BINDINGS = {
     enabled: Boolean(payload && payload.enabled),
     overwriteLocal: typeof payload?.overwriteLocal === 'boolean' ? payload.overwriteLocal : null
   })],
+  inspectCodexComputerUseDocs: ['inspect_codex_computer_use_docs'],
+  clearCodexComputerUseRestrictions: ['clear_codex_computer_use_restrictions'],
+  restoreCodexComputerUseDocs: ['restore_codex_computer_use_docs'],
   captureCurrent: ['capture_current'],
   importRefreshToken: ['import_refresh_token', token => ({ token })],
   deleteAccount: ['delete_account', id => ({ id })],

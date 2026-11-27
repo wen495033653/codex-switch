@@ -603,6 +603,8 @@ function MainApp() {
             setCodexRemoteControlEnabled,
             setCodexSessionSyncEnabled: updateCodexSessionSyncEnabled,
             switching,
+            toast,
+            toastError,
             updateCodexProxySettings,
             onCodexRemoteControlAutoDisabled: handleCodexRemoteControlAutoDisabled,
             onOpenCodexConfigToml: openCodexConfigToml,

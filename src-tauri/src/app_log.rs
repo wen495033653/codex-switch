@@ -75,6 +75,8 @@ const TIMELINE_EVENTS: &[&str] = &[
     "usage_stats_prices_backfilled",
     "usage_stats_unpriced_rechecked",
     "usage_stats_timings_filled",
+    "codex_computer_use_docs_cleared",
+    "codex_computer_use_docs_restored",
 ];
 
 /// Shown in the dev log of debug builds only: these run on the watcher's 60 s reconcile and
@@ -208,6 +210,23 @@ const EVENT_MESSAGES: &[(&str, &str)] = &[
         "codex_app_instance_data_migration_error",
         "Codex 多开数据迁移失败",
     ),
+    ("codex_computer_use_docs_cleared", "Computer Use 限制已清理"),
+    (
+        "codex_computer_use_docs_restored",
+        "Computer Use 原文件已还原",
+    ),
+    (
+        "codex_computer_use_docs_inspect_error",
+        "检测 Computer Use 增强状态失败",
+    ),
+    (
+        "codex_computer_use_docs_clear_error",
+        "清理 Computer Use 限制失败",
+    ),
+    (
+        "codex_computer_use_docs_restore_error",
+        "还原 Computer Use 原文件失败",
+    ),
 ];
 
 static LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -261,6 +280,7 @@ fn dev_log_source(event: &str) -> &'static str {
     if event.starts_with("session_sync_") {
         "会话同步"
     } else if event.starts_with("codex_app_")
+        || event.starts_with("codex_computer_use_")
         || event.starts_with("codex_desktop_")
         || event.starts_with("codex_remote_control_")
         || event.starts_with("codex_state_")

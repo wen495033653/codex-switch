@@ -51,7 +51,12 @@ const BACKEND_MESSAGES = [
   ['已永久删除 2 个会话', '2 sessions permanently deleted'],
   ['已永久删除 2 个会话，1 个失败：a.jsonl: fixture', '2 sessions permanently deleted, 1 failed: a.jsonl: fixture'],
   ['已永久删除 2 个会话；fixture warning', '2 sessions permanently deleted; fixture warning'],
-  ['已切换 3 个会话状态，1 个失败：b.jsonl: fixture', '3 session statuses updated, 1 failed: b.jsonl: fixture']
+  ['已切换 3 个会话状态，1 个失败：b.jsonl: fixture', '3 session statuses updated, 1 failed: b.jsonl: fixture'],
+  ['未检测到 Computer Use 插件缓存', 'Computer Use plugin cache not found'],
+  ['Computer Use 限制已清理', 'Computer Use restrictions are already cleared'],
+  ['没有可还原的 Computer Use 备份', 'No Computer Use backup available to restore'],
+  ['已清理 2 份 Computer Use 限制文件，新对话或重启 Codex 后生效。', 'Cleared 2 Computer Use restriction files. Start a new conversation or restart Codex to apply.'],
+  ['已还原 2 份 Computer Use 原文件，新对话或重启 Codex 后生效。', 'Restored 2 original Computer Use files. Start a new conversation or restart Codex to apply.']
 ];
 
 test('backend result messages have an English translation', () => {
