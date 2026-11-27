@@ -2,6 +2,7 @@ use crate::{
     atomic_file::write_file_atomically,
     paths::{codex_dir, ensure_parent_dir},
 };
+use serde_json::Value;
 use std::{
     fs,
     io::{self, ErrorKind, Write},
@@ -12,6 +13,13 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 pub(crate) const FILE_NAME: &str = "gpt-unrestricted.md";
 pub(crate) const CONFIG_KEY: &str = "model_instructions_file";
 pub(crate) const SETTING_KEY: &str = "codex_model_instructions_enabled";
+
+pub(crate) fn enabled_in_settings(settings: &Value) -> bool {
+    settings
+        .get(SETTING_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
 
 #[derive(Debug)]
 pub(crate) enum ModelInstructionsPreparation {

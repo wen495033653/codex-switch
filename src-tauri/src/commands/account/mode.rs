@@ -2,10 +2,9 @@ use crate::{
     accounts::{
         account_from_exchange_syncing, add_account_to_store, auth_to_account,
         exchange_refresh_token, find_store_account, get_codex_state_value, lookup_store_account,
-        mark_store_account_used, prepare_api_mode, profile_id_from_account, read_api_key_from_auth,
-        read_api_key_from_provider_config, read_auth_value, read_store_value, remove_store_account,
-        set_subscription_mode, store_payload, store_payload_from_store, sync_auth_file_if_active,
-        write_account_auth,
+        mark_store_account_used, prepare_api_mode, profile_id_from_account, read_auth_value,
+        read_runtime_api_key, read_store_value, remove_store_account, set_subscription_mode,
+        store_payload, store_payload_from_store, sync_auth_file_if_active, write_account_auth,
     },
     codex_launcher::{
         attach_ide_reopen, build_ide_reopen_payload, stop_codex_api_quota_hooks,
@@ -93,12 +92,7 @@ pub(super) fn capture_current_impl() -> Result<Value, String> {
     let auth = read_auth_value()?;
     let codex_state = get_codex_state_value();
     if raw_string_field(&codex_state, "mode") == "api" {
-        let provider_key = read_api_key_from_provider_config();
-        let api_key = if provider_key.is_empty() {
-            read_api_key_from_auth()
-        } else {
-            provider_key
-        };
+        let api_key = read_runtime_api_key();
         if !api_key.is_empty() {
             let current = read_settings_value()?;
             let current_api = current.get("api_mode").unwrap_or(&Value::Null);

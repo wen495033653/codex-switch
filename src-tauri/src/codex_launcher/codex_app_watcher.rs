@@ -20,6 +20,7 @@ use std::{
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 const WATCHER_INTERVAL_MS: u64 = 5_000;
+const PROCESS_CACHE_MAX_AGE: StdDuration = StdDuration::from_secs(6);
 const PENDING_RELAUNCH_TTL_MS: u64 = 30_000;
 const SUPPRESSED_OPEN_TTL_MS: u64 = 30_000;
 const OPEN_ABSENCE_RESET_MS: u64 = 3_000;
@@ -48,6 +49,7 @@ struct CodexAppOpenSignature {
 #[derive(Clone, Debug, Default)]
 struct CodexAppWatcherSnapshot {
     captured_at: String,
+    captured_instant: Option<Instant>,
     processes: Vec<CodexProcess>,
     error: Option<String>,
 }
@@ -90,6 +92,18 @@ fn suppressed_codex_app_open_state() -> &'static Mutex<SuppressedCodexAppOpen> {
 // `support` is the desktop compatibility status. The caller supplies it so that the watcher does
 // not depend on the instance manager, which itself drives the watcher.
 pub(crate) fn current_codex_app_processes_value(support: &Value) -> Result<Value, String> {
+    let needs_refresh = {
+        let snapshot = current_codex_app_processes_state()
+            .lock()
+            .map_err(|_| "Codex watcher 状态锁异常".to_string())?;
+        !snapshot_is_fresh(snapshot.captured_instant, PROCESS_CACHE_MAX_AGE)
+    };
+    if needs_refresh {
+        match running_codex_processes() {
+            Ok(processes) => update_current_codex_app_processes(processes, None),
+            Err(err) => update_current_codex_app_processes(Vec::new(), Some(err)),
+        }
+    }
     let snapshot = current_codex_app_processes_state()
         .lock()
         .map_err(|_| "Codex watcher 状态锁异常".to_string())?
@@ -131,6 +145,33 @@ pub(crate) fn refresh_current_codex_app_processes() -> Result<Vec<CodexProcess>,
     let processes = running_codex_processes()?;
     update_current_codex_app_processes(processes.clone(), None);
     Ok(processes)
+}
+
+/// Reuses the watcher's latest scan while it is still fresh, avoiding duplicate full-system
+/// process enumerations from 3-second UI polls while still refreshing when the watcher is not
+/// running (e.g. dev preview) or right after launching an instance.
+pub(crate) fn cached_or_refresh_codex_app_processes() -> Result<Vec<CodexProcess>, String> {
+    {
+        let snapshot = current_codex_app_processes_state()
+            .lock()
+            .map_err(|_| "Codex watcher 状态锁异常".to_string())?;
+        if snapshot.error.is_none()
+            && snapshot_is_fresh(snapshot.captured_instant, PROCESS_CACHE_MAX_AGE)
+        {
+            return Ok(snapshot.processes.clone());
+        }
+    }
+    refresh_current_codex_app_processes()
+}
+
+pub(crate) fn invalidate_current_codex_app_processes_cache() {
+    if let Ok(mut snapshot) = current_codex_app_processes_state().lock() {
+        snapshot.captured_instant = None;
+    }
+}
+
+fn snapshot_is_fresh(captured_instant: Option<Instant>, max_age: StdDuration) -> bool {
+    captured_instant.is_some_and(|captured_at| captured_at.elapsed() <= max_age)
 }
 
 /// The default Codex's processes, without Codex Switch's standalone instances. Restarting,
@@ -692,6 +733,7 @@ fn executable_name(path: &str) -> String {
 fn update_current_codex_app_processes(processes: Vec<CodexProcess>, error: Option<String>) {
     if let Ok(mut snapshot) = current_codex_app_processes_state().lock() {
         snapshot.captured_at = now_string();
+        snapshot.captured_instant = Some(Instant::now());
         snapshot.processes = processes;
         snapshot.error = error;
     }
@@ -1113,5 +1155,16 @@ mod tests {
             take_expected_codex_app_open_source_if_matches(&executable_keys, Instant::now()),
             None
         );
+    }
+
+    #[test]
+    fn snapshot_freshness_respects_max_age_and_invalidation() {
+        let now = Instant::now();
+        assert!(snapshot_is_fresh(Some(now), PROCESS_CACHE_MAX_AGE));
+        assert!(!snapshot_is_fresh(None, PROCESS_CACHE_MAX_AGE));
+        assert!(!snapshot_is_fresh(
+            now.checked_sub(PROCESS_CACHE_MAX_AGE + StdDuration::from_secs(1)),
+            PROCESS_CACHE_MAX_AGE
+        ));
     }
 }

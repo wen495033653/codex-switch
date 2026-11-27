@@ -58,6 +58,7 @@ fn auth_error_is_login_expired(message: &str) -> bool {
     let text = message.to_ascii_lowercase();
     [
         "refresh_token_invalidated",
+        "refresh_token_reused",
         "refresh token invalidated",
         "session has ended",
         "invalid_grant",
@@ -188,16 +189,18 @@ mod tests {
     #[test]
     fn selected_expired_control_account_only_disables_remote_control() {
         let settings = enabled_settings("profile-selected");
-        let patch = remote_control_disable_patch_for_auth_error(
-            &settings,
-            "profile-selected",
+        for message in [
             "HTTP 401: refresh_token_invalidated; Your session has ended.",
-        )
-        .expect("selected expired account should disable remote control");
+            "Refresh Token 刷新失败\nHTTP 401\nerror.code: refresh_token_reused",
+        ] {
+            let patch =
+                remote_control_disable_patch_for_auth_error(&settings, "profile-selected", message)
+                    .expect("selected expired account should disable remote control");
 
-        assert_eq!(patch, json!({ "codex_remote_control_enabled": false }));
-        assert!(patch.get("codex_remote_control_account_id").is_none());
-        assert!(patch.get("codex_active_mode").is_none());
+            assert_eq!(patch, json!({ "codex_remote_control_enabled": false }));
+            assert!(patch.get("codex_remote_control_account_id").is_none());
+            assert!(patch.get("codex_active_mode").is_none());
+        }
     }
 
     #[test]

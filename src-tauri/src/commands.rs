@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::sync::{Mutex, MutexGuard};
 
 pub(crate) mod account;
+pub(crate) mod api_test;
 pub(crate) mod general;
 pub(crate) mod quota;
 

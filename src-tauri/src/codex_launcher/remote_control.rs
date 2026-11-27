@@ -5,8 +5,8 @@ use crate::{
     accounts::{
         account_login_expired, get_codex_state_value, lookup_store_account,
         mark_account_auth_error, profile_id_from_account, profile_id_from_tokens_value,
-        read_api_key_from_auth, read_api_key_from_provider_config, read_auth_value,
-        read_store_value, set_api_mode, set_api_mode_with_control_account, set_subscription_mode,
+        read_auth_value, read_runtime_api_key, read_store_value, set_api_mode,
+        set_api_mode_with_control_account, set_subscription_mode,
     },
     api_config::API_PROVIDER_ID,
     app_log::{account_label, log_event, log_event_once},
@@ -169,16 +169,11 @@ fn active_api_profile(settings: &Value) -> Value {
 
 fn api_key_from_settings_or_runtime(profile: &Value) -> String {
     let api_key = string_field(profile, "api_key");
-    if !api_key.trim().is_empty() {
-        return api_key.trim().to_string();
+    if !api_key.is_empty() {
+        return api_key;
     }
 
-    let provider_key = read_api_key_from_provider_config();
-    if !provider_key.trim().is_empty() {
-        return provider_key.trim().to_string();
-    }
-
-    read_api_key_from_auth().trim().to_string()
+    read_runtime_api_key()
 }
 
 fn remote_control_api_session_profile_from_settings(

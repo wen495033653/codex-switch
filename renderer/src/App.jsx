@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppDialogs, AppMainView, AppNavbar, DevDiagnosticsPanel, UsageStatsDetailDrawer } from './components';
 import { DEFAULT_UI_LANGUAGE, getStoredLanguagePreference, I18nProvider, translate, translateRuntimeText } from './i18n';
 import {
@@ -110,13 +110,18 @@ function MainApp() {
     message: ''
   });
   const [usageStatsErrorLog] = useState(() => createPollingErrorLog('usage_stats_get'));
+  const lastUsageStatsJsonRef = useRef('');
   const refreshUsageStats = async () => {
     if (!window.api || typeof window.api.getUsageStats !== 'function') return null;
     try {
       const res = await window.api.getUsageStats();
       if (res && res.ok === true) {
         usageStatsErrorLog.succeeded();
-        setUsageStats(res);
+        const serialized = JSON.stringify(res);
+        if (serialized !== lastUsageStatsJsonRef.current) {
+          lastUsageStatsJsonRef.current = serialized;
+          setUsageStats(res);
+        }
       } else {
         usageStatsErrorLog.failed(res);
       }
