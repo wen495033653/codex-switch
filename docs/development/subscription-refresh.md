@@ -86,7 +86,10 @@ User-Agent: codex_cli_rs/...
 验证记录：
 
 - 离线检查：`accounts::usage::client` 与 `accounts::oauth_tokens` 的单元测试在 127.0.0.1 上起一次性 TCP 服务（client 显式 `no_proxy`，不出本机），覆盖正文读取失败（`Content-Length: 100` 只发 8 字节后断开）、正文可读、连接被拒绝三种情况。
-- TODO(verify)：真实运行中还没见过新格式的错误信息。触发条件：下一次真实运行时配额或订阅刷新失败（例如断网或代理关闭时点“刷新配额”）。查看 stderr 的 `[subscription] ... message=` 行，以及 `accounts.json` 对应账号的 `custom.usage_error.message`。通过判据：信息在 `error sending request` 之后带有具体原因，且不含 `for url` 和账号 ID。不通过时从 `accounts/usage/client.rs::http_error_message` 查起。
+- 真实运行验证（2026-10–2026-11，安装版日志与隔离运行）：
+  - 安装版 v6.0.10 错误日志 `account_subscription_refresh_error` 记录 `message: "error sending request: operation timed out"`；v6.0.6 `account_auth_auto_refresh_error` 与 v6.0.9 `codex_remote_control_backend_lookup_error` 记录 `error sending request: client error (Connect): 远程主机强迫关闭了一个现有的连接。 (os error 10054)`。
+  - 2026-11-27 隔离真实运行通过本机代理返回 502，`account_auth_manual_refresh_error` 与弹窗显示 `error sending request: client error (Connect): tunnel error: unsuccessful`。
+  - 以上均在 `error sending request:` 后附带具体原因，且不含 `for url` 和账号 ID。
 
 ## 当前账号额度读哪些会话文件（2026-10-17）
 

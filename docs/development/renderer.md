@@ -117,7 +117,7 @@
   - 离线：`scripts/test-runtime-messages.mjs`（按后端原文断言英文结果、中文原样；前端模板的英文和中文拼接结果）。
   - 渲染检查（英文界面）：远程控制自动关闭的四种通知、gpt破限开关带备份路径的提示、代理保存带远程控制错误的提示、`设置已保存`、删除控制账号后的提示和重启对话框都显示英文；中文界面的拼接结果与修改前相同。
 
-TODO(verify)：以上修复没有在真实应用里运行过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时。做法和通过判据：Refresh Token 弹窗刷新中点遮罩不关闭，结果出现在同一账号的弹窗；Codex 页代理地址不改值失焦不弹重启对话框，沙盒 `.env` 修改时间不变；会话页第 2 页切走再回来仍是第 2 页；两个账号同时刷新配额时两张卡片都在转圈；英文界面切换账号、刷新配额、打开独立 Codex 的提示是英文。不通过时分别从 `hooks/useRefreshTokenModal.js`、`hooks/useSettingsActions.js` 的 `updateCodexProxySettings`、`components/SessionManagerPage.jsx`、`hooks/useAccountOperations.js`、`i18n.jsx` 的词条查起。
+- 隔离真实运行验证（2026-11-27，按 [dev-preview.md](dev-preview.md)）：五项全部通过（正式文件 mtime/大小未变）：Refresh Token 弹窗刷新期间点 `.modal-overlay` 不关闭，结果留在同一账号弹窗；Codex 页代理输入框不改值失焦不弹重启对话框，沙盒 `.env` 的 `mtime_ns` 不变；会话页切到第 2 页（`2/2`）后切去账号页再切回仍为 `2/2`；两个账号先后点刷新配额时两张卡片同时显示 `.icon-spin`；切换到英文后账号页切换、刷新配额、打开独立 Codex 的标题与菜单项均为英文。
 
 ## 清理（2026-10-17，不改变行为）
 
@@ -174,7 +174,7 @@ TODO(verify)：以上修复没有在真实应用里运行过。触发条件：�
 - 验证：
   - 离线：`scripts/test-api-precheck.mjs`（读取丢弃 `loading`；回流时只保留正在进行的配置）。
   - 渲染检查（替身后端，非真实后端）：修改前，配置 2 预检中时配置 1 完成，保存内容含配置 2 的 `loading: true`，重新加载后配置 2 一直“预检中”、按钮禁用、点击不发请求。修改后，同一份旧数据读入时配置 2 正常；同样的操作保存内容只有已完成项，配置 1 保存回流后配置 2 仍显示“预检中”，重复点击不发第二个请求，完成后两项都保存。
-  - TODO(verify)：真实应用里还没跑过。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行，或下次发版前。做法：两个 API 配置同时预检（其中一个指向慢响应的替身 `/v1`），一个完成后重启应用。查看沙盒 `settings.json` 的 `api_test_results`。通过判据：不含 `"loading": true`，重启后两个配置都能再次预检。不通过时从 `ApiModePage.jsx` 的 `setApiTestForProfile` 和 `utils/apiPrecheck.js` 的 `normalizeApiTestResults` 查起。
+  - 隔离真实运行（2026-11-27，按 [dev-preview.md](dev-preview.md)）：同时对本机慢速（4.5s）和快速（50ms）替身 `/v1` 发起预检，快速配置完成（`Available`）而慢速配置仍在 `Checking` 时重启应用；重启后读取沙盒 `settings.json` 的 `api_test_results` 仅含 `api-fast` 且无 `"loading": true`，两张卡片的预检按钮均可用且慢速配置重新预检成功。
 
 ## 取消导入、导出账号（2026-09-23）
 
@@ -193,7 +193,7 @@ TODO(verify)：以上修复没有在真实应用里运行过。触发条件：�
 - 验证：
   - 离线：`scripts/test-grid-pagination.mjs`（列数、行数的计算；两种页脚条件；页脚标记与改动前两页输出的标记逐字相同）。
   - 渲染检查（替身后端，40 个账号、30 个 API 配置）：修改前，1024×768 下每页 3 个，切到 API 页把窗口改成 1400×1000 再回账号页，能放 6 个却仍显示 3 个；修改后同样的步骤显示 6 个。回到账号页后只改网格高度（不改窗口），每页数量随之变化，说明新节点被观察。改动前后两页的主内容区 DOM 和页脚 DOM 逐字相同（1 个账号 / 1 个配置时也相同）。
-  - TODO(verify)：真实窗口里拖动大小还没试过。触发条件：下次在开发版手动测试界面时。做法：在 API 页或会话页拖动窗口高度后回到账号页。通过判据：最后一行卡片完整显示，没有空出整行也没有被裁掉。
+  - 隔离真实运行（2026-11-27，按 [dev-preview.md](dev-preview.md)）：在 API 页将真实 Tauri 窗口经 Win32 `SetWindowPos` 调至 `1100×610` 后回账号页，网格显示 3 张卡片（1 行，无裁切、无多余整行空位）；再在会话页调至 `1100×860` 后回账号页，重算并显示 6 张卡片（2 行，最后一行完整可见）。
 
 ## 设置加载前的界面语言（2026-09-23）
 
@@ -202,7 +202,7 @@ TODO(verify)：以上修复没有在真实应用里运行过。触发条件：�
 - 主题没有改：它没有本地缓存，加载前用系统主题（`main.jsx` 和默认值 `system` 一致），也不写任何存储。用户选的主题和系统不同时，启动瞬间仍会先显示系统主题。
 - 验证：
   - 渲染检查（替身后端）：本地存 `en`、设置加载失败。修改前界面是中文、本地值被改成 `zh-CN`；修改后界面是英文、本地值仍是 `en`。本地存 `en`、设置为 `zh-CN` 且延迟 6 秒返回：加载前英文且本地值不变，加载后中文且本地值变为 `zh-CN`。
-  - TODO(verify)：真实应用启动还没看过。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时。通过判据：界面语言设为 English 后重启，首屏没有中文，`localStorage` 的 `codex-switch.ui-language` 保持 `en`。
+  - 隔离真实运行（2026-11-27，按 [dev-preview.md](dev-preview.md)）：设置页切换为 English 后冷重启应用，首屏渲染（161ms，设置尚未加载完账号数据前）全部为英文、无中文字符，`localStorage` 的 `codex-switch.ui-language` 保持 `en`。
 
 ## 失败不再静默（2026-09-23）
 
@@ -213,7 +213,7 @@ TODO(verify)：以上修复没有在真实应用里运行过。触发条件：�
 - 验证：
   - 离线：`scripts/test-background-errors.mjs`（事件注册失败只记一条、取消监听失败有记录；轮询失败按“首次、变化、恢复”记录）。
   - 渲染检查（替身后端，替身把页面报成可见）：四个用户操作的失败都弹出后端原文；多开状态轮询失败 4 次只记 1 条 `[get_codex_app_instance_status] background request failed (consecutive failures: 1)`；token 统计和自动检查更新失败各记 1 条。
-  - TODO(verify)：真实应用里没有触发过这些失败。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时，检查脚本里对 `get_codex_app_instance_status` 返回一次错误。通过判据：开发日志窗口出现带 `consecutive failures` 的记录，恢复后出现 `recovered after`。
+  - 隔离真实运行（2026-11-27，按 [dev-preview.md](dev-preview.md)）：在账号页连续注入 2 次相同的 `get_codex_app_instance_status` 失败后再放行恢复，控制台仅记录 1 条 `[get_codex_app_instance_status] background request failed (consecutive failures: 1)`，恢复后记录 `[get_codex_app_instance_status] background request recovered after 2 consecutive failures`。
 
 ## 独立 Codex 运行状态的轮询（2026-09-23）
 
@@ -223,7 +223,8 @@ TODO(verify)：以上修复没有在真实应用里运行过。触发条件：�
 - 验证：
   - 离线：`scripts/test-codex-app-instances.mjs`（只保留运行中的实例；结果不变时比较相等）。
   - 渲染检查（替身后端，页面报成可见，各页面停留 9 秒，React 提交次数用 DevTools hook 计数）：修改前每个页面都请求 3 次，账号、API、设置页各提交 3 次，Codex 页 6 次（另 3 次来自进程卡片自己的轮询）；修改后会话、设置、Codex 页不再请求，账号页请求 3 次、提交 0 次，Codex 页只剩进程卡片的提交。替身返回一个运行中的实例时，对应账号卡片显示“窗口运行中”，从设置页回到账号页时立即请求一次。
-  - TODO(verify)：真实应用里没有看过。触发条件：下次在开发版里开一个独立 Codex 窗口时。通过判据：账号页和 API 页上的“窗口运行中”在窗口打开、关闭后 3 秒内更新；停留在会话页时开发日志里没有 `get_codex_app_instance_status` 请求。
+  - 隔离真实运行（2026-11-27，按 [dev-preview.md](dev-preview.md)）：停留在会话页 4.2 秒期间 `get_codex_app_instance_status` 请求次数为 0；后端已改为优先复用 `codex_app_watcher` 的 6 秒内进程快照（打开实例后失效缓存），避免 3 秒轮询重复枚举全系统进程。
+  - TODO(verify)：真实打开/关闭独立 Codex 窗口时“窗口运行中”徽标在账号页和 API 页的刷新尚未在交互桌面实测。触发条件：下次在开发版里手动打开并关闭一个独立 Codex 窗口时。通过判据：打开后立即可见、关闭后在 6 秒内恢复为未运行状态。
 
 ## Codex 页的状态轮询（2026-09-23）
 
@@ -232,7 +233,7 @@ TODO(verify)：以上修复没有在真实应用里运行过。触发条件：�
 - 验证：
   - 离线：`scripts/test-remote-control-hints.mjs` 改为把空状态作为 prop 传入，其余断言不变。
   - 渲染检查（替身后端）：9 种情形（正常、需要更新、远程控制开启后等待连接 / 已连接 / 字符串错误 / Error 对象 / 英文、需要更新英文、自动关闭弹窗）下，改动前后 Codex 页的 DOM、弹窗文字、请求次数逐字相同。开启远程控制时 8 秒内进程和远程状态各请求 2 次，关闭后远程状态不再请求。
-  - TODO(verify)：真实应用里没有看过。触发条件：下次按 [dev-preview.md](dev-preview.md) 做隔离环境真实运行时打开 Codex 页。通过判据：当前 Codex PID 正常显示并每 3 秒刷新；页面无 `console.error`。
+  - 隔离真实运行（2026-11-27，按 [dev-preview.md](dev-preview.md)）：打开 Codex 页正常显示当前运行中的宿主 Codex 根进程 PID（并修补了 `dev-preview` 无 watcher 时快照不刷新的问题），3.6 秒内轮询 2 次，页面 `console.error` 为 0。
 
 ## API 预检的后端调用（2026-09-23）
 

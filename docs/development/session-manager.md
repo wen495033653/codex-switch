@@ -166,13 +166,17 @@ state DB 有该路径的行时不再解析会话文件；只有没有行时才�
 - 排查中证实了一个真实的竞争：备份文件名只精确到秒，并用“先检查是否存在再创建”选名。8 个线程并发备份（同一 reason）时 160 次里 133 次失败，报 `table threads already exists`。正式运行中所有备份都在会话 I/O 锁内顺序执行，不受影响；但单元测试直接并行调用不加锁的内部函数。修复为先用 `create_new` 占住文件名再写入（`backup::reserve_reason_backup_file`），并加了并发测试 `concurrent_backups_with_the_same_reason_get_distinct_files`。
 - 修复后（`664fafc`）完整 `cargo test` 289 passed / 5 ignored，连续 6 次均通过。`71bb037` 那次失败是否就是这个竞争，仍是推断。
 
+### 2026-11-27：真实 `state_5.sqlite` 结构核对、隔离真实运行与 `347da53` 对比基准
+
+- **真实 `state_5.sqlite` 外键结构与“修改 ID”归档验证：** 只读检查本机正式 `state_5.sqlite`（64 条 SQLx 迁移、5892 条 `threads`），确认以下子表声明了 `REFERENCES threads(id) ON DELETE CASCADE`（默认 `ON UPDATE NO ACTION`、非 `DEFERRABLE`）：`thread_dynamic_tools`、`thread_attachments`、`guardian_review_feedback`；另有无外键的 `thread_read_receipts`、`thread_spawn_edges` 与 `threads.attached_thread_parent_id`。据此将 `state_db.rs` 简化为单一表清单并补齐上述 4 处真实关联。在隔离沙盒中基于真实 `state_5.sqlite` 备份对含上述关联行的会话执行 `modify_id` 归档，返回 `ok=true`、`desktop_error=null`，`PRAGMA foreign_key_check` 为 0，所有子表中均无旧 id 残留。
+- **归档 DB 失败回滚（隔离真实运行）：** 对沙盒 `state_5.sqlite` 持有真实 SQLite `BEGIN IMMEDIATE` 写锁超过 `busy_timeout` 后触发归档，返回 `database is locked` 并提示已撤销 1 个文件移动；沙盒 `logs/codex-switch-errors.jsonl` 记下 `session_manager_status_state_db_error`（`movedFiles: 1`、`rolledBack: 1`、`rollbackErrors: []`），原会话文件完好回到原目录。
+- **真实规模流式读取与单行查找基准（对比 `347da53`）：** 在两份完全相同的隔离真实数据副本（完整 5899 行 `state_5.sqlite` + 65 份真实 rollout 共 237.76 MB，全量 `api -> openai` 且清空 `cwd`/`has_user_event` 强制读文件）上对比：
+  - 首次对比暴露真实性能退化：`state_threads::contains_bytes` 使用逐字节 `.windows(needle.len())` 扫描，导致同步耗时 `7105 ms`，慢于 `347da53` 的 `2271 ms`。改为复用已有依赖 `memchr::memmem::find` 后，温态同步降至 **`2295 ms`**（`347da53` 为 `2386 ms`），`session_sync_state_db_summary` 报告 `updated: 5964`（`providerRowsUpdated: 5899`、`cwdRowsUpdated: 65`、`lockedRollouts: 0`），两版本同步后的数据库行完全一致。
+  - `catalog::current_state_conversation_for_path` 连续 20 次查找在 5899 行库上从 `347da53` 的 **`115.15 ms/次`（共 `2303.06 ms`）** 降至 **`2.02 ms/次`（共 `40.42 ms`）**，提速约 57 倍。
+
 ## 待验证
 
-TODO(verify): 真实 Codex 的 `state_5.sqlite` 中 thread 子表是否声明了外键、声明方式（`ON UPDATE` 动作、是否 `DEFERRABLE`）还没有看过；本次按测试夹具和现有删除逻辑推断。触发条件：下一次在正式版里用“修改 ID”处理归档/取消归档冲突，且该会话有动态工具或子代理关系。检查：返回 `ok=true`；数据目录 `logs/codex-switch-errors.jsonl` 没有 `session_manager_status_state_db_error`；只读查询 `SELECT thread_id FROM thread_dynamic_tools` / `thread_spawn_edges` 中不再出现旧 id。判据不成立（日志 `error` 含 `FOREIGN KEY` 或其他 SQLite 错误）时，从 `state_db::rename_thread_references` 与该日志的 `rollbackErrors` 继续；用户可用 `sqlite3 state_5.sqlite ".schema thread_dynamic_tools"` 只读提供真实建表语句。
-
-TODO(verify): 归档 DB 失败后的文件撤销只在临时目录验证过。触发条件：正式版中出现 `session_manager_status_state_db_error`。检查该事件的 `rolledBack` 等于 `movedFiles`、`rollbackErrors` 为空，并确认对应会话文件回到原目录。判据不成立时按 `rollbackErrors` 中的路径手工处理，并从 `status::rollback_status_move_file` 继续。
-
-TODO(verify): 流式读取与单行查找的耗时收益没有在真实规模上测过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 在隔离环境里用真实数据的副本运行开发版。检查：切换模式后 `session_sync_start` 到 `session_sync_finish` 的时间差、会话管理页连续翻页的响应时间，与 `347da53` 构建在同一份数据副本上对比；`session_sync_state_db_summary` 的 `updated` 与 `lockedRollouts` 合理。判据：同步与翻页不慢于旧版本且数据库结果一致。判据不成立时从 `state_threads::read_rollout_thread_metadata` 与 `catalog::current_state_conversation_for_path` 继续。
+（当前模块已登记的 `TODO(verify)` 项均已完成验证并归入上方验证记录。）
 
 ## 待决事项
 

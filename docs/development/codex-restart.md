@@ -197,11 +197,16 @@
 - 真实运行：当时唯一在运行的 codex-switch 是 v6.0.0 代码的 Dev 预览构建（预览模式，不启动 watcher）。23:33:52 出现新的 ChatGPT 主进程，命令行没有 `--remote-debugging-port`（普通模式），到 23:51 仍在运行；23:41 查询 `threads.model_provider` 全部为 `openai`（1625 个）；没有生成错误日志文件。推断是用户在界面上点了“重启 Codex”，预览构建的内存日志没有保留，无法从日志确认。
 - 没有验证：watcher 路径（自动接管并以 CDP 模式重启）这次没有触发，因为同步完成后已经没有待处理内容。
 
+### 2026-10–2026-11：安装版 watcher 无脚本重启路径验证
+
+- 安装版 v6.0.6（2026-10-10）与 v6.0.9（2026-10-24）的事件日志 `codex-switch-events.jsonl` 记录了两次完整的 watcher 自动同步重启：`codex_app_relaunch_processes_start`（`origin: "Watcher"`, `mode: Cdp(codex_mobile_no_replace: false)`）→ 单次针对根进程的 `codex_app_process_kill_finish`（`terminated: true`，耗时 420–484 ms）→ `session_sync_state_db_summary` 与 `session_sync_finish`（49 项 / 6 项更新，全量切换到目标 provider）→ `codex_app_launch_confirmation_finish`（v6.0.9 确认 1.5s 存活）→ `codex_app_relaunch_processes_finish`（`restartedCount: 1`），无相关错误日志。
+- 上述两次运行远程控制均关闭，未触发 CDP 脚本注入（`codex_mobile_no_replace: true` / `api_quota: true`），该部分仍保留在下方待验证。
+
 ## 待验证
 
-TODO(verify): watcher 路径的 CDP 重启和注入还没有在最终实现上验证，正式安装包里的 watcher 完整链路也没有运行过。原因：01:01 的测试进程缺 rustls crypto provider，在注入时 panic；01:22 补验时 Codex 正在执行任务，不能重启；23:33 走的是“重启 Codex”路径。触发条件：安装 v6.0.0 或更新版本后，下一次在 API 模式和订阅模式之间切换（使会话 provider 与目标不一致）并打开 Codex。检查：codex-switch 只发出一次针对 `ChatGPT.exe` 根进程的 `taskkill /F /T`；打开后约 40 秒内 Codex 只被重启一次，新的 `ChatGPT.exe` 命令行含 `--remote-debugging-port` 并持续运行（CDP 注入失败时 `launch_codex_with_cdp_hooks` 会结束新进程）；`state_5.sqlite` 中 `threads.model_provider` 全部等于目标 provider。出错时看数据目录下 `logs/codex-switch-errors.jsonl` 里的 `codex_app_process_kill_error`、`codex_app_watcher_on_open_error`。判据不成立时，从该 taskkill 的原始输出和存活 PID 继续定位。
+TODO(verify): watcher 路径启用远程控制时的 CDP 脚本注入（`codex_mobile_no_replace: true` / `api_quota: true`）还没有在正式安装包里完整运行过（无脚本重启路径已由上方 v6.0.6/v6.0.9 安装版日志证实）。触发条件：开启远程控制后在 API 模式和订阅模式之间切换并打开 Codex，使 watcher 触发带脚本注入的 CDP 重启。检查：新的 `ChatGPT.exe` 命令行含 `--remote-debugging-port` 并持续运行，日志无 `codex_app_watcher_on_open_error` 或 `codex_app_open_handler_cdp_hook_error`。
 
-TODO(verify): 会话文件里残留的旧 provider 是否有影响，还不知道。事实：数据库的同步是全量的，会话文件只改写最近活动的 50 个（`SESSION_SYNC_RECENT_ROLLOUT_LIMIT`）。前后两次同步的“最近 50 个”范围不同，2026-09-17 晚同步回 `openai` 之后，仍有 16 个会话（最后更新在 09-14 21:10 到 09-15 21:26 之间）的文件首行 `session_meta.payload.model_provider` 是 `api`，而数据库里是 `openai`。未知：Codex 恢复会话时取的是数据库还是文件里的值。触发条件：在订阅模式下打开这个时间段内的任意一个会话。通过判据：能正常继续对话，说明文件里的旧标记无害，删除本条并在这里记下结果。判据不成立（仍报 “Model provider `api` not found”）时，从 `codex_sessions/rollouts.rs` 的 `collect_recent_rollout_files_from_dirs` 继续：文件同步的范围需要覆盖所有被上一次同步改写过的会话，而不只是当前最近的 50 个。
+TODO(verify): 会话文件里残留的旧 provider 是否有影响，仍未通过实际恢复该类会话证实（2026-11-27 只读复查显示 2026-09-14 至 09-15 的 49 条 DB 记录均已为 `openai`，磁盘上对应文件首行已无残留 `api` 标记）。未知：若未来再次因“最近 50 个”滚动范围差异留下首行旧 `model_provider` 与数据库不一致的文件，Codex 恢复会话时取的是数据库还是文件里的值。通过判据：遇到该状态并打开对应会话能正常继续对话，则删除本条；若报 “Model provider `api` not found”，从 `codex_sessions/rollouts.rs` 的 `collect_recent_rollout_files_from_dirs` 继续扩大同步范围。
 
 TODO(verify): 远程控制运行时出错时的真实表现还没有运行过（2026-09-23 的改动只有单元测试）。触发条件：数据目录下 `logs/codex-switch-errors.jsonl` 出现 `codex_app_restart_command_remote_control_runtime_error` 或 `codex_app_relaunch_processes_post_exit_config_apply_error`。检查：前者出现时，同一次操作里没有 `codex_app_process_kill_*` 记录，Codex 进程未被结束，界面显示该错误；后者出现时，随后有新的 ChatGPT 主进程启动，`codex_app_restart_command_error` 或 `codex_app_watcher_on_open_error` 的 `error` 字段包含同一条配置错误。判据不成立时，从 `codex_app_open.rs` 的 `restart_current_codex_app_normal` 和 `reopen_after_post_exit_steps` 继续。
 
