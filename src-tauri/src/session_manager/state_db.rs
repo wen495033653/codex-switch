@@ -96,35 +96,20 @@ pub(super) struct StateThreadColumn {
 fn ids_with_thread_rows<'a>(
     connection: &Connection,
     ids: impl IntoIterator<Item = &'a String>,
-    tables: ThreadReferenceTables,
+    tables: &[&ThreadRefTable],
 ) -> Result<Vec<String>, String> {
     let mut sql = "SELECT EXISTS(SELECT 1 FROM threads WHERE id = ?1)".to_string();
-    for (enabled, clause) in [
-        (
-            tables.dynamic_tools,
-            "EXISTS(SELECT 1 FROM thread_dynamic_tools WHERE thread_id = ?1)",
-        ),
-        (
-            tables.goals,
-            "EXISTS(SELECT 1 FROM thread_goals WHERE thread_id = ?1)",
-        ),
-        (
-            tables.spawn_edges,
-            "EXISTS(SELECT 1 FROM thread_spawn_edges WHERE parent_thread_id = ?1 OR child_thread_id = ?1)",
-        ),
-        (
-            tables.stage1_outputs,
-            "EXISTS(SELECT 1 FROM stage1_outputs WHERE thread_id = ?1)",
-        ),
-        (
-            tables.agent_job_items,
-            "EXISTS(SELECT 1 FROM agent_job_items WHERE assigned_thread_id = ?1)",
-        ),
-    ] {
-        if enabled {
-            sql.push_str(" OR ");
-            sql.push_str(clause);
-        }
+    for table in tables {
+        let predicate = table
+            .columns
+            .iter()
+            .map(|column| format!("{column} = ?1"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        sql.push_str(&format!(
+            " OR EXISTS(SELECT 1 FROM {} WHERE {predicate})",
+            table.table
+        ));
     }
     let mut statement = connection
         .prepare(&sql)
@@ -648,11 +633,11 @@ pub(super) fn apply_status_moves_to_state_db(
         ));
     }
     let reference_tables = thread_reference_tables(&connection)?;
-    let overwritten_ids = ids_with_thread_rows(&connection, overwritten_ids, reference_tables)?;
+    let overwritten_ids = ids_with_thread_rows(&connection, overwritten_ids, &reference_tables)?;
     let moved_rows = ids_with_thread_rows(
         &connection,
         moves.iter().map(|item| &item.id),
-        reference_tables,
+        &reference_tables,
     )?;
     if overwritten_ids.is_empty() && moved_rows.is_empty() {
         // None of the sessions has a row: nothing to change, nothing to back up.
@@ -676,7 +661,7 @@ pub(super) fn apply_status_moves_to_state_db(
             .execute_batch("PRAGMA defer_foreign_keys = ON;")
             .map_err(|err| format!("配置 Codex state 外键延迟检查失败: {err}"))?;
     }
-    delete_thread_rows(&transaction, &overwritten_ids, reference_tables)?;
+    delete_thread_rows(&transaction, &overwritten_ids, &reference_tables)?;
     for status_move in moves {
         let rollout_path = status_move.target_path.to_string_lossy().to_string();
         transaction
@@ -701,7 +686,7 @@ pub(super) fn apply_status_moves_to_state_db(
                 &transaction,
                 &status_move.id,
                 &status_move.target_id,
-                reference_tables,
+                &reference_tables,
             )?;
         }
     }
@@ -712,73 +697,113 @@ pub(super) fn apply_status_moves_to_state_db(
     Ok(Some(backup_path))
 }
 
-/// Tables whose rows point at a `threads.id`, as far as the current schema has them.
 #[derive(Clone, Copy, Debug)]
-struct ThreadReferenceTables {
-    dynamic_tools: bool,
-    goals: bool,
-    spawn_edges: bool,
-    stage1_outputs: bool,
-    agent_job_items: bool,
+enum ThreadRefDelete {
+    DeleteRows,
+    ClearColumns,
 }
 
-fn thread_reference_tables(connection: &Connection) -> Result<ThreadReferenceTables, String> {
-    Ok(ThreadReferenceTables {
-        dynamic_tools: state_table_has_columns(connection, "thread_dynamic_tools", &["thread_id"])?,
-        goals: state_table_has_columns(connection, "thread_goals", &["thread_id"])?,
-        spawn_edges: state_table_has_columns(
-            connection,
-            "thread_spawn_edges",
-            &["parent_thread_id", "child_thread_id"],
-        )?,
-        stage1_outputs: state_table_has_columns(connection, "stage1_outputs", &["thread_id"])?,
-        agent_job_items: state_table_has_columns(
-            connection,
-            "agent_job_items",
-            &["assigned_thread_id"],
-        )?,
-    })
+#[derive(Clone, Copy, Debug)]
+struct ThreadRefTable {
+    table: &'static str,
+    columns: &'static [&'static str],
+    on_delete: ThreadRefDelete,
+}
+
+/// Tables whose rows point at `threads.id` across Codex Desktop `state_5.sqlite` schemas.
+/// Keeping one table list ensures existence checks, deletes and renames never drift apart.
+const THREAD_REFERENCE_TABLES: &[ThreadRefTable] = &[
+    ThreadRefTable {
+        table: "thread_dynamic_tools",
+        columns: &["thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "thread_attachments",
+        columns: &["thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "guardian_review_feedback",
+        columns: &["thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "thread_read_receipts",
+        columns: &["thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "thread_goals",
+        columns: &["thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "thread_spawn_edges",
+        columns: &["parent_thread_id", "child_thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "stage1_outputs",
+        columns: &["thread_id"],
+        on_delete: ThreadRefDelete::DeleteRows,
+    },
+    ThreadRefTable {
+        table: "agent_job_items",
+        columns: &["assigned_thread_id"],
+        on_delete: ThreadRefDelete::ClearColumns,
+    },
+    ThreadRefTable {
+        table: "threads",
+        columns: &["attached_thread_parent_id"],
+        on_delete: ThreadRefDelete::ClearColumns,
+    },
+];
+
+fn thread_reference_tables(
+    connection: &Connection,
+) -> Result<Vec<&'static ThreadRefTable>, String> {
+    let mut present = Vec::new();
+    for spec in THREAD_REFERENCE_TABLES {
+        if state_table_has_columns(connection, spec.table, spec.columns)? {
+            present.push(spec);
+        }
+    }
+    Ok(present)
 }
 
 fn delete_thread_rows(
     transaction: &rusqlite::Transaction<'_>,
     ids: &[String],
-    tables: ThreadReferenceTables,
+    tables: &[&ThreadRefTable],
 ) -> Result<(), String> {
     for id in ids {
-        if tables.dynamic_tools {
-            transaction
-                .execute(
-                    "DELETE FROM thread_dynamic_tools WHERE thread_id = ?1",
-                    [id],
-                )
-                .map_err(|err| format!("删除 Codex Desktop thread_dynamic_tools 失败: {err}"))?;
-        }
-        if tables.goals {
-            transaction
-                .execute("DELETE FROM thread_goals WHERE thread_id = ?1", [id])
-                .map_err(|err| format!("删除 Codex Desktop thread_goals 失败: {err}"))?;
-        }
-        if tables.spawn_edges {
-            transaction
-                .execute(
-                    "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ?1 OR child_thread_id = ?1",
-                    [id],
-                )
-                .map_err(|err| format!("删除 Codex Desktop thread_spawn_edges 失败: {err}"))?;
-        }
-        if tables.stage1_outputs {
-            transaction
-                .execute("DELETE FROM stage1_outputs WHERE thread_id = ?1", [id])
-                .map_err(|err| format!("删除 Codex Desktop stage1_outputs 失败: {err}"))?;
-        }
-        if tables.agent_job_items {
-            transaction
-                .execute(
-                    "UPDATE agent_job_items SET assigned_thread_id = NULL WHERE assigned_thread_id = ?1",
-                    [id],
-                )
-                .map_err(|err| format!("清理 Codex Desktop agent_job_items 失败: {err}"))?;
+        for spec in tables {
+            match spec.on_delete {
+                ThreadRefDelete::DeleteRows => {
+                    let predicate = spec
+                        .columns
+                        .iter()
+                        .map(|column| format!("{column} = ?1"))
+                        .collect::<Vec<_>>()
+                        .join(" OR ");
+                    let sql = format!("DELETE FROM {} WHERE {predicate}", spec.table);
+                    transaction
+                        .execute(&sql, [id])
+                        .map_err(|err| format!("删除 Codex Desktop {} 失败: {err}", spec.table))?;
+                }
+                ThreadRefDelete::ClearColumns => {
+                    for column in spec.columns {
+                        let sql = format!(
+                            "UPDATE {} SET {column} = NULL WHERE {column} = ?1",
+                            spec.table
+                        );
+                        transaction.execute(&sql, [id]).map_err(|err| {
+                            format!("清理 Codex Desktop {} 失败: {err}", spec.table)
+                        })?;
+                    }
+                }
+            }
         }
         transaction
             .execute("DELETE FROM threads WHERE id = ?1", [id])
@@ -793,36 +818,20 @@ fn rename_thread_references(
     transaction: &rusqlite::Transaction<'_>,
     old_id: &str,
     new_id: &str,
-    tables: ThreadReferenceTables,
+    tables: &[&ThreadRefTable],
 ) -> Result<(), String> {
-    let mut statements = Vec::new();
-    if tables.dynamic_tools {
-        statements.push("UPDATE thread_dynamic_tools SET thread_id = ?1 WHERE thread_id = ?2");
-    }
-    if tables.goals {
-        statements.push("UPDATE thread_goals SET thread_id = ?1 WHERE thread_id = ?2");
-    }
-    if tables.spawn_edges {
-        statements.push(
-            "UPDATE thread_spawn_edges SET parent_thread_id = ?1 WHERE parent_thread_id = ?2",
-        );
-        statements
-            .push("UPDATE thread_spawn_edges SET child_thread_id = ?1 WHERE child_thread_id = ?2");
-    }
-    if tables.stage1_outputs {
-        statements.push("UPDATE stage1_outputs SET thread_id = ?1 WHERE thread_id = ?2");
-    }
-    if tables.agent_job_items {
-        statements.push(
-            "UPDATE agent_job_items SET assigned_thread_id = ?1 WHERE assigned_thread_id = ?2",
-        );
-    }
-    for statement in statements {
-        transaction
-            .execute(statement, params![new_id, old_id])
-            .map_err(|err| {
-                format!("更新 Codex Desktop thread 关联 id 失败 {old_id} -> {new_id}: {err}")
-            })?;
+    for spec in tables {
+        for column in spec.columns {
+            let sql = format!(
+                "UPDATE {} SET {column} = ?1 WHERE {column} = ?2",
+                spec.table
+            );
+            transaction
+                .execute(&sql, params![new_id, old_id])
+                .map_err(|err| {
+                    format!("更新 Codex Desktop thread 关联 id 失败 {old_id} -> {new_id}: {err}")
+                })?;
+        }
     }
     Ok(())
 }

@@ -1,13 +1,10 @@
 use crate::{
-    accounts::{
-        find_store_account, profile_id_from_account, read_api_key_from_auth,
-        read_api_key_from_provider_config,
-    },
+    accounts::{find_store_account, profile_id_from_account, read_runtime_api_key},
     app_log::{account_label, log_event, log_event_once},
     json_file::write_json_file,
     json_util::string_field,
     model_instructions::{
-        resolve_model_instructions_file, SETTING_KEY as MODEL_INSTRUCTIONS_ENABLED_SETTING_KEY,
+        enabled_in_settings as model_instructions_enabled, resolve_model_instructions_file,
     },
     paths::{codex_app_instances_dir, codex_dir},
     session_manager::migrate_legacy_codex_data_for_root,
@@ -94,6 +91,7 @@ pub(crate) fn open_codex_app_instance(app: AppHandle, payload: Value) -> Result<
         &envs,
     ) {
         Ok(launch) if launch.launched => {
+            super::codex_app_watcher::invalidate_current_codex_app_processes_cache();
             trigger_instance_legacy_migration(paths.codex_home.clone());
             log_event(
                 "codex_app_multi_open_finish",
@@ -202,7 +200,7 @@ pub(crate) fn get_codex_app_instance_status() -> Result<Value, String> {
             "instances": []
         }));
     }
-    let processes = super::codex_app_watcher::refresh_current_codex_app_processes()?;
+    let processes = super::codex_app_watcher::cached_or_refresh_codex_app_processes()?;
     let instances = read_codex_app_instance_statuses(&instances_dir, &processes)?;
 
     Ok(json!({
@@ -546,12 +544,7 @@ fn api_key_for_profile(settings: &Value, profile: &Value) -> Result<String, Stri
         return Err("该 API 配置没有保存 API Key".to_string());
     }
 
-    let provider_key = read_api_key_from_provider_config();
-    if !provider_key.trim().is_empty() {
-        return Ok(provider_key.trim().to_string());
-    }
-
-    Ok(read_api_key_from_auth().trim().to_string())
+    Ok(read_runtime_api_key())
 }
 
 fn prepare_instance_paths(
@@ -638,13 +631,6 @@ fn sync_instance_codex_home(
         &target_home.join("AGENTS.md"),
     )?;
     Ok(())
-}
-
-fn model_instructions_enabled(settings: &Value) -> bool {
-    settings
-        .get(MODEL_INSTRUCTIONS_ENABLED_SETTING_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
 }
 
 fn write_instance_marker(root: &Path, channel: &CodexAppChannel) -> Result<(), String> {

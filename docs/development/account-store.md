@@ -57,9 +57,10 @@
   - `quota::auth_refresh`：同一账号的轮换严格串行、不同账号互不阻塞；存储里残留 `refreshing` 不再阻止自动刷新。
 - 构建用独立的 `CARGO_TARGET_DIR`（`src-tauri/target/fresh`）：仓库从 `ai\gpt\` 迁移后，默认 target 缓存里的 tauri 构建脚本输出还指向旧路径。
 
-### 未验证
+### 2026-11-27：真实安装版运行记录与 `refresh_token_reused` 修复
 
-TODO(verify): 真实运行下的并发轮换还没有观察过。原因：需要让自动认证刷新与刷新全部/手动刷新在同一账号上同时触发，离线测试只覆盖了锁本身。触发条件：安装包含本改动的版本后，第一次长时间离线（access_token 已过期）再启动应用，两个后台线程会在同一轮里处理同一批账号。检查：数据目录 `logs/codex-switch-errors.jsonl` 在启动后 5 分钟内不出现带 `refresh_token_reused` 的 `account_auth_auto_refresh_error` 或 `account_auth_retry_refresh_error`（2026-09-23 起每次失败都会记录，不再只在标记失败时记录），账号卡片没有被标成认证失败；accounts.json 里每个账号的 `auth_status` 为 `active`。判据不成立时，从该错误记录的 `account` 前缀找到账号，对照 `quota/auth_refresh.rs::refresh_stored_account_tokens` 的 `stale_access_token` 判断是哪条路径做了第二次交换。
+- **并发轮换（真实安装版日志，v6.0.4–v6.0.13）：** 检查数据目录 `logs/codex-switch-events.jsonl` 与 `codex-switch-errors.jsonl`（2026-09-23 至 2026-11-27 共 109 次 `app_start`，其中 51 次距上次启动间隔 ≥12 小时、最长 29.7 小时）：启动后 5 分钟内出现带 `refresh_token_reused` 的 `account_auth_auto_refresh_error` 或 `account_auth_retry_refresh_error` 次数为 **0**；当前 `accounts.json` 中全部账号状态正常。
+- **额外发现并修复的真实问题：** 安装版运行中期（距启动 750–945 分钟后）曾有账号因外部轮换返回 `error.code: refresh_token_reused`，因 `accounts/store/operations/auth.rs::auth_error_is_login_expired` 未包含 `"refresh_token_reused"`，后台自动认证刷新仍每 15 分钟重复请求一次。现已将该错误码加入 `auth_error_is_login_expired` 并补充单元测试，与 `remote_control/backend_status.rs` 保持一致。
 
 ## 回退
 

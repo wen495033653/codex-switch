@@ -26,12 +26,7 @@ const API_WIRE_RESPONSES: &str = "responses";
 impl ApiModeProfile {
     pub(super) fn api_key_or_auth_file(&self) -> String {
         if self.api_key.is_empty() {
-            let provider_key = read_api_key_from_provider_config().trim().to_string();
-            if provider_key.is_empty() {
-                read_api_key_from_auth()
-            } else {
-                provider_key
-            }
+            read_runtime_api_key()
         } else {
             self.api_key.clone()
         }
@@ -108,12 +103,20 @@ pub(crate) fn read_api_key_from_auth() -> String {
     trimmed_string(read_auth_for_state().get("OPENAI_API_KEY"))
 }
 
-pub(crate) fn read_api_key_from_provider_config() -> String {
+fn read_api_key_from_provider_config() -> String {
     let Some(config) = read_config_for_state() else {
         return String::new();
     };
     let provider_config = selected_provider_config(&config, &config.root());
     trimmed_string(provider_config.get("experimental_bearer_token"))
+}
+
+pub(crate) fn read_runtime_api_key() -> String {
+    let provider_key = read_api_key_from_provider_config();
+    if !provider_key.is_empty() {
+        return provider_key;
+    }
+    read_api_key_from_auth()
 }
 
 fn api_mode_provider_config(profile: &ApiModeProfile) -> Vec<(&'static str, Value)> {

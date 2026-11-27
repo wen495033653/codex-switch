@@ -89,6 +89,46 @@ test('only mixed remote-control quota hides the render-local official banner', (
   }
 });
 
+test('Rspack bundle (Codex 26.1120+) locator identifies runtime, send gate, saved-config atom, and banner', () => {
+  const runtimeUrl = 'app://-/assets/348410.fixture.js';
+  const runtimeSrc = `p.u=e=>"assets/async/"+e+"."+({993845:"fixture"})[e]+".js";var S=p.O(void 0,["883398"],()=>S=p("R2r9"));export{h as __webpack_require__};`;
+  const rtLoc = locate(runtimeSrc, runtimeUrl);
+  assert.equal(rtLoc.kind, 'rspack_runtime');
+  assert.equal(rtLoc.req, 'p');
+
+  const primaryUrl = 'app://-/assets/async/49792.fixture.js';
+  const primarySrc = [
+    `YWOa:(function(e,t,n){var i=n("Q840"),u=n("OWtl");let c=["user-saved-config"],p=(0,i.vU)(u.u,({cwd:e=null,hostId:t})=>({queryKey:c}));n.d(t,{},{J8:p,Od:c})}),`,
+    `a6kU:(function(e,t,n){var r=n("Q840"),i=n("SPnB"),a=n("OWtl"),d=n("gPv1");let c=(0,r.un)(a.u,({get:e})=>{let t=e(i.PO),n=e(d.Ix).data;if("chatgpt"!==t.authMethod||n.rate_limit?.allowed!==!1)return!1;return!0});n.d(t,{},{U:c})}),`,
+    `lazy:(async()=>(await Promise.all([n.e(111111),n.e(993845)]).then(n.bind(n,"sI7L"))).LocalConversationPage)`,
+  ].join('\n');
+  const gateLoc = locate(primarySrc, primaryUrl);
+  assert.equal(gateLoc.kind, 'send_gate');
+  assert.deepEqual(JSON.parse(JSON.stringify(gateLoc.configRef)), { moduleId: 'YWOa', exportKey: 'J8' });
+  assert.deepEqual(JSON.parse(JSON.stringify(gateLoc.bannerChunkIds)), [111111, 993845]);
+
+  const bannerRspackUrl = 'app://-/assets/async/993845.fixture.js';
+  const bannerRspackSrc = `let x=function(e){let u=(0,a.c)(39),{hostId:m,selectedModel:p}=e,h=void 0===m?"local":m,f=(0,s.gh)(ej.PR),I=(0,s.Ul)(tI.Qb),S=(0,s.Ul)(tD.U);return{imageGenerationLimit:L,isUsageBannerEnabled:H,onDismissImageGenerationLimit:D,rateLimit:I,rateLimitWarningThreshold:F,sendBlocked:d}}(eA);`;
+  const banLoc = locate(bannerRspackSrc, bannerRspackUrl, gateLoc.configRef);
+  assert.equal(banLoc.kind, 'official_quota_banner');
+  assert.equal(banLoc.data, 'I');
+  assert.equal(banLoc.store, 'f');
+  assert.equal(banLoc.host, 'h');
+
+  const shared = Object.freeze({ rate_limit: Object.freeze({ allowed: false, limit_reached: true }) });
+  const cfgAtom = {};
+  const ctx = vm.createContext({ config: mixedConfig(), shared });
+  ctx.__codexSwitchWebpackRequire = id => (id === 'YWOa' ? { J8: cfgAtom } : {});
+  vm.runInContext('const e = atom => (atom === __codexSwitchWebpackRequire("YWOa").J8 ? { data: config } : null); let n = shared;', ctx);
+  assert.equal(vm.runInContext(gateLoc.condition, ctx), false);
+  assert.equal(vm.runInContext('n.rate_limit.allowed', ctx), true);
+  assert.equal(shared.rate_limit.allowed, false);
+
+  vm.runInContext('const f = { get: atom => (atom === __codexSwitchWebpackRequire("YWOa").J8 ? { data: config } : null) }; const h = "local"; let I = shared;', ctx);
+  assert.equal(vm.runInContext(banLoc.condition, ctx), false);
+  assert.equal(vm.runInContext('I === null', ctx), true);
+});
+
 function exitResult(child) {
   return new Promise((resolve, reject) => {
     child.once('error', reject);

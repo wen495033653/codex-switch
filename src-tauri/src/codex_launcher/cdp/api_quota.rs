@@ -295,6 +295,7 @@ struct Runtime {
     reload_deadline: Option<Instant>,
     parsed_scripts: usize,
     preloaded_banners: BTreeSet<String>,
+    rspack_config_ref: Option<Value>,
     main_frame: String,
     default_context: Option<i64>,
     retired_context: Option<i64>,
@@ -324,6 +325,7 @@ impl Runtime {
             reload_deadline: Some(control.deadline),
             parsed_scripts: 0,
             preloaded_banners: BTreeSet::new(),
+            rspack_config_ref: None,
             main_frame: String::new(),
             default_context: None,
             retired_context: None,
@@ -339,6 +341,9 @@ impl Runtime {
         while !control.stop.load(Ordering::Acquire) {
             runtime.evaluate("0", control.deadline)?;
             runtime.process_events(control.deadline)?;
+            if let Ok(mut progress) = runtime.progress.lock() {
+                *progress = runtime.not_ready_error(if reloaded { "reload" } else { "startup" });
+            }
             if runtime.ready() {
                 if !reloaded {
                     if !runtime.armed.contains_key("official_quota_banner") {
@@ -513,13 +518,12 @@ impl Runtime {
             self.parsed_scripts += 1;
             let params = &event["params"];
             let Some(url) = params["url"].as_str().filter(|url| {
-                url.starts_with("app://")
-                    && url.ends_with(".js")
-                    && (url.contains("/assets/app-primary-")
-                        || url.contains("/assets/composer-content-"))
+                url.starts_with("app://") && url.ends_with(".js") && url.contains("/assets/")
             }) else {
                 continue;
             };
+            let is_legacy_primary = url.contains("/assets/app-primary-");
+            let is_legacy_banner = url.contains("/assets/composer-content-");
             let source = self.command(
                 "Debugger.getScriptSource",
                 json!({"scriptId":params["scriptId"]}),
@@ -528,31 +532,95 @@ impl Runtime {
             let source = source["result"]["scriptSource"]
                 .as_str()
                 .ok_or_else(|| "API quota bundle scriptSource 缺失".to_string())?;
-            if url.contains("/assets/composer-content-")
+            let is_rspack_runtime = !is_legacy_primary
+                && !is_legacy_banner
+                && source.contains("as __webpack_require__")
+                && source.contains("assets/async/");
+            let is_rspack_primary = !is_legacy_primary
+                && !is_legacy_banner
+                && source.contains("rate_limit?.allowed!==!1")
+                && source.contains("user-saved-config");
+            let is_rspack_banner = !is_legacy_primary
+                && !is_legacy_banner
+                && source.contains("isUsageBannerEnabled:")
+                && source.contains("rateLimitWarningThreshold:");
+            if is_legacy_banner
                 && !(source.contains("isUsageBannerEnabled:")
                     && source.contains("rateLimitWarningThreshold:"))
             {
                 continue;
             }
+            if !is_legacy_primary
+                && !is_legacy_banner
+                && !is_rspack_runtime
+                && !is_rspack_primary
+                && !is_rspack_banner
+            {
+                continue;
+            }
+            if is_rspack_runtime {
+                self.evaluate(
+                    &format!(
+                        "(async()=>{{if(!globalThis.__codexSwitchWebpackRequire){{const mod=await import({});if(mod?.__webpack_require__)globalThis.__codexSwitchWebpackRequire=mod.__webpack_require__;}}return true;}})()",
+                        json!(url)
+                    ),
+                    deadline,
+                )?;
+            }
+            let config_ref_arg = self.rspack_config_ref.clone().unwrap_or(Value::Null);
             let location = self.evaluate(
-                &format!("{LOCATOR}({},{})", json!(source), json!(url)),
+                &format!(
+                    "{LOCATOR}({},{},{})",
+                    json!(source),
+                    json!(url),
+                    json!(config_ref_arg)
+                ),
                 deadline,
             )?;
             if location["kind"] == "send_gate" {
-                let urls = location["bannerUrls"]
+                if location.get("configRef").is_some_and(Value::is_object) {
+                    self.rspack_config_ref = Some(location["configRef"].clone());
+                }
+                let mut urls = location["bannerUrls"]
                     .as_array()
-                    .ok_or_else(|| "API quota bannerUrls 缺失".to_string())?;
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let chunk_ids = location["bannerChunkIds"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                if urls.is_empty() && !chunk_ids.is_empty() {
+                    let origin = url
+                        .find("/assets/")
+                        .map(|idx| &url[..idx])
+                        .unwrap_or("app://-");
+                    let matched = self.evaluate(
+                        &format!(
+                            "(async()=>{{const req=globalThis.__codexSwitchWebpackRequire;if(!req||typeof req.u!=='function')return[];const ids={};const base={};const found=[];await Promise.all(ids.map(async id=>{{const rel=req.u(id);if(!rel||rel.includes('undefined'))return;const full=base+'/'+rel.replace(/^\\//,'');try{{const res=await fetch(full,{{signal:AbortSignal.timeout(5000)}});if(!res.ok)return;const text=await res.text();if(text.includes('isUsageBannerEnabled:')&&text.includes('rateLimitWarningThreshold:'))found.push(full);}}catch{{}}}}));return found;}})()",
+                            json!(chunk_ids),
+                            json!(origin)
+                        ),
+                        deadline,
+                    )?;
+                    if let Some(found) = matched.as_array() {
+                        urls.extend(found.iter().filter_map(Value::as_str).map(str::to_string));
+                    }
+                }
                 if urls.is_empty() {
                     return Err("API quota primary 静态依赖没有 composer-content JS".to_string());
                 }
-                for url in urls {
-                    let url = url
-                        .as_str()
-                        .ok_or_else(|| "API quota banner URL 格式错误".to_string())?;
-                    if self.preloaded_banners.contains(url) {
+                let cfg_ref = self.rspack_config_ref.clone().unwrap_or(Value::Null);
+                for banner_url in &urls {
+                    if self.preloaded_banners.contains(banner_url) {
                         continue;
                     }
-                    let text = self.evaluate(&format!("(async()=>{{const response=await fetch({},{{signal:AbortSignal.timeout(5000)}});if(!response.ok)throw Error(`quota local asset HTTP ${{response.status}}: ${{response.url}}`);return await response.text();}})()", json!(url)), deadline)?;
+                    let text = self.evaluate(&format!("(async()=>{{const response=await fetch({},{{signal:AbortSignal.timeout(5000)}});if(!response.ok)throw Error(`quota local asset HTTP ${{response.status}}: ${{response.url}}`);return await response.text();}})()", json!(banner_url)), deadline)?;
                     let text = text
                         .as_str()
                         .ok_or_else(|| "API quota 静态资源文本缺失".to_string())?;
@@ -560,12 +628,17 @@ impl Runtime {
                         && text.contains("rateLimitWarningThreshold:")
                     {
                         let pending = self.evaluate(
-                            &format!("{LOCATOR}({},{})", json!(text), json!(url)),
+                            &format!(
+                                "{LOCATOR}({},{},{})",
+                                json!(text),
+                                json!(banner_url),
+                                json!(cfg_ref)
+                            ),
                             deadline,
                         )?;
                         self.arm(pending, None, deadline)?;
                     }
-                    self.preloaded_banners.insert(url.to_string());
+                    self.preloaded_banners.insert(banner_url.clone());
                 }
             }
             let kind = location["kind"]
@@ -634,7 +707,10 @@ impl Runtime {
             return Err(format!("API quota send breakpoint 未绑定实际代码: {armed}"));
         }
         let mut report = location;
-        report.as_object_mut().unwrap().remove("condition");
+        if let Some(obj) = report.as_object_mut() {
+            obj.remove("condition");
+            obj.remove("bannerChunkIds");
+        }
         report["actualLocations"] = armed["result"]["locations"].clone();
         report["pending"] = json!(pending);
         self.armed.insert(
@@ -854,6 +930,7 @@ mod tests {
             reload_deadline: Some(deadline),
             parsed_scripts: 0,
             preloaded_banners: BTreeSet::new(),
+            rspack_config_ref: None,
             main_frame: String::new(),
             default_context: None,
             retired_context: None,

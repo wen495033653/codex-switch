@@ -1606,12 +1606,30 @@ fn assert_status_modify_id_moves_child_rows(compressed: bool) {
     connection
         .execute_batch(
             r#"
+            ALTER TABLE threads ADD COLUMN attached_thread_parent_id TEXT;
             CREATE TABLE thread_dynamic_tools (
                 thread_id TEXT NOT NULL,
                 position INTEGER NOT NULL,
                 name TEXT NOT NULL,
                 PRIMARY KEY(thread_id, position),
                 FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE
+            );
+            CREATE TABLE thread_attachments (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                attachment_type TEXT NOT NULL,
+                identity_key TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE guardian_review_feedback (
+                id TEXT PRIMARY KEY NOT NULL,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                record BLOB NOT NULL
+            );
+            CREATE TABLE thread_read_receipts (
+                thread_id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT NOT NULL
             );
             CREATE TABLE thread_spawn_edges (
                 parent_thread_id TEXT NOT NULL,
@@ -1629,7 +1647,31 @@ fn assert_status_modify_id_moves_child_rows(compressed: bool) {
         .unwrap();
     connection
         .execute(
+            "INSERT INTO threads (id, rollout_path, title, attached_thread_parent_id) VALUES ('child-attached', 'child.jsonl', 'child', ?1)",
+            [session_id],
+        )
+        .unwrap();
+    connection
+        .execute(
             "INSERT INTO thread_dynamic_tools (thread_id, position, name) VALUES (?1, 0, 'tool')",
+            [session_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO thread_attachments (id, thread_id, attachment_type, identity_key, payload, created_at) VALUES ('att-1', ?1, 'file', 'k', '{}', 1)",
+            [session_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO guardian_review_feedback (id, thread_id, record) VALUES ('fb-1', ?1, X'01')",
+            [session_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO thread_read_receipts (thread_id, revision) VALUES (?1, 'r1')",
             [session_id],
         )
         .unwrap();
@@ -1659,7 +1701,7 @@ fn assert_status_modify_id_moves_child_rows(compressed: bool) {
     let connection = Connection::open(root.join("state_5.sqlite")).unwrap();
     let (new_id, archived, rollout_path): (String, i64, String) = connection
         .query_row(
-            "SELECT id, archived, rollout_path FROM threads",
+            "SELECT id, archived, rollout_path FROM threads WHERE id != 'child-attached'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -1668,6 +1710,30 @@ fn assert_status_modify_id_moves_child_rows(compressed: bool) {
         .query_row("SELECT thread_id FROM thread_dynamic_tools", [], |row| {
             row.get(0)
         })
+        .unwrap();
+    let attachment_owner: String = connection
+        .query_row("SELECT thread_id FROM thread_attachments", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let feedback_owner: String = connection
+        .query_row(
+            "SELECT thread_id FROM guardian_review_feedback",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let receipt_owner: String = connection
+        .query_row("SELECT thread_id FROM thread_read_receipts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let attached_parent: String = connection
+        .query_row(
+            "SELECT attached_thread_parent_id FROM threads WHERE id = 'child-attached'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     let edge_child: String = connection
         .query_row(
@@ -1696,6 +1762,10 @@ fn assert_status_modify_id_moves_child_rows(compressed: bool) {
     assert_eq!(is_compressed_rollout(Path::new(&rollout_path)), compressed);
     assert_eq!(moved_summary.id.as_deref(), Some(new_id.as_str()));
     assert_eq!(tool_owner, new_id);
+    assert_eq!(attachment_owner, new_id);
+    assert_eq!(feedback_owner, new_id);
+    assert_eq!(receipt_owner, new_id);
+    assert_eq!(attached_parent, new_id);
     assert_eq!(edge_child, new_id);
     assert_eq!(fk_violations, 0);
     assert!(!active_exists);

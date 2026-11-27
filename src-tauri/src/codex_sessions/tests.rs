@@ -230,12 +230,12 @@ fn preview_session_provider_counts_rollout_changes_without_writing() {
 }
 
 #[test]
-fn sync_uses_combined_activity_time_limit() {
-    let root = unique_sessions_dir("combined-activity-limit");
+fn sync_updates_all_rollouts_across_sessions_and_archived_beyond_old_50_cap() {
+    let root = unique_sessions_dir("all-rollouts-beyond-50");
     let sessions_dir = root.join("sessions");
     let archived_dir = root.join("archived_sessions");
     let mut paths = Vec::new();
-    let count = SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 4;
+    let count = 54usize;
     let base_time = 1_700_000_000u64;
 
     for index in 0..count {
@@ -255,15 +255,15 @@ fn sync_uses_combined_activity_time_limit() {
             .unwrap()
             .set_modified(modified)
             .unwrap();
-        paths.push((index, path));
+        paths.push(path);
     }
 
     let updated =
         sync_codex_session_rollout_dirs_to_provider(&[sessions_dir, archived_dir], "api", &[])
             .unwrap();
 
-    assert_eq!(updated, SESSION_SYNC_RECENT_ROLLOUT_LIMIT);
-    for (index, path) in paths {
+    assert_eq!(updated, count);
+    for path in paths {
         let line = fs::read_to_string(path)
             .unwrap()
             .lines()
@@ -271,11 +271,7 @@ fn sync_uses_combined_activity_time_limit() {
             .unwrap()
             .to_string();
         let meta: Value = serde_json::from_str(&line).unwrap();
-        if index < 4 {
-            assert_eq!(meta["payload"]["model_provider"], "openai");
-        } else {
-            assert_eq!(meta["payload"]["model_provider"], "api");
-        }
+        assert_eq!(meta["payload"]["model_provider"], "api");
     }
 
     fs::remove_dir_all(&root).unwrap();
@@ -286,10 +282,11 @@ fn sync_always_updates_pinned_rollouts() {
     let root = unique_sessions_dir("pinned-rollouts");
     let sessions_dir = root.join("sessions");
     let archived_dir = root.join("archived_sessions");
-    let pinned_path = sessions_dir.join("rollout-pinned.jsonl");
+    let extra_dir = root.join("custom_pinned");
+    let pinned_path = extra_dir.join("rollout-pinned.jsonl");
     let state_db = root.join("state_5.sqlite");
     let global_state = root.join(GLOBAL_STATE_FILE_NAME);
-    let count = SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 4;
+    let count = 54usize;
 
     write_rollout_file_with_timestamp(
         &pinned_path,
@@ -351,7 +348,7 @@ fn sync_always_updates_pinned_rollouts() {
     fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(pinned_rollouts, vec![pinned_path]);
-    assert_eq!(updated, SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 1);
+    assert_eq!(updated, count + 1);
     assert_eq!(pinned_meta["payload"]["model_provider"], "api");
 }
 
@@ -451,10 +448,11 @@ fn sync_writer_does_not_recreate_missing_rollout_file() {
 }
 
 #[test]
-fn sync_rollout_provider_only_updates_latest_activity_files() {
-    let sessions_dir = unique_sessions_dir("latest-limit");
+fn sync_rollout_provider_updates_every_file_in_sessions_dir() {
+    let sessions_dir = unique_sessions_dir("all-in-dir");
     let mut paths = Vec::new();
-    for index in 0..(SESSION_SYNC_RECENT_ROLLOUT_LIMIT + 2) {
+    let count = 52usize;
+    for index in 0..count {
         let path = sessions_dir.join(format!("rollout-{index:03}.jsonl"));
         let timestamp = format!("2026-05-07T00:{:02}:{:02}.000Z", index / 60, index % 60);
         write_rollout_file_with_timestamp(&path, "openai", "E:\\Project\\ai", &timestamp);
@@ -463,8 +461,8 @@ fn sync_rollout_provider_only_updates_latest_activity_files() {
 
     let updated = sync_codex_session_rollouts_to_provider(&sessions_dir, "api").unwrap();
 
-    assert_eq!(updated, SESSION_SYNC_RECENT_ROLLOUT_LIMIT);
-    for (index, path) in paths.iter().enumerate() {
+    assert_eq!(updated, count);
+    for path in &paths {
         let line = fs::read_to_string(path)
             .unwrap()
             .lines()
@@ -472,11 +470,7 @@ fn sync_rollout_provider_only_updates_latest_activity_files() {
             .unwrap()
             .to_string();
         let meta: Value = serde_json::from_str(&line).unwrap();
-        if index < 2 {
-            assert_eq!(meta["payload"]["model_provider"], "openai");
-        } else {
-            assert_eq!(meta["payload"]["model_provider"], "api");
-        }
+        assert_eq!(meta["payload"]["model_provider"], "api");
     }
 
     fs::remove_dir_all(&sessions_dir).unwrap();

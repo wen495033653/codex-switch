@@ -31,6 +31,7 @@
 - 本机正式远控当前关闭；没有为测试切换正式账号、修改正式 `config.toml` 或重启当前 Codex。隔离验证与真实耗尽订阅账号的现场结果分开记录，不将前者称为后者。
 
 - Windows CI 验证（2026-11-18）：[CI 44268000342](https://github.com/wen495033653/codex-switch/actions/runs/44268000342) 的正常刷新 fixture 在最终成功响应和 stop 信号间继续轮询，被服务端收尾关闭报 `CDP WebSocket 已关闭`。本机隔离 fixture 强制“回复 → 关闭写端 → 客户端退出 → stop”复现同一错误；改为回复前先发布 stop 后，在相同受控交错下通过。正式测试只修复 fixture 的发布顺序，不更改生产代码、超时或重试。
+- Desktop `26.1120.6357.0` Rspack 分片适配与实机 watcher CDP 验证（2026-11-27）：新版 Codex Desktop 将渲染端打包产物由旧 Vite 命名分片（`assets/app-primary-*.js`、`assets/composer-content-*.js`）迁移为 Rspack 数字哈希分片（入口运行时导出 `__webpack_require__` 与异步映射 `assets/async/<id>.<hash>.js`）。`cdp/api_quota.rs` 与 `cdp/api_quota.js` 在保留旧 Vite 定位路径的基础上，补充对 Rspack 运行时、`send_gate`、`["user-saved-config"]` 模块导出和 `LocalConversationPage` 异步 banner 分片的动态定位，并补齐 `scripts/test-api-quota.mjs` 单测及本机隔离开发版 watcher 端到端实测（详见 [codex-restart.md](codex-restart.md)）。
 
 ## 代理与远程控制的状态反馈（2026-09-06）
 
@@ -50,7 +51,7 @@
 - 日志：设置页每 3–4 秒轮询这些状态，同一个事件加同样的内容在一次运行里只写一次（`log_event_once`）：`codex_desktop_install_lookup_error`、`codex_app_instance_marker_error`、`codex_remote_control_status_error`。
 - 验证：`install_lookup_error_is_reported_unless_a_running_host_decides`（运行中主进程优先、三种查询失败、全部为空仍是 missing）、`package_registry_lookup_reads_the_current_user_key`（本机只读，读到 1 个 `OpenAI.Codex_*` 包，与 PowerShell 读注册表一致）、`unreadable_instance_marker_is_reported_with_the_instance`（临时目录真实文件）、`polled_failure_is_logged_once_per_distinct_details`。远程控制判断会读正式的 `accounts.json`、`auth.json`、`config.toml`，按要求没有写单元测试，只过了编译和 Clippy。macOS 分支本地编不了，以 CI `Check Tauri (macos-latest)` 为准。没有真实运行界面。
 
-TODO(verify): 上述错误在界面上的表现没有真实运行过。触发条件：下一次按 [dev-preview.md](dev-preview.md) 做隔离真实运行时，在沙盒里放一个内容为 `{` 的 `auth.json` 并开启远程控制，另建一个标记文件损坏的多开实例目录；或数据目录 `logs/codex-switch-errors.jsonl` 出现 `codex_desktop_install_lookup_error`、`codex_app_instance_marker_error`、`codex_remote_control_status_error`。通过判据：远程控制状态显示“解析 auth.json 失败…”而不是“重启 Codex 后生效”；`get_codex_app_instance_status` 返回该实例并带 `markerError`；每种错误在 JSONL 里只出现一次。判据不成立时，从 `remote_control.rs` 的 `get_codex_remote_control_status` 和 `app_log.rs` 的 `log_event_once` 继续。
+- 隔离真实运行验证（2026-11-27，按 [dev-preview.md](dev-preview.md)）：沙盒放内容为 `{` 的 `auth.json`、开启远程控制，并建标记损坏的多开目录 `api-broken`。首次验证暴露出 `useRemoteControlStatus.js` / `useCodexProcessStatus.js` 在 `catch` 里只读 `err.message`，吞掉了 Tauri 对 Rust `Err(String)` 返回的字符串错误、导致界面退回显示“读取远程控制状态失败”；改为复用 `getRawErrorMessage(err)` 后复验通过：远程控制状态显示 `解析 auth.json 失败: EOF while parsing an object at line 1 column 1`（而非“重启 Codex 后生效”）；`get_codex_app_instance_status` 返回 `api-broken` 并带 `markerError`；同一进程内重复调用 3 次后，沙盒 `logs/codex-switch-errors.jsonl` 里 `codex_remote_control_status_error` 与 `codex_app_instance_marker_error` 各只出现 1 次。`codex_desktop_install_lookup_error` 依赖系统注册表异常，未在沙盒中伪造。
 
 ## 模型指令文件 `gpt-unrestricted.md`（2026-09-06）
 

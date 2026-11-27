@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getRawErrorMessage } from '../utils/errors';
 import { useAsyncPolling } from './useAsyncPolling';
 
 function normalizePids(value) {
@@ -56,7 +57,7 @@ export function useCodexProcessStatus() {
       if (isCurrent()) {
         setCodexAppProcessStatus({
           loading: false,
-          error: err && err.message ? err.message : '读取失败',
+          error: getRawErrorMessage(err) || '读取失败',
           pids: [],
           processCount: 0,
           supported: false,
